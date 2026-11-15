@@ -7,9 +7,9 @@ Survey carried out on 2026-11-15 to inform [DESIGN.md](DESIGN.md).
 - **(tested)** checked here against DuckDB 2.0.0 or Chromium.
 - **(read)** taken from a page that was fetched and read: github.com, duckdb.org, idl.uw.edu, and the
   marimo and Observable Notebook Kit documentation as stored in their GitHub repositories.
-- **(search)** taken from search-result summaries only. motherduck.com and docs.marimo.io were blocked
-  by the research environment's network policy and observablehq.com was rate-limiting, so claims that
-  rest only on those sites are of this kind.
+- **(search)** taken from search-result summaries only. observablehq.com was rate-limiting and
+  docs.marimo.io was blocked, so those projects' documentation was read from their GitHub
+  repositories instead.
 
 §5 lists what remains unverified.
 
@@ -70,6 +70,14 @@ gaps users report are exactly offline use, openness, charts, export and version 
   a further 0.8 MB. (tested)
 - The deployment guide describes serving the worker and module as separate files from the page's
   origin or a CDN. It does not describe a single-file or `file://` setup. (read)
+- **A single file opened from `file://` with no network does work**, with a shim.
+  [The spike](../spikes/wasm-single-file/README.md) inlined the module, worker and a `.duckdb` file
+  in one 13.6 MB page; DuckDB started in 1.4 s and queried the data. Chromium only. The stock loader
+  hangs because a `file://` page's worker cannot fetch a `blob:` URL the page created. (tested)
+- The same test showed that `parquet` and `json` are extensions downloaded at run time, so they fail
+  offline, and that the npm build reports engine v1.5.4: it cannot read a database written by 2.0
+  with default settings and does not support `$name`. The documentation says the latest stable
+  DuckDB-WASM is 2.0.0, so npm's `latest` tag appears to lag. (tested)
 - Memory is capped at 4 GB by WebAssembly. Databases can persist in the browser's origin-private file
   system. A `.duckdb` or Parquet file on a static host can be attached and read by HTTP range
   requests. (search)
@@ -129,8 +137,11 @@ Points that shaped the design:
 | **marimo** | Reactive graph from static analysis | No hidden state; inputs as graph nodes; lazy mode; script and app from one file | Reactivity with no escape for side effects |
 | **Zeppelin** | Paragraph at a time | Chart switcher under every result; dynamic forms bound to query parameters | JSON notes with results inline |
 | **duckdb-ui** | Cell at a time | Column profiler; catalog browser; server inside the engine | Closed, remotely hosted frontend |
+| **MotherDuck Instant SQL** | Previews results as you type, in MotherDuck and the local DuckDB UI | Click into a CTE to see its rows; break a column expression into parts; parse, cache and rewrite locally for speed ([post](https://motherduck.com/blog/introducing-instant-sql/)) (read) | |
+| **MotherDuck Dives** | Data apps built by an AI agent through MotherDuck's MCP server, running on live data | Agent-authored visualisations as a product surface ([page](https://motherduck.com/product/dives/)) (read) | Hosted only |
 | **Evidence** | Build-time SQL, then DuckDB-WASM in the browser | SQL plus declarative components; static site | Data only as fresh as the last build; large Parquet bundles |
 | **Observable Framework / Notebook Kit** | Reactive JavaScript; SQL cells | Static build with cached query results; open file format | Dynamic queries need a live database or WASM |
+| **Observable Framework** in detail (read from its repository) | Tables are declared in page front matter as name-to-file pairs (CSV, JSON, Arrow, Parquet, `.duckdb`) and queried client-side in ```` ```sql ```` blocks on DuckDB-WASM | `${…}` interpolation makes a query re-run on input change; data loaders precompute snapshots at build time so pages load instantly; Mosaic vgplot is built in | Queries against a remote database must go through a build-time loader; extensions have to be configured for self-hosting |
 | **Livebook** | Linear with stale tracking | Stale markers; diff-friendly file | |
 | **Pluto** | Reactive | Static HTML export with precomputed slider states | Cells saved in dependency order, which makes diffs noisy |
 | **Quarto** | Render pipeline | Many output formats from one source; frozen results committed for CI | |
@@ -206,16 +217,15 @@ Observable rely on browser print, and Quarto bundles Typst (search).
 
 ## 5. Not verified
 
-- Whether DuckDB-WASM can be instantiated from bytes inlined in a page opened from `file://`.
+- Single-file DuckDB-WASM in Firefox and Safari, and with extensions inlined. Chromium is confirmed.
 - Whether the community repository accepts an extension that embeds a web server and a large asset
   bundle.
 - Whether this extension could be built for DuckDB-WASM.
-- MotherDuck's pages (Instant SQL, Dives, the local UI announcement), which were blocked.
 - The full schema of duckdb-ui's `ui.db`.
 - Licences marked from memory in the survey rather than checked: D3, Plot, deck.gl, MapLibre,
   Perspective, cosmos.gl.
-- Observable Framework's documentation on observablehq.com, which was rate-limited. Notebook Kit's
-  format and database documentation was read from its repository and matches the summary above:
+- The live observablehq.com pages, which stayed rate-limited; Framework and Notebook Kit were read
+  from their repositories. Notebook Kit's format and database documentation matches the summary above:
   cells are `<script>` elements with `id`, `type`, `pinned`, `hidden`, `database` and `output`
   attributes, and query results are saved to `.observable/cache`.
 - Tools named in the brief but not researched in depth: Datalore, Colab, Mode, Briefer, Curvenote,

@@ -221,8 +221,10 @@ A TypeScript single-page app:
 - **Two-way file sync.** Saving writes the `.sql` file; an edit made in another editor or by an agent
   appears in the UI through the file watcher. The file is always the source of truth for a file-backed
   notebook.
-- Live preview while typing (the idea behind MotherDuck's Instant SQL) is a later addition; the view
-  model makes it cheap because a preview is a `LIMIT` over the cell's view.
+- Live preview while typing is a later addition. MotherDuck's Instant SQL does this by parsing the
+  query locally, caching the data it depends on and rewriting it to run fast, and lets the user click
+  into any CTE to see its rows. Here a named cell is already a view, so a preview is a `LIMIT` over
+  it and stepping through intermediate results is stepping through cells.
 
 ## 5. Notebooks inside the database
 
@@ -340,7 +342,7 @@ across every renderer so charts from different libraries look like one system.
 |---|---|---|---|
 | `html` (default) | No | Extension alone | One file: viewer, prose, chart specs, chart data |
 | `html` with `interactive := 'precomputed'` | No | Extension alone | As above plus precomputed results for input values |
-| `html-wasm` | No (ships DuckDB-WASM) | Extension alone | Folder: viewer, DuckDB-WASM, Parquet data |
+| `html-wasm` | No (ships DuckDB-WASM) | Extension alone | One file, about 12 MB plus data: viewer, DuckDB-WASM, data as a `.duckdb` file |
 | `pdf` | No | Browser print, or headless Chrome | Paged document, vector charts |
 | `sql` | Yes | Extension alone | Expanded script with no notebook dependency |
 | `md` | No | Extension; chart images need a browser | Markdown with tables; charts as SVG files |
@@ -370,12 +372,24 @@ slider export works the same way. Free-form inputs (`text`, unbounded `number`) 
 
 ### Fully interactive export
 
-`html-wasm` writes a folder containing the viewer, DuckDB-WASM and the tables the notebook reads as
-Parquet. Inputs and selections then re-run real SQL in the reader's browser. The DuckDB-WASM module
-alone is about 8 MB compressed (36 MB uncompressed, measured from the current npm package), and the
-folder must be served over HTTP. Whether it can be collapsed into one file that works
-from `file://` is unproven (spike S4). If the extension can itself be built for DuckDB-WASM, the same
-chart compiler runs in the browser; otherwise the compiler is ported or Mosaic takes that role (S5).
+`html-wasm` embeds DuckDB-WASM and the tables the notebook reads, so inputs and selections re-run
+real SQL in the reader's browser. It is also a single file that opens from `file://` with no network.
+A [spike](../spikes/wasm-single-file/README.md) confirmed this in Chromium: a 13.6 MB page starts
+DuckDB in about 1.4 seconds and queries an inlined 200,000-row database. The fixed cost is about
+12 MB, against a few hundred kilobytes for the static export, which is why static stays the default.
+
+The spike set four constraints on this export:
+
+- DuckDB-WASM's stock loader hangs under `file://`; a short shim that passes the module to the worker
+  by message is needed.
+- Data ships as a `.duckdb` file or Arrow, not Parquet. Parquet, JSON and `spatial` are extensions
+  that DuckDB-WASM downloads at run time, so they are unavailable offline unless inlined as well.
+- The data file must be written in a storage version the bundled engine reads.
+- The DuckDB-WASM on npm is engine v1.5.4, which lacks the `$name` shorthand. Until a 2.0-based
+  build is published, the exporter rewrites `$name` to `getvariable('name')`.
+
+If the extension can itself be built for DuckDB-WASM, the same chart compiler runs in the browser;
+otherwise the compiler is ported or Mosaic takes that role (S5).
 
 ### PDF
 
@@ -399,7 +413,7 @@ a browser to produce the SVG.
 | S1 | Can the extension walk a parsed statement for table and parameter references across all statement kinds? | Core of the graph. `duckdb_get_table_names` is not enough: in 2.0.0 it binds, and so fails, on `JOIN … USING` and `INSERT` against tables that do not exist yet. `json_serialize_sql` handles only `SELECT` |
 | S2 | Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder? | Result transport |
 | S3 | Size of the extension with the frontend embedded; lazy loading of heavy renderers | Download size and the community-extension build |
-| S4 | DuckDB-WASM inlined in a single HTML file, opened from `file://` | Decides whether the fully interactive export can be one file |
+| S4 | ~~DuckDB-WASM inlined in a single HTML file, opened from `file://`~~ | **Done: it works in Chromium.** See [the spike](../spikes/wasm-single-file/README.md). Firefox, Safari and inlined extensions are untested |
 | S5 | Does the extension build for DuckDB-WASM with the server parts left out? | Reuse of the chart compiler in `html-wasm`. The community build chain targets Wasm, so this is plausible but untried |
 | S6 | Will the community repository accept an extension that embeds an HTTP server and a multi-megabyte asset bundle? | Distribution. The process itself is documented: a pull request with a descriptor file, after which DuckDB's CI builds for Linux, macOS, Windows and Wasm |
 | S7 | Chart compiler coverage: how much of the grammar compiles cleanly to one query | Scope of chart work |
@@ -424,7 +438,7 @@ Other risks:
 4. **In-database storage.** `_notebook` schema, save, checkout, history.
 5. **Export.** Single-file HTML, PDF, Markdown, precomputed interactivity.
 6. **More chart types.** Maps, hierarchies, flows, networks, pivot.
-7. **Interactive WASM export.** Resolves S4, S5.
+7. **Interactive WASM export.** Resolves S5.
 
 ## 10. Open questions
 
