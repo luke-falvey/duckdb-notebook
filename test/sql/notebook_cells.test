@@ -1,0 +1,70 @@
+# name: test/sql/notebook_cells.test
+# description: notebook_cells parses a notebook file into one row per cell
+# group: [notebook]
+
+require notebook
+
+query IIIIIII
+SELECT idx, kind, name, widget, is_query, start_line, end_line FROM notebook_cells('test/notebooks/basic.sql') ORDER BY idx
+----
+0	notebook	NULL	NULL	NULL	2	7
+1	markdown	NULL	NULL	NULL	8	13
+2	sql	numbers	NULL	false	14	16
+3	input	lowest	slider	NULL	17	19
+4	sql	kept	NULL	true	20	23
+5	sql	by_group	NULL	true	24	26
+6	chart	NULL	NULL	NULL	27	34
+7	sql	picked_rows	NULL	true	35	37
+8	sql	NULL	NULL	true	38	39
+
+# Options keep their file order; quoted values may contain spaces
+query I
+SELECT options FROM notebook_cells('test/notebooks/basic.sql') WHERE name = 'lowest'
+----
+{min=0, max=9, label=Lowest value}
+
+query I
+SELECT options['materialize'] FROM notebook_cells('test/notebooks/basic.sql') WHERE name = 'by_group'
+----
+table
+
+# A marker-looking line inside a block comment is content
+query I
+SELECT content FROM notebook_cells('test/notebooks/basic.sql') WHERE kind = 'markdown'
+----
+# Basic
+-- %% this line is inside a comment, so it is not a cell marker
+
+# Variables read with $name
+query II
+SELECT name, variables FROM notebook_cells('test/notebooks/basic.sql') WHERE len(variables) > 0 ORDER BY idx
+----
+kept	[lowest]
+picked_rows	[picked]
+
+query I
+SELECT count(*) FROM notebook_cells('test/notebooks/basic.sql') WHERE len(errors) > 0
+----
+0
+
+# Format errors are data, one list per cell, so a UI can show them all
+query II
+SELECT idx, errors[1] FROM notebook_cells('test/notebooks/errors.sql') ORDER BY idx
+----
+0	duplicate cell name 'totals'
+1	duplicate cell name 'totals'
+2	invalid cell name 'Bad-Name'; names match [a-z_][a-z0-9_]*
+3	markdown cell body must be a single /* ... */ block comment
+4	input cell 'threshold' sets variable 'other_name'; the two names must match
+5	chart cell needs from=<cell or table>
+
+# The example notebook in the repository stays valid
+query II
+SELECT count(*), count(*) FILTER (len(errors) > 0) FROM notebook_cells('examples/revenue.sql')
+----
+13	0
+
+statement error
+SELECT * FROM notebook_cells('test/notebooks/missing.sql')
+----
+No such file or directory

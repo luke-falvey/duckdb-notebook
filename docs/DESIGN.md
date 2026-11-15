@@ -1,6 +1,7 @@
 # DuckDB Notebook: design
 
-Status: draft for review. Nothing here is implemented yet.
+Status: draft for review. The first pass of the extension exists (format parser and headless runner;
+see §9 and §11). Everything else here is still design.
 
 Companion documents: [FORMAT.md](FORMAT.md) specifies the file format; [RESEARCH.md](RESEARCH.md)
 records the survey this design draws on and what could not be verified.
@@ -183,16 +184,21 @@ TypeScript frontend, and the C++ side stays small: parser, graph, compiler, runn
 Everything the UI does is also callable from SQL, so notebooks can be run and exported from a script
 or CI job with no browser.
 
-| Function | Purpose |
-|---|---|
-| `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook |
-| `notebook_stop()` | Stop it |
-| `notebook_cells(path)` | Table function: one row per cell with kind, name, options, source, defines, reads |
-| `notebook_run(path, params := {…})` | Run every cell in order; returns per-cell status and timings |
-| `notebook_export(path, to := 'out.html', format := …, params := {…})` | Export (see §7) |
-| `notebook_save(path, name := …, message := …)` | Store a file in the current database as a new version |
-| `notebook_checkout(name, to := 'x.sql', version := …)` | Write a stored version to a file |
-| `notebook_chart_query(spec, from)` | The SQL a chart spec compiles to, for inspection |
+| Function | Purpose | State |
+|---|---|---|
+| `notebook_cells(path)` | One row per cell: kind, name, options, body, variables read, format errors. `defines` and `reads` come with the graph | Built, without the graph columns |
+| `notebook_sql(path)` | The notebook as a plain SQL script (the `sql` export) | Built |
+| `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count and timing | Built, without `params` |
+| `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook | |
+| `notebook_stop()` | Stop it | |
+| `notebook_export(path, to := 'out.html', format := …, params := {…})` | Export (see §7) | |
+| `notebook_save(path, name := …, message := …)` | Store a file in the current database as a new version | |
+| `notebook_checkout(name, to := 'x.sql', version := …)` | Write a stored version to a file | |
+| `notebook_chart_query(spec, from)` | The SQL a chart spec compiles to, for inspection | |
+
+All of these are table functions. `notebook_run` executes in its own connection, so tables it creates
+persist but its views and variables do not reach the caller. To run a notebook inside your own
+connection, execute the script `notebook_sql` returns.
 
 ### HTTP server
 
@@ -431,8 +437,11 @@ Other risks:
 
 ## 9. Roadmap
 
-1. **Format and headless runner.** Parser, graph, `notebook_cells`, `notebook_run`, `sql` export.
-   Testable with DuckDB's SQL test runner and no UI. Resolves S1.
+1. **Format and headless runner.** Parser, `notebook_cells`, `notebook_run`, `sql` export. **Done**,
+   except for the items in 1b.
+
+   1b. **Dependency graph.** `defines` and `reads` per cell from DuckDB's parser, forward-reference
+   and cycle errors, `params` for `notebook_run`, `{{ }}` expressions in markdown. Resolves S1.
 2. **Server and minimal UI.** Editor, grid, reactive runs, file sync. Resolves S2, S3.
 3. **Charts and inputs.** Chart compiler, grammar charts, KPI and table, input widgets, selections.
 4. **In-database storage.** `_notebook` schema, save, checkout, history.
@@ -448,3 +457,81 @@ Other risks:
 - Should a notebook be able to import cells from another notebook?
 - Is the `-- %%` marker the right spelling, or should it follow Databricks' `-- COMMAND ----------`
   for compatibility with that ecosystem?
+
+## 11. What the first pass taught us
+
+The first pass built the format parser, `notebook_cells`, `notebook_sql` and `notebook_run`, with
+tests. These findings changed or sharpened the design.
+
+### The extension has to use DuckDB's C++ API
+
+DuckDB offers two ways to write an extension. The first pass tried the stable C API first, because it
+is attractive: it built in seconds without compiling DuckDB, and one binary loads into every later
+DuckDB release. In DuckDB 2.0 it covers table functions, the file system, statement extraction, Arrow
+and interrupts. `notebook_cells` and `notebook_sql` worked on it.
+
+It fails on one requirement: **running SQL from inside the extension**. The C API hands an extension
+a database handle only while it is loading. The only way to run queries later is to open a connection
+at load time and keep it. That was tested, and it pins the database open: after the user closed their
+connection, the write-ahead log was not checkpointed and another process could not open the file.
+Loading an extension must not do that. The C API has no way to go from a function's context to a
+connection, and no weak reference.
+
+The C++ API does. A function can create a connection from its context when it needs one and release
+it afterwards, which is what `notebook_run` does. So the extension uses the C++ API, as the official
+UI extension does. The costs are the ones §4 already named, now measured:
+
+- The extension is tied to one DuckDB release and is rebuilt for each.
+- The first build compiles all of DuckDB: about an hour on 4 cores. Later builds take seconds.
+
+The second cost shapes how the code is organised. Everything that does not need a database lives in
+`src/core`, which has no DuckDB dependency and whose tests compile and run in seconds. If DuckDB
+later adds a way to obtain a connection through the C API, the thin `src/functions` layer is the only
+part that would need porting back.
+
+### Rule: the extension never owns the database
+
+The same measurement gives a rule for everything that follows. A stored `Connection` keeps the
+database alive. The server in step 2 must hold a `weak_ptr` to the database instance, create
+connections on demand, and shut down when the database goes away. A notebook session's connection
+belongs to the session and is released when the session ends.
+
+### Sessions are separate connections, and that is visible
+
+`notebook_run` gives each run its own connection, as §3 specifies for sessions. The consequence is
+user-visible: tables a notebook creates remain, but its temp views and variables are gone when the
+run returns. `notebook_sql` exists partly for this reason. It returns the script, which a client can
+execute in its own connection to keep the views.
+
+### Variables nobody sets start as NULL
+
+`$name` on an unset variable is an error in DuckDB, which breaks any cell that reads a chart
+selection before the user has made one. The runner now finds every variable that cells read but no
+input cell or `SET VARIABLE` defines, and sets it to `NULL` before the first cell runs. An untyped
+`NULL` is enough: `$picked IS NULL OR ts BETWEEN $picked.lo AND $picked.hi` binds and runs. This
+needs no knowledge of the chart spec, so it works before the chart compiler exists. FORMAT.md §2 now
+states the rule. The cost is that a misspelt variable name reads as `NULL` instead of failing; the
+graph step should report unknown variables as warnings.
+
+### Query or effect is decided without a database
+
+A cell is a query cell if its last statement returns rows. The first pass decides this with a small
+lexer in `src/core`, not DuckDB's parser: it finds the statement's main keyword, looking past a
+`WITH` clause. That keeps the decision available where there is no database (unit tests, and later
+the browser). `json_serialize_sql` was considered as a classifier and rejected: it needs a
+connection, and it reports `PIVOT` statements as not serialisable. The lexer is deliberately the
+only place that scans SQL text; it tracks strings, nested block comments and dollar-quoted strings,
+so a `-- %%` line inside a comment or string is not mistaken for a cell marker.
+
+### The dependency graph is still open (S1)
+
+The first pass extracts the variables a cell reads, but not the tables. With the C++ API the
+extension can call DuckDB's parser directly and walk the statement tree without binding it, which is
+what S1 needs. That is the next piece of work.
+
+### DuckDB 2.0 specifics worth knowing
+
+- `Connection::Query` returns a `QueryResult` that keeps its connection busy until it is consumed or
+  destroyed. Release one result before issuing the next query on the same connection.
+- A cell with several statements can be sent as one string; the result is the last statement's.
+- Running statements on a second connection from inside a table function works, including DDL.

@@ -1,0 +1,60 @@
+# name: test/sql/notebook_run.test
+# description: notebook_run executes every cell in a session of its own
+# group: [notebook]
+
+require notebook
+
+query IIIIII
+SELECT idx, kind, name, status, error, row_count FROM notebook_run('test/notebooks/basic.sql') ORDER BY idx
+----
+0	notebook	NULL	skipped	NULL	NULL
+1	markdown	NULL	skipped	NULL	NULL
+2	sql	numbers	ok	NULL	NULL
+3	input	lowest	ok	NULL	NULL
+4	sql	kept	ok	NULL	6
+5	sql	by_group	ok	NULL	3
+6	chart	NULL	skipped	NULL	NULL
+7	sql	picked_rows	ok	NULL	6
+8	sql	NULL	ok	NULL	1
+
+# Tables a notebook creates are real and remain
+query I
+SELECT count(*) FROM nb_test_numbers
+----
+10
+
+# Its views and variables belong to the run's own session and do not leak into the caller's
+statement error
+SELECT * FROM kept
+----
+Table with name kept does not exist
+
+query I
+SELECT getvariable('lowest')
+----
+NULL
+
+# A failing cell is reported and the run continues; cells that depend on it fail on their own terms
+query III
+SELECT name, status, error LIKE '%table_that_does_not_exist%' FROM notebook_run('test/notebooks/failing.sql') ORDER BY idx
+----
+good	ok	NULL
+broken	error	true
+after	ok	NULL
+
+statement error
+SELECT * FROM notebook_run('test/notebooks/errors.sql')
+----
+Notebook "test/notebooks/errors.sql" has errors
+
+# The example notebook runs end to end
+query I
+SELECT count(*) FROM notebook_run('examples/revenue.sql') WHERE status = 'error'
+----
+0
+
+statement ok
+DROP TABLE orders
+
+statement ok
+DROP TABLE nb_test_numbers

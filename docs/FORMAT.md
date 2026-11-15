@@ -102,7 +102,11 @@ WHERE region = $region AND amount >= $min_amount
 No notebook-specific syntax is involved. `$name` is DuckDB's own shorthand for `getvariable('name')`,
 [introduced in DuckDB 2.0](https://duckdb.org/docs/2.0/sql/statements/set_variable.html), so notebooks
 need DuckDB 2.0 or later. The two differ when the variable is unset: `getvariable` returns `NULL`,
-while `$name` raises a missing-parameter error. Views pick up a changed variable on their next
+while `$name` raises a missing-parameter error.
+
+To keep that error away from cells that read a chart selection nobody has made yet, the runner sets
+every variable that some cell reads, but no input cell or `SET VARIABLE` statement defines, to `NULL`
+before the first cell runs. Views pick up a changed variable on their next
 read, so changing an input does not require redefining the cells that use it.
 
 ## 3. Input cells
@@ -303,10 +307,13 @@ Three levels, from least to most capable:
    not refer to each other by cell name, because the view wrapper is added by the runner. Notebooks
    written in "explicit" style (`CREATE OR REPLACE TEMP VIEW monthly AS …` in the cell body) run
    unchanged.
-2. **The expanded script.** `notebook_export(path, format := 'sql')` writes the same notebook with the
-   wrappers spelled out and selection variables initialised. It runs anywhere with no extension.
-   [`examples/revenue.expanded.sql`](../examples/revenue.expanded.sql) shows the output for the example.
-3. **Headless with the extension.** `CALL notebook_run('revenue.sql', params := {region: 'US'})`.
+2. **The expanded script.** `SELECT sql FROM notebook_sql('revenue.sql')` returns the same notebook
+   with the wrappers spelled out and undefined variables initialised. It runs anywhere with no
+   extension. [`examples/revenue.expanded.sql`](../examples/revenue.expanded.sql) is that output for
+   the example.
+3. **Headless with the extension.** `FROM notebook_run('revenue.sql')` runs every cell in a session
+   of its own and returns one row per cell with its status. Tables the notebook creates remain; its
+   views and variables do not reach the caller's connection.
 
 ## 8. Sidecar cache
 
