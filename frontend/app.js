@@ -102,6 +102,7 @@ var App = (function () {
         if (!c) return;
         c.result = res;
         c.offset = 0;
+        if (res.choices) c.choices = res.choices;
         c.state = res.status === 'error' ? 'failed' : 'fresh';
       });
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'stale'; });
@@ -223,8 +224,10 @@ var App = (function () {
     var box = NB.el('div');
     var widget = A.inputWidget(view, function (c, v) { cell.value = v; if (cell.result) cell.result.value = v; A.setVariable(cell.name, v, cell); });
     box.appendChild(widget);
-    if ((cell.widget === 'select' || cell.widget === 'multiselect') && !cell.choices && cell.name) {
-      A.api('GET', '/api/options?cell=' + cell.idx).then(function (r) { cell.choices = r.values; A.render(); }).catch(function () { cell.choices = []; });
+    if ((cell.widget === 'select' || cell.widget === 'multiselect') && !cell.choices && cell.name && !cell.fetching) {
+      // Choices from a cell's column exist once that cell has run; /api/run refreshes them.
+      cell.fetching = true;
+      A.api('GET', '/api/options?cell=' + cell.idx).then(function (r) { if (r.values.length) { cell.choices = r.values; A.render(); } }).catch(function () {});
     }
     return box;
   }

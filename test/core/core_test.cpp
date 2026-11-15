@@ -1,6 +1,9 @@
 // Tests for src/core, which has no DuckDB dependency. Build and run with `make core_test`.
 // End-to-end behaviour through SQL is covered by test/sql/*.test.
+#include "notebook/chart.hpp"
 #include "notebook/format.hpp"
+#include "notebook/json.hpp"
+#include "notebook/yaml.hpp"
 #include "notebook/graph.hpp"
 #include "notebook/script.hpp"
 #include "notebook/sql_lexer.hpp"
@@ -266,6 +269,98 @@ static void TestParameters() {
 	CHECK(ParameterError(nb, "nope").find("no input or variable named 'nope'") != std::string::npos);
 }
 
+static void TestYaml() {
+	std::string error;
+	auto y = ParseYaml("title: Monthly # comment\nmark: line\nx: {field: ts, timeunit: month}\n"
+	                   "layers:\n  - {mark: bar, y: 1}\n  - mark: rule\n    y: {field: v, agg: avg}\n"
+	                   "tags: [a, 'b, c', \"d\"]\nempty:\nquoted: \"1\"\n",
+	                   error);
+	CHECK(error.empty());
+	CHECK(y.Str("title") == "Monthly" && y.Str("mark") == "line");
+	CHECK(y.Get("x") && y.Get("x")->Str("timeunit") == "month");
+	auto layers = y.Get("layers");
+	CHECK(layers && layers->IsList() && layers->items.size() == 2);
+	CHECK(layers && layers->items[1].Str("mark") == "rule" && layers->items[1].Get("y")->Str("agg") == "avg");
+	CHECK((y.Get("tags")->Strings() == std::vector<std::string> {"a", "b, c", "d"}));
+	CHECK(y.Get("empty") && y.Get("empty")->type == Yaml::Type::NUL);
+	CHECK(y.Get("quoted")->ToJson().GetType() == Json::Type::STRING);
+	CHECK(y.Get("layers")->items[0].Get("y")->ToJson().GetType() == Json::Type::NUMBER);
+	ParseYaml("a: {b: 1", error);
+	CHECK(error.find("missing '}'") != std::string::npos);
+}
+
+static void TestJson() {
+	auto j = Json::Object().Set("a", Json::Number(1.5)).Set("b", Json::String("x\"</script>\n"));
+	j.Set("c", Json::Array().Push(Json::Bool(true)).Push(Json()));
+	CHECK(j.Dump() == "{\"a\":1.5,\"b\":\"x\\\"\\u003c/script>\\n\",\"c\":[true,null]}");
+	std::string error;
+	auto parsed = ParseJson(j.Dump(), error);
+	CHECK(error.empty() && parsed.Get("b")->Str() == "x\"</script>\n" && parsed.Get("c")->Size() == 2);
+	CHECK(ParseJson("{\"u\": \"\\u00e9\"}", error).Get("u")->Str() == "\xc3\xa9");
+	ParseJson("{1}", error);
+	CHECK(!error.empty());
+}
+
+static void TestLiterals() {
+	std::string error;
+	CHECK(JsonToSqlLiteral(ParseJson("\"it's\"", error)) == "'it''s'");
+	CHECK(JsonToSqlLiteral(ParseJson("5", error), "DOUBLE") == "5::DOUBLE");
+	CHECK(JsonToSqlLiteral(ParseJson("[\"a\", \"b\"]", error), "VARCHAR[]") == "['a'::VARCHAR, 'b'::VARCHAR]");
+	CHECK(JsonToSqlLiteral(ParseJson("{\"lo\": \"2026-01-01\", \"hi\": null}", error), "STRUCT(lo DATE, hi DATE)") ==
+	      "{'lo': '2026-01-01'::DATE, 'hi': NULL::DATE}");
+	CHECK(JsonToSqlLiteral(ParseJson("{\"x\": {\"lo\": 1, \"hi\": 2}}", error),
+	                       "STRUCT(x STRUCT(lo DOUBLE, hi DOUBLE))") == "{'x': {'lo': 1::DOUBLE, 'hi': 2::DOUBLE}}");
+	CHECK(JsonToSqlLiteral(Json()) == "NULL");
+	CHECK(IsConnectionState("CREATE OR REPLACE TEMP VIEW v AS SELECT 1"));
+	CHECK(IsConnectionState("SET threads = 2") && IsConnectionState("USE other"));
+	CHECK(!IsConnectionState("SET VARIABLE x = 1") && !IsConnectionState("CREATE TABLE t (a INT)"));
+	CHECK(RewriteVariables("SELECT $a, '$b', $\"c d\", $1 -- $e") ==
+	      "SELECT getvariable('a'), '$b', getvariable('c d'), $1 -- $e");
+}
+
+static void TestChartCompiler() {
+	ChartContext context;
+	context.columns = {{"ts", "TIMESTAMP"}, {"region", "VARCHAR"}, {"amount", "DECIMAL(18,2)"}, {"n", "BIGINT"}};
+	context.row_count = 100;
+	auto bar = CompileChart("mark: bar\nx: region\ny: {field: amount, agg: sum}\n", "orders", context);
+	CHECK(bar.error.empty() && bar.queries.size() == 1);
+	CHECK(bar.queries[0].find("sum(\"amount\") AS \"y\"") != std::string::npos);
+	CHECK(bar.queries[0].find("GROUP BY ALL") != std::string::npos);
+	CHECK(bar.render.Get("layers")->Items()[0].Get("encoding")->Get("x")->Get("type")->Str() == "nominal");
+
+	auto hist = CompileChart("mark: histogram\nx: amount\n", "orders", context);
+	CHECK(hist.error.empty() && hist.queries[0].find("__bin_x") != std::string::npos);
+	CHECK(hist.queries[0].find("count(*) AS \"y\"") != std::string::npos);
+
+	auto month =
+	    CompileChart("mark: line\nx: {field: ts, timeunit: month}\ny: {field: n, agg: p95}\n", "orders", context);
+	CHECK(month.queries[0].find("date_trunc('month', \"ts\")") != std::string::npos);
+	CHECK(month.queries[0].find("quantile_cont(\"n\", 0.95)") != std::string::npos);
+
+	context.row_count = 1000000;
+	auto big = CompileChart("mark: line\nx: ts\ny: n\n", "orders", context);
+	CHECK(big.render.Get("layers")->Items()[0].Get("m4") != nullptr);
+	auto scatter = CompileChart("mark: point\nx: n\ny: amount\n", "orders", context);
+	CHECK(scatter.render.Get("layers")->Items()[0].Get("binned") != nullptr);
+
+	context.selections["picked"] = ChartSelectionInfo("mark: bar\nx: region\nselect: {as: picked, type: point}\n");
+	CHECK(context.selections["picked"].fields[0] == "region");
+	auto filtered = CompileChart("mark: bar\nx: region\ny: {agg: count}\nfilter: picked\n", "orders", context);
+	CHECK(filtered.queries[0].find("list_contains(getvariable('picked'), \"region\")") != std::string::npos);
+
+	auto pivot =
+	    CompileChart("type: pivot\nrows: [region]\ncolumns: ts\nvalues: {field: n, agg: max}\n", "wh.orders", context);
+	CHECK(pivot.error.empty() && pivot.queries[0].find("PIVOT") != std::string::npos);
+	CHECK(pivot.queries[0].find("\"wh\".\"orders\"") != std::string::npos);
+
+	CHECK(CompileChart("mark: bar\nx: {field: nope}\n", "orders", context).error.find("no column") !=
+	      std::string::npos);
+	CHECK(CompileChart("type: sankey\nsource: region\n", "orders", context).error == "sankey chart needs target:");
+	CHECK(CompileChart("mark: bar\nfilter: unknown\n", "orders", context).error.find("not the selection") !=
+	      std::string::npos);
+	CHECK(TypeClass("TIMESTAMP WITH TIME ZONE") == "temporal" && TypeClass("DECIMAL(9,2)") == "quantitative");
+}
+
 int main() {
 	TestSplitStatements();
 	TestIsQueryStatement();
@@ -278,6 +373,10 @@ int main() {
 	TestGraph();
 	TestGraphErrors();
 	TestParameters();
+	TestYaml();
+	TestJson();
+	TestLiterals();
+	TestChartCompiler();
 	if (failures) {
 		std::cerr << failures << " check(s) failed" << std::endl;
 		return 1;

@@ -351,6 +351,14 @@ void Routes(shared_ptr<ServerState> &shared) {
 					    }
 				    }
 			    }
+			    if (cell.kind == notebook::CellKind::INPUT &&
+			        (cell.widget == "select" || cell.widget == "multiselect")) {
+				    auto choices = Json::Array();
+				    for (auto &choice : InputChoices(runner.Conn(), cell, 1000)) {
+					    choices.Push(ValueToJson(choice));
+				    }
+				    result.Set("choices", choices);
+			    }
 			    results.Push(result);
 		    }
 		    SendJson(res, Json::Object().Set("results", results).Set("cells", CellsJson(notebook)));

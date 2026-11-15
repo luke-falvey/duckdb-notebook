@@ -558,7 +558,7 @@ public:
 			               ")::DOUBLE AS y1 FROM __src)");
 			joins.push_back("__grid");
 			auto cell = [](const std::string &e, const std::string &lo, const std::string &hi, int n) {
-				auto width = "nullif(" + hi + " - " + lo + ", 0) / " + std::to_string(n);
+				auto width = "(nullif(" + hi + " - " + lo + ", 0) / " + std::to_string(n) + ")";
 				return "coalesce(" + lo + " + (least(floor((" + e + " - " + lo + ") / " + width + "), " +
 				       std::to_string(n - 1) + ") + 0.5) * " + width + ", " + lo + ")";
 			};
@@ -733,7 +733,7 @@ public:
 					               ") AS o0, max(" + lon + ") AS o1 FROM __src)");
 					joins.push_back("__ext");
 					auto snap = [](const std::string &e, const std::string &lo, const std::string &hi) {
-						auto w = "nullif(" + hi + " - " + lo + ", 0) / 200";
+						auto w = "(nullif(" + hi + " - " + lo + ", 0) / 200)";
 						return "coalesce(" + lo + " + (floor((" + e + " - " + lo + ") / " + w + ") + 0.5) * " + w +
 						       ", " + lo + ")";
 					};

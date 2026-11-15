@@ -7,7 +7,7 @@
   NB.typed = T;
 
   function svgBox(container, w, h) {
-    return s('svg', { viewBox: '0 0 ' + w + ' ' + h, width: '100%', 'class': 'nb-chart-svg', preserveAspectRatio: 'xMidYMid meet' }, container);
+    return s('svg', { viewBox: '0 0 ' + w + ' ' + h, width: w, 'class': 'nb-chart-svg', preserveAspectRatio: 'xMidYMid meet' }, container);
   }
   function title(el, text) { s('title', {}, el).textContent = text; return el; }
   function fmt(v, enc) { return NB.formatValue(v, '', enc && enc.format); }

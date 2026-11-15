@@ -1,0 +1,76 @@
+# name: test/sql/notebook_chart_query.test
+# description: notebook_chart_query shows the SQL and render description a chart spec compiles to
+# group: [notebook]
+
+require notebook
+
+statement ok
+CREATE TABLE nb_chart_t AS SELECT range AS i, range % 3 AS g, DATE '2026-01-01' + range::INTEGER AS d FROM range(100)
+
+# Channels with an agg group by the others; the render description names the result columns
+query II
+SELECT len(queries), render LIKE '%"mark":"bar"%"x":{"column":"x","field":"g"%"agg":"sum"%' FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}', 'nb_chart_t')
+----
+1	true
+
+query I
+SELECT replace(queries[1], chr(10), ' ') FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}', 'nb_chart_t')
+----
+WITH __src AS (SELECT * FROM "nb_chart_t") SELECT "g" AS "x", sum("i") AS "y" FROM __src GROUP BY ALL ORDER BY x LIMIT 10000
+
+# A line over many rows is downsampled with M4 in SQL
+query I
+SELECT render LIKE '%"m4":true%' AND queries[1] LIKE '%QUALIFY row_number()%' FROM notebook_chart_query('mark: line
+x: d
+y: i', 'nb_chart_t', row_count := 100000)
+----
+true
+
+# Layers become one query each
+query I
+SELECT len(queries) FROM notebook_chart_query('layers:
+  - {mark: bar, x: g, y: {field: i, agg: sum}}
+  - {mark: rule, y: {field: i, agg: avg}}', 'nb_chart_t')
+----
+2
+
+# Typed charts
+query I
+SELECT render LIKE '%"kind":"kpi"%' FROM notebook_chart_query('type: kpi
+value: {field: i, agg: sum}
+sparkline: {x: d, y: i}', 'nb_chart_t')
+----
+true
+
+statement error
+FROM notebook_chart_query('mark: pie', 'nb_chart_t')
+----
+unknown mark 'pie'
+
+# A bare name that is not a column is a constant, as in `color: red`
+query I
+SELECT render LIKE '%"color":{"value":"red"}%' FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}
+color: red', 'nb_chart_t')
+----
+true
+
+statement error
+FROM notebook_chart_query('mark: bar
+x: {field: nope}', 'nb_chart_t')
+----
+no column named 'nope'
+
+statement error
+FROM notebook_chart_query('type: sankey
+source: g', 'nb_chart_t')
+----
+sankey chart needs target:
+
+statement ok
+DROP TABLE nb_chart_t

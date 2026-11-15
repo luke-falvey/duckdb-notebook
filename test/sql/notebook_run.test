@@ -13,7 +13,7 @@ SELECT idx, kind, name, status, error, row_count FROM notebook_run('test/noteboo
 3	input	lowest	ok	NULL	NULL
 4	sql	kept	ok	NULL	6
 5	sql	by_group	ok	NULL	3
-6	chart	NULL	skipped	NULL	NULL
+6	chart	NULL	ok	NULL	3
 7	sql	picked_rows	ok	NULL	6
 8	sql	NULL	ok	NULL	1
 
@@ -86,11 +86,28 @@ SELECT output FROM notebook_run('test/notebooks/markdown.sql', params := {level:
 ----
 Total 10 at level 5; braces in }} are fine.
 
-# The example notebook runs end to end
+# The example notebooks run end to end, charts included
 query I
 SELECT count(*) FROM notebook_run('examples/revenue.sql') WHERE status = 'error'
 ----
 0
+
+query II
+SELECT count(*) FILTER (status = 'error'), count(*) FILTER (kind = 'chart' AND status = 'ok') FROM notebook_run('examples/charts.sql')
+----
+0	27
+
+# A chart whose spec does not compile fails like any other cell
+query II
+SELECT status, error FROM notebook_run('test/notebooks/bad_chart.sql') WHERE kind = 'chart'
+----
+error	unknown mark 'pie'
+
+statement ok
+DROP TABLE gallery_sales
+
+statement ok
+DROP TABLE gallery_tasks
 
 statement ok
 DROP TABLE orders

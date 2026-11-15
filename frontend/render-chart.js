@@ -507,7 +507,7 @@
       facetCols.forEach(function (fc) {
         var panel = NB.el('div', { 'class': 'nb-facet' });
         if (render.facet) panel.appendChild(NB.el('div', { 'class': 'nb-facet-title', text: [fr, fc].filter(function (v) { return v !== null; }).join(' · ') }));
-        var svgEl = s('svg', { viewBox: '0 0 ' + panelW + ' ' + panelH, width: '100%', 'class': 'nb-chart-svg', preserveAspectRatio: 'xMidYMid meet' });
+        var svgEl = s('svg', { viewBox: '0 0 ' + panelW + ' ' + panelH, width: panelW, 'class': 'nb-chart-svg', preserveAspectRatio: 'xMidYMid meet' });
         panel.appendChild(svgEl);
         var g = s('g', { transform: 'translate(' + M.left + ',' + M.top + ')' }, svgEl);
         axis(g, x, 'bottom', w, h, x.enc && x.enc.title);

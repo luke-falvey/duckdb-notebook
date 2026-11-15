@@ -512,6 +512,13 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 		SessionState state;
 		Runner runner(db, state);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
+		// Choices may come from cells (select from=cell.column), which must run first.
+		runner.InitializeVariables(notebook, options.params);
+		RunnerOptions run_all;
+		run_all.params = options.params;
+		for (auto index : notebook::RunOrder(notebook)) {
+			runner.Run(notebook, notebook.cells[NumericCast<idx_t>(index)], run_all);
+		}
 		vector<InputSpace> spaces;
 		vector<string> frozen;
 		idx_t combinations = 1;
@@ -601,8 +608,8 @@ string FindBrowser(const string &requested) {
 	if (auto env = std::getenv("NOTEBOOK_CHROME")) {
 		return env;
 	}
-	const char *names[] = {"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "microsoft-edge",
-	                       "chrome"};
+	const char *names[] = {"chromium",       "chromium-browser", "google-chrome",        "google-chrome-stable",
+	                       "microsoft-edge", "chrome",           "chrome-headless-shell"};
 	const char *path = std::getenv("PATH");
 	string dirs = path ? path : "/usr/bin:/usr/local/bin";
 	size_t start = 0;

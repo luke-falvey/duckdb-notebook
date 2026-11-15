@@ -296,6 +296,10 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 				outcome.error = error->Str();
 			} else {
 				outcome.status = "ok";
+				auto datasets = chart.Get("datasets");
+				if (datasets && datasets->Size() > 0) {
+					outcome.row_count = static_cast<int64_t>(datasets->Items()[0].Get("rows")->Size());
+				}
 			}
 			if (data) {
 				*data = std::move(chart);

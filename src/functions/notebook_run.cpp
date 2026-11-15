@@ -71,10 +71,10 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	column("idx", LogicalType::INTEGER);
 	column("kind", LogicalType::VARCHAR);
 	column("name", LogicalType::VARCHAR);
-	// 'ok', 'error', or 'skipped' for cells with nothing to execute (markdown, chart, metadata).
+	// 'ok', 'error', or 'skipped' for cells with nothing to execute (metadata, markdown without {{ }}).
 	column("status", LogicalType::VARCHAR);
 	column("error", LogicalType::VARCHAR);
-	// Rows a query cell returns. NULL for other cells.
+	// Rows a query cell returns, or rows of a chart's (first) data query. NULL for other cells.
 	column("row_count", LogicalType::BIGINT);
 	column("elapsed_ms", LogicalType::DOUBLE);
 	// Markdown cells: the content with each {{ expr }} replaced by its value.
@@ -105,6 +105,8 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &cell = cells[NumericCast<idx_t>(bind_data.order[state.next++])];
 	RunnerOptions options;
 	options.params = bind_data.params;
+	// Chart cells compile and query their data, so a broken spec fails the run.
+	options.charts = true;
 	auto outcome = state.runner->Run(bind_data.notebook, cell, options);
 
 	output.data[0].Append(Value::INTEGER(cell.index));
