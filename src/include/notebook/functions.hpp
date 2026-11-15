@@ -21,7 +21,7 @@ void RegisterNotebookRun(ExtensionLoader &loader);
 void RegisterNotebookChartQuery(ExtensionLoader &loader);
 //! notebook_save and notebook_checkout: notebooks stored in the database.
 void RegisterNotebookStorage(ExtensionLoader &loader);
-//! notebook_export(path, to := ..., format := ...).
+//! notebook_export(path, file := ..., format := ...).
 void RegisterNotebookExport(ExtensionLoader &loader);
 //! notebook_start and notebook_stop: the HTTP server and browser UI.
 void RegisterNotebookServer(ExtensionLoader &loader);
@@ -41,6 +41,10 @@ notebook::Notebook AnalyzeText(ClientContext &context, const string &text);
 
 //! Creates the `_notebook` schema, tables and view if they are missing.
 void EnsureStorage(Connection &connection, const string &database);
+//! Stores `content` as the next version of notebook `name`, unless it equals the newest version.
+//! Refuses (unless `force`) when it equals an older version. `origin` names the text in errors.
+int32_t SaveNotebookVersion(Connection &connection, const string &database, const string &name, const string &content,
+                            const string &message, bool force, bool &saved, string &note, const string &origin);
 //! The content of a stored notebook; `version` 0 means the newest. Sets `found_version`.
 string StoredNotebook(Connection &connection, const string &database, const string &name, int32_t version,
                       int32_t &found_version);

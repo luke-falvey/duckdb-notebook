@@ -76,6 +76,51 @@ private:
 	unique_ptr<Connection> connection;
 };
 
+struct ExportOptions {
+	//! html, html-wasm, md, sql, data or pdf.
+	string format = "html";
+	std::map<string, Value> params;
+	//! `precomputed`: also run once per input value so the static page can switch between them.
+	string interactive;
+	//! Most notebook runs `interactive := 'precomputed'` may make.
+	idx_t budget = 16;
+	//! Result rows kept per query cell.
+	idx_t page_rows = 100;
+	//! html-wasm: directory holding the DuckDB-WASM runtime built by wasm/build.sh.
+	string wasm_runtime;
+	//! pdf: browser executable.
+	string chrome;
+	//! data: parquet or csv.
+	string data_format = "parquet";
+};
+
+//! Runs a notebook and returns everything a reader needs to see it: cells, rendered markdown,
+//! result pages, chart render descriptions and data, input values.
+notebook::Json BuildPayload(DatabaseInstance &db, const string &text, const string &source,
+                            const ExportOptions &options);
+
+//! The export as a document (html, html-wasm, md, sql). `note` reports frozen inputs and the like.
+string ExportDocument(DatabaseInstance &db, const string &text, const string &source, const ExportOptions &options,
+                      string &note);
+
+//! The notebook's title: its [notebook] cell's `title:`, its first `# heading`, or the file name.
+string NotebookTitle(const notebook::Notebook &notebook, const string &source);
+
+//! The values a select input offers: its options= list or the distinct values of its from= column.
+vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, idx_t limit);
+
+//! A cell's parse and graph results as JSON, as the browser sees them.
+notebook::Json CellJson(const notebook::Cell &cell);
+
+//! An embedded frontend file (frontend/ in the repository), compiled into the extension.
+const string &GetAsset(const string &name);
+
+//! The SQL type a variable set from the browser should have, so it compares like the column it
+//! came from: from an input's widget or from= column, or a chart selection's fields. Empty when
+//! unknown (the literal's own type is used).
+string VariableSqlType(Connection &connection, const notebook::Notebook &notebook, const notebook::Cell &cell,
+                       const string &name);
+
 //! A Value as JSON: numbers stay numbers (unless too large for a double), temporal values are
 //! ISO-like strings, lists and structs nest.
 notebook::Json ValueToJson(const Value &value);

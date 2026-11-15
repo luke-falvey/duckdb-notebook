@@ -8,6 +8,7 @@
 #include "notebook/sql_lexer.hpp"
 
 #include <cmath>
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 
@@ -349,6 +350,76 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	}
 	finish();
 	return outcome;
+}
+
+static string ColumnType(Connection &connection, const string &relation, const string &column) {
+	auto described = connection.Query("DESCRIBE SELECT * FROM " + relation);
+	if (described->HasError()) {
+		return string();
+	}
+	while (auto chunk = described->Fetch()) {
+		for (idx_t r = 0; r < chunk->size(); r++) {
+			if (StringUtil::CIEquals(chunk->GetValue(0, r).ToString(), column)) {
+				return chunk->GetValue(1, r).ToString();
+			}
+		}
+	}
+	return string();
+}
+
+string VariableSqlType(Connection &connection, const notebook::Notebook &notebook, const notebook::Cell &cell,
+                       const string &name) {
+	if (cell.kind == notebook::CellKind::INPUT) {
+		auto &w = cell.widget;
+		if (w == "text") {
+			return "VARCHAR";
+		}
+		if (w == "number" || w == "slider") {
+			return "DOUBLE";
+		}
+		if (w == "checkbox") {
+			return "BOOLEAN";
+		}
+		if (w == "date" || w == "daterange") {
+			return "DATE";
+		}
+		auto from = cell.Option("from");
+		auto dot = from.rfind('.');
+		if (dot != string::npos) {
+			auto type = ColumnType(connection, notebook::RelationSql(from.substr(0, dot)), from.substr(dot + 1));
+			return type.empty() ? type : (w == "multiselect" ? type + "[]" : type);
+		}
+		return string();
+	}
+	if (cell.kind == notebook::CellKind::CHART) {
+		auto selection = notebook::ChartSelectionInfo(cell.content);
+		if (selection.name != name) {
+			return string();
+		}
+		auto relation = notebook::RelationSql(cell.Option("from"));
+		vector<string> types;
+		for (auto &field : selection.fields) {
+			auto type = ColumnType(connection, relation, field);
+			// A brush on a date axis lands between days; compare as timestamps.
+			types.push_back(type == "DATE" ? "TIMESTAMP" : type);
+		}
+		if (selection.type == "point") {
+			return types.empty() || types[0].empty() ? string() : types[0] + "[]";
+		}
+		if (types.size() >= 2) {
+			string type = "STRUCT(";
+			for (idx_t i = 0; i < types.size(); i++) {
+				auto inner = types[i].empty() ? "VARCHAR" : types[i];
+				type += (i ? ", " : "") + selection.channels[i] + " STRUCT(lo " + inner + ", hi " + inner + ")";
+			}
+			return type + ")";
+		}
+		if (types.empty() || types[0].empty()) {
+			return string();
+		}
+		return "STRUCT(lo " + types[0] + ", hi " + types[0] + ")";
+	}
+	return string();
 }
 
 } // namespace duckdb

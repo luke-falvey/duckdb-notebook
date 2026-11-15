@@ -10,7 +10,7 @@
 // Notebooks stored inside a database (docs/DESIGN.md section 5). The `_notebook` schema holds the
 // same text as the file, one row per saved version:
 //   notebook_save(path, name := ..., message := ..., database := ..., force := ...)
-//   notebook_checkout(name, to := ..., version := ..., database := ..., force := ...)
+//   notebook_checkout(name, file := ..., version := ..., database := ..., force := ...)
 // Both run their SQL on a connection of their own, created in the scan and released after it.
 namespace duckdb {
 
@@ -117,44 +117,14 @@ void SaveScan(ClientContext &context, TableFunctionInput &data, DataChunk &outpu
 	auto content = ReadNotebookText(context, bind.path);
 
 	Connection connection(DatabaseInstance::GetDatabase(context));
-	EnsureStorage(connection, bind.database);
-	auto prefix = Prefix(bind.database);
-	auto versions = Rows(Execute(connection,
-	                             "SELECT version, content_hash FROM " + prefix +
-	                                 "_notebook.versions WHERE name = ? ORDER BY version DESC",
-	                             bind.name));
-	auto hash = Rows(Execute(connection, "SELECT sha256(?)", content))[0][0].GetValue<string>();
-	int32_t current = versions.empty() ? 0 : versions[0][0].GetValue<int32_t>();
-	if (!versions.empty() && versions[0][1].GetValue<string>() == hash) {
-		output.data[0].Append(Value(bind.name));
-		output.data[1].Append(Value::INTEGER(current));
-		output.data[2].Append(Value::BOOLEAN(false));
-		output.data[3].Append(Value("unchanged since version " + std::to_string(current)));
-		return;
-	}
-	if (!bind.force) {
-		for (idx_t i = 1; i < versions.size(); i++) {
-			if (versions[i][1].GetValue<string>() == hash) {
-				// The file is an older version: saving it would hide newer work.
-				throw InvalidInputException(
-				    "notebook_save: \"%s\" matches version %d of '%s', but version %d is newer. "
-				    "Check out the newer version, or save with force := true",
-				    bind.path, versions[i][0].GetValue<int32_t>(), bind.name, current);
-			}
-		}
-	}
-	Check(connection.Query("BEGIN TRANSACTION"));
-	Execute(connection, "INSERT INTO " + prefix + "_notebook.notebooks (name) VALUES (?) ON CONFLICT DO NOTHING",
-	        bind.name);
-	Execute(connection,
-	        "INSERT INTO " + prefix +
-	            "_notebook.versions (name, version, content, content_hash, message) VALUES (?, ?, ?, ?, ?)",
-	        bind.name, current + 1, content, hash, bind.message.empty() ? Value() : Value(bind.message));
-	Check(connection.Query("COMMIT"));
+	bool saved;
+	string note;
+	auto version = SaveNotebookVersion(connection, bind.database, bind.name, content, bind.message, bind.force, saved,
+	                                   note, bind.path);
 	output.data[0].Append(Value(bind.name));
-	output.data[1].Append(Value::INTEGER(current + 1));
-	output.data[2].Append(Value::BOOLEAN(true));
-	output.data[3].Append(Value(current == 0 ? "first version" : "new version"));
+	output.data[1].Append(Value::INTEGER(version));
+	output.data[2].Append(Value::BOOLEAN(saved));
+	output.data[3].Append(Value(note));
 }
 
 struct CheckoutBindData : public TableFunctionData {
@@ -167,7 +137,7 @@ unique_ptr<FunctionData> CheckoutBind(ClientContext &context, TableFunctionBindI
                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<CheckoutBindData>();
 	result->name = input.inputs[0].GetValue<string>();
-	result->to = NamedString(input, "to");
+	result->to = NamedString(input, "file");
 	result->database = NamedString(input, "database");
 	result->force = NamedBool(input, "force");
 	auto version = input.named_parameters.find("version");
@@ -222,6 +192,44 @@ void CheckoutScan(ClientContext &context, TableFunctionInput &data, DataChunk &o
 }
 
 } // namespace
+
+int32_t SaveNotebookVersion(Connection &connection, const string &database, const string &name, const string &content,
+                            const string &message, bool force, bool &saved, string &note, const string &origin) {
+	EnsureStorage(connection, database);
+	auto prefix = Prefix(database);
+	auto versions = Rows(Execute(connection,
+	                             "SELECT version, content_hash FROM " + prefix +
+	                                 "_notebook.versions WHERE name = ? ORDER BY version DESC",
+	                             name));
+	auto hash = Rows(Execute(connection, "SELECT sha256(?)", content))[0][0].GetValue<string>();
+	int32_t current = versions.empty() ? 0 : versions[0][0].GetValue<int32_t>();
+	if (!versions.empty() && versions[0][1].GetValue<string>() == hash) {
+		saved = false;
+		note = "unchanged since version " + std::to_string(current);
+		return current;
+	}
+	if (!force) {
+		for (idx_t i = 1; i < versions.size(); i++) {
+			if (versions[i][1].GetValue<string>() == hash) {
+				// The text is an older version: saving it would hide newer work.
+				throw InvalidInputException(
+				    "notebook_save: \"%s\" matches version %d of '%s', but version %d is newer. "
+				    "Check out the newer version, or save with force := true",
+				    origin, versions[i][0].GetValue<int32_t>(), name, current);
+			}
+		}
+	}
+	Check(connection.Query("BEGIN TRANSACTION"));
+	Execute(connection, "INSERT INTO " + prefix + "_notebook.notebooks (name) VALUES (?) ON CONFLICT DO NOTHING", name);
+	Execute(connection,
+	        "INSERT INTO " + prefix +
+	            "_notebook.versions (name, version, content, content_hash, message) VALUES (?, ?, ?, ?, ?)",
+	        name, current + 1, content, hash, message.empty() ? Value() : Value(message));
+	Check(connection.Query("COMMIT"));
+	saved = true;
+	note = current == 0 ? "first version" : "new version";
+	return current + 1;
+}
 
 void EnsureStorage(Connection &connection, const string &database) {
 	auto prefix = Prefix(database);
@@ -280,7 +288,7 @@ void RegisterNotebookStorage(ExtensionLoader &loader) {
 
 	TableFunction checkout("notebook_checkout", {LogicalType::VARCHAR}, CheckoutScan, CheckoutBind, OnceInit);
 	checkout.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
-		options.Add("to", LogicalType::VARCHAR)
+		options.Add("file", LogicalType::VARCHAR)
 		    .Add("version", LogicalType::INTEGER)
 		    .Add("database", LogicalType::VARCHAR)
 		    .Add("force", LogicalType::BOOLEAN);

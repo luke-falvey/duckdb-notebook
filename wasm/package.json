@@ -1,0 +1,12 @@
+{
+  "name": "duckdb-notebook-wasm-runtime",
+  "private": true,
+  "description": "DuckDB-WASM runtime that notebook_export(format := 'html-wasm') inlines into a page",
+  "scripts": {
+    "build": "sh build.sh"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
+    "esbuild": "^0.25.0"
+  }
+}

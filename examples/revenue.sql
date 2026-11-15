@@ -20,7 +20,7 @@ SELECT
     i AS order_id,
     TIMESTAMP '2026-01-01' + INTERVAL (i * 37 % 525600) MINUTE AS ts,
     ['EU', 'US', 'APAC'][1 + i % 3] AS region,
-    ['Hardware', 'Software', 'Services'][1 + (i * 7) % 3] AS category,
+    ['Hardware', 'Software', 'Services'][1 + (i // 3) % 3] AS category,
     round(20 + (i * 7919 % 500) * (1 + (i % 3) * 0.25), 2) AS amount
 FROM range(50000) t(i);
 

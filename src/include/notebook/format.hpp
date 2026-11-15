@@ -24,6 +24,8 @@ struct Cell {
 	//! Position in the file, starting at 0.
 	int index = 0;
 	CellKind kind = CellKind::SQL;
+	//! The marker line after `-- %%`, trimmed: `chart revenue_trend from=monthly`.
+	std::string head;
 	//! Cell name; empty for unnamed cells. For input cells, the variable name.
 	std::string name;
 	//! Input cells only: the widget type (`select`, `slider`, ...).
@@ -59,6 +61,8 @@ struct Cell {
 };
 
 struct Notebook {
+	//! Text before the first marker (a licence header, say), kept so the file can be rebuilt.
+	std::string preamble;
 	std::vector<Cell> cells;
 
 	bool HasErrors() const;

@@ -279,6 +279,7 @@ Notebook ParseNotebook(const std::string &text) {
 		}
 	}
 
+	notebook.preamble = markers.empty() ? text : text.substr(0, markers[0].line_start);
 	// A final newline ends the last line; it does not start another one.
 	int total_lines = scan.Line() - (!text.empty() && text.back() == '\n' ? 1 : 0);
 	std::map<std::string, int> first_use;
@@ -288,7 +289,8 @@ Notebook ParseNotebook(const std::string &text) {
 		cell.start_line = markers[m].line;
 		cell.end_line = m + 1 < markers.size() ? markers[m + 1].line - 1 : total_lines;
 		size_t head_start = markers[m].line_start + 5;
-		ParseHead(text.substr(head_start, markers[m].line_end - head_start), cell);
+		cell.head = TrimBlankLines(text.substr(head_start, markers[m].line_end - head_start));
+		ParseHead(cell.head, cell);
 
 		size_t body_start = markers[m].line_end;
 		size_t body_end = m + 1 < markers.size() ? markers[m + 1].line_start : text.size();
