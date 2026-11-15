@@ -106,7 +106,7 @@ Points that shaped the design:
 - **marimo** stores a notebook as a Python file and never stores outputs in it; a separate session
   snapshot (`__marimo__/session/<notebook>.json`) holds them. SQL cells are stored as
   `mo.sql(f"…")` calls, with Python values interpolated by f-string. (read)
-   Users cite this as the reason it works in git. Its main criticism is that the
+  Users cite the output-free file as the reason it works in git. Its main criticism is that the
   one-definition rule and forced reactivity get in the way of messy exploration, which is why this
   design offers a lazy mode and treats effect cells separately. ([format](https://marimo.io/blog/python-not-json),
   [discussion](https://hn.svelte.dev/item/44801392)) (search)
