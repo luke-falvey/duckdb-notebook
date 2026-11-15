@@ -5,10 +5,11 @@ Survey carried out on 2026-11-15 to inform [DESIGN.md](DESIGN.md).
 **How to read the confidence of a claim.** Three kinds of evidence are used and marked:
 
 - **(tested)** checked here against DuckDB 2.0.0 or Chromium.
-- **(read)** taken from a page that was fetched and read, mostly on github.com.
-- **(search)** taken from search-result summaries only. duckdb.org, motherduck.com, docs.marimo.io,
-  observablehq.com and idl.uw.edu could not be fetched from the research environment, so most claims
-  about those projects' documentation are of this kind.
+- **(read)** taken from a page that was fetched and read: github.com, duckdb.org, idl.uw.edu, and the
+  marimo and Observable Notebook Kit documentation as stored in their GitHub repositories.
+- **(search)** taken from search-result summaries only. motherduck.com and docs.marimo.io were blocked
+  by the research environment's network policy and observablehq.com was rate-limiting, so claims that
+  rest only on those sites are of this kind.
 
 §5 lists what remains unverified.
 
@@ -24,6 +25,10 @@ Survey carried out on 2026-11-15 to inform [DESIGN.md](DESIGN.md).
 - Results use DuckDB's own binary serialisation, not Arrow. The repo publishes MIT TypeScript packages
   that decode it (`duckdb-ui-client`, `duckdb-data-reader`, and others). (read)
 - Access control is an `Origin` header check; there is no token. (read)
+- The documentation confirms the remote fetch ("The local HTTP server fetches the files for the UI
+  from a remote HTTP server"), the default port, and that the UI cannot run directly on a read-only
+  database because it stores notebooks in DuckDB tables.
+  ([docs](https://duckdb.org/docs/2.0/core_extensions/ui.html)) (read)
 - Notebooks are stored in `~/.duckdb/extension_data/ui/ui.db`, in a `notebook_versions` table with a
   JSON document per version; the current version is the row whose `expires` is null. (read for the
   path and JSON keys; search for the table layout)
@@ -44,7 +49,7 @@ gaps users report are exactly offline use, openness, charts, export and version 
 | Comment-only cell markers and block-comment bodies | Ignored by the parser, including `;` inside comments | tested |
 | Nested block comments | Supported; an unbalanced `*/` is a parse error | tested |
 | `SET VARIABLE` / `getvariable()` | Work; unset variable reads as `NULL` | tested |
-| `$name` with no bound value | Resolves to the session variable of that name, in queries and inside views | tested (2.0.0 CLI and Python); not found in documentation |
+| `$name` with no bound value | Resolves to the session variable of that name, in queries and inside views. Documented as new in 2.0: the [`$` variable shorthand](https://duckdb.org/docs/2.0/sql/statements/set_variable.html) and [session variables as defaults for named parameters](https://duckdb.org/docs/2.0/sql/query_syntax/prepared_statements.html) | tested and read |
 | Views and variables | A view re-reads the variable on each query | tested |
 | `STRUCT` and `LIST` variables | `$v.lo`, `x IN $list` work | tested |
 | Scope | Variables and temp views are per connection | tested |
@@ -52,18 +57,22 @@ gaps users report are exactly offline use, openness, charts, export and version 
 | Table names of a query | `get_table_names` works for simple queries but binds, and so fails, for `JOIN … USING` and `INSERT` when tables do not exist | tested |
 | `json_serialize_sql` | Gives a full AST with `BASE_TABLE` nodes; `SELECT` statements only | tested |
 | `read_text` + `sha256` | Round-trips a notebook file into a table and back unchanged | tested |
-| PEG parser default in 2.0, extensible by extensions | | search |
-| Community extensions (`INSTALL x FROM community`) | Mechanism exists; submission process not checked | read / unverified |
+| Extensible SQL parser in 2.0 | Listed in the [2.0 announcement](https://duckdb.org/2026/10/21/announcing-duckdb-200) | read |
+| Community extensions (`INSTALL x FROM community`) | Publish by pull request with a descriptor file; DuckDB's CI builds for Linux, macOS, Windows and Wasm ([docs](https://duckdb.org/community_extensions/development)) | read |
 
 ### DuckDB-WASM
 
-- Single-threaded by default; threads need cross-origin isolation headers. A subset of extensions
-  loads on demand; spatial works. `httpfs` needs CORS on every resource. (read)
+- Three builds: `mvp` (baseline), `eh` (native exception handling, faster) and `coi` (threads, which
+  need a cross-origin isolated page). A subset of core and community extensions loads on demand, with
+  signature checks. `httpfs` needs CORS on every resource. (read)
+- **Measured size** of npm package `@duckdb/duckdb-wasm` 1.33.1-dev57.0, the current `latest` tag:
+  the `eh` module is 35.9 MB, 8.1 MB gzipped; `mvp` is 41.3 MB, 9.2 MB gzipped. Each worker script is
+  a further 0.8 MB. (tested)
+- The deployment guide describes serving the worker and module as separate files from the page's
+  origin or a CDN. It does not describe a single-file or `file://` setup. (read)
 - Memory is capped at 4 GB by WebAssembly. Databases can persist in the browser's origin-private file
   system. A `.duckdb` or Parquet file on a static host can be attached and read by HTTP range
   requests. (search)
-- Download size: third-party figures of roughly 6–12 MB compressed, which conflict with each other.
-  (search, unverified)
 
 ### Remote access
 
@@ -95,7 +104,9 @@ gaps users report are exactly offline use, openness, charts, export and version 
 Points that shaped the design:
 
 - **marimo** stores a notebook as a Python file and never stores outputs in it; a separate session
-  snapshot holds them. Users cite this as the reason it works in git. Its main criticism is that the
+  snapshot (`__marimo__/session/<notebook>.json`) holds them. SQL cells are stored as
+  `mo.sql(f"…")` calls, with Python values interpolated by f-string. (read)
+   Users cite this as the reason it works in git. Its main criticism is that the
   one-definition rule and forced reactivity get in the way of messy exploration, which is why this
   design offers a lazy mode and treats effect cells separately. ([format](https://marimo.io/blog/python-not-json),
   [discussion](https://hn.svelte.dev/item/44801392)) (search)
@@ -140,7 +151,7 @@ static app or report, and parameterised scheduled runs. (search)
 | D3 | ISC | Layouts and scales inside built-in charts | Too low-level to be the stored spec |
 | Observable Plot | ISC | Default renderer for marks on axes | SVG; concise; still 0.x; needs pre-aggregated data for large tables |
 | Vega-Lite | BSD-3 | Raw spec escape hatch | Stable JSON schema, widely known; transforms run in the browser |
-| Mosaic / vgplot | BSD-3 (unverified) | Source of the pushdown approach; candidate for WASM export | v0.35.0 on 2026-11-03; breaking changes in 0.32 and 0.34 (read) |
+| Mosaic / vgplot | BSD-3 | Source of the pushdown approach; candidate for WASM export | v0.35.0 on 2026-11-03; breaking changes in 0.32 and 0.34 (read) |
 | Apache ECharts | Apache-2.0 | Funnel, candlestick, gauge, calendar | 6.x; broad catalogue; SVG renderer |
 | Plotly.js | MIT | Not chosen | About 1.4 MB minified |
 | Highcharts | Commercial | Excluded | Free only for non-commercial use |
@@ -169,11 +180,16 @@ bin to the pixel grid with `GROUP BY`. Both are plain SQL.
 |---|---|---|---|
 | Static snapshot with data inlined | 0.05–0.5 MB plus data | Hover, sort, page | Yes |
 | Snapshot plus precomputed input states | 0.3–3 MB | Declared inputs | Yes |
-| DuckDB-WASM plus Parquet | 8–15 MB plus data | Full SQL | Not as shipped by existing tools; single-file inlining unproven |
+| DuckDB-WASM plus Parquet | 9 MB or more plus data | Full SQL | Not as shipped by existing tools; single-file inlining unproven |
 
 Prior art: Quarto `embed-resources`, marimo HTML export, Pluto static export (snapshot); Pluto slider
 server (precomputed states); Evidence, Observable Framework, marimo WASM export, kepler.gl (WASM,
 loading it from a CDN or sibling files).
+
+marimo's WebAssembly export shows the limits of the WASM route. Its documentation says the export
+cannot be opened from `file://` and must be served over HTTP, and that the `--single-file` variant
+still loads marimo's frontend from a CDN and needs internet access for Pyodide and packages. It is one
+file, but not a self-contained one. (read)
 
 ### Export to PDF
 
@@ -184,23 +200,24 @@ loading it from a CDN or sibling files).
 | Typst with SVG charts | Best typography | Typst, plus a browser to make the SVG |
 | LaTeX / Pandoc | High | Heavy |
 
-marimo and Jupyter (`nbconvert --to webpdf`) both use Chromium. Evidence and Observable rely on browser
-print. Quarto bundles Typst. (search)
+marimo's PDF export goes through nbconvert and needs LaTeX, with Playwright and Chromium added for
+rasterised outputs and slides (read). Jupyter's `nbconvert --to webpdf` uses Chromium, Evidence and
+Observable rely on browser print, and Quarto bundles Typst (search).
 
 ## 5. Not verified
 
-- Whether `$name` resolving to a session variable is a documented, committed DuckDB 2.0 feature. It
-  was observed in 2.0.0 only.
-- DuckDB-WASM download sizes, and whether it can be instantiated from inlined bytes under `file://`.
-- The community-extension submission and signing process, and whether extensions that embed a web
-  server and a large asset bundle are accepted.
+- Whether DuckDB-WASM can be instantiated from bytes inlined in a page opened from `file://`.
+- Whether the community repository accepts an extension that embeds a web server and a large asset
+  bundle.
 - Whether this extension could be built for DuckDB-WASM.
-- Mosaic's licence, and details of its documentation (the site could not be fetched).
+- MotherDuck's pages (Instant SQL, Dives, the local UI announcement), which were blocked.
 - The full schema of duckdb-ui's `ui.db`.
 - Licences marked from memory in the survey rather than checked: D3, Plot, deck.gl, MapLibre,
   Perspective, cosmos.gl.
-- Details of marimo's and Observable's current documentation, which were seen only through search
-  summaries.
+- Observable Framework's documentation on observablehq.com, which was rate-limited. Notebook Kit's
+  format and database documentation was read from its repository and matches the summary above:
+  cells are `<script>` elements with `id`, `type`, `pinned`, `hidden`, `database` and `output`
+  attributes, and query results are saved to `.observable/cache`.
 - Tools named in the brief but not researched in depth: Datalore, Colab, Mode, Briefer, Curvenote,
   Org-babel, srcbook, Streamlit, SQL Workbench, DBeaver.
 

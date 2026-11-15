@@ -84,8 +84,8 @@ y: revenue
   sqlfluff and any editor see a normal SQL file.
 - **A named query cell is a view.** `monthly` above can be queried by any later cell.
 - **Parameters are DuckDB variables.** An input cell is a real `SET VARIABLE` statement, and `$region`
-  reads it. This needs no templating layer: DuckDB 2.0 resolves an unbound `$name` to the session
-  variable of that name (checked in the 2.0.0 CLI).
+  reads it. This needs no templating layer: `$name` is DuckDB 2.0's documented shorthand for
+  `getvariable('name')`. Notebooks therefore need DuckDB 2.0 or later.
 - **The cell name is its ID.** No generated identifiers appear in the file.
 - **No outputs in the file.** They go to a disposable, git-ignored cache directory.
 
@@ -371,8 +371,9 @@ slider export works the same way. Free-form inputs (`text`, unbounded `number`) 
 ### Fully interactive export
 
 `html-wasm` writes a folder containing the viewer, DuckDB-WASM and the tables the notebook reads as
-Parquet. Inputs and selections then re-run real SQL in the reader's browser. This costs roughly 10 MB
-or more before data and must be served over HTTP. Whether it can be collapsed into one file that works
+Parquet. Inputs and selections then re-run real SQL in the reader's browser. The DuckDB-WASM module
+alone is about 8 MB compressed (36 MB uncompressed, measured from the current npm package), and the
+folder must be served over HTTP. Whether it can be collapsed into one file that works
 from `file://` is unproven (spike S4). If the extension can itself be built for DuckDB-WASM, the same
 chart compiler runs in the browser; otherwise the compiler is ported or Mosaic takes that role (S5).
 
@@ -399,17 +400,17 @@ a browser to produce the SVG.
 | S2 | Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder? | Result transport |
 | S3 | Size of the extension with the frontend embedded; lazy loading of heavy renderers | Download size and the community-extension build |
 | S4 | DuckDB-WASM inlined in a single HTML file, opened from `file://` | Decides whether the fully interactive export can be one file |
-| S5 | Does the extension build for DuckDB-WASM? | Reuse of the chart compiler in `html-wasm` |
-| S6 | Community-extension submission, signing and per-release build process | Distribution. Not verified in this research |
+| S5 | Does the extension build for DuckDB-WASM with the server parts left out? | Reuse of the chart compiler in `html-wasm`. The community build chain targets Wasm, so this is plausible but untried |
+| S6 | Will the community repository accept an extension that embeds an HTTP server and a multi-megabyte asset bundle? | Distribution. The process itself is documented: a pull request with a descriptor file, after which DuckDB's CI builds for Linux, macOS, Windows and Wasm |
 | S7 | Chart compiler coverage: how much of the grammar compiles cleanly to one query | Scope of chart work |
 
 Other risks:
 
 - **DuckDB version coupling.** Every DuckDB release needs a rebuilt extension. Keeping the C++ side
   small is the mitigation.
-- **Dependence on 2.0 behaviour.** `$name` falling back to a session variable was observed in 2.0.0
-  but was not found in documentation during this research. If it is not a committed feature, the
-  runner rewrites `$name` to `getvariable('name')`, which is documented, and the format is unchanged.
+- **DuckDB 2.0 is the minimum version.** The `$name` variable shorthand arrived in 2.0. Supporting
+  older versions would mean the runner rewriting `$name` to `getvariable('name')`; that is possible
+  but is not planned.
 - **Reactivity surprises.** Effect cells are the escape from the pure model. The manual-run default
   and visible stale markers are the guard.
 - **Scope of charts.** The list in FORMAT.md is long. The roadmap ships grammar charts first.

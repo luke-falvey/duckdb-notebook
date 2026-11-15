@@ -99,9 +99,10 @@ Parameters are DuckDB session variables, read with `$name`:
 WHERE region = $region AND amount >= $min_amount
 ```
 
-No notebook-specific syntax is involved. In DuckDB 2.0 a named parameter with no bound value resolves
-to the session variable of the same name; `getvariable('name')` is equivalent and returns `NULL`
-instead of raising an error when the variable is unset. Views pick up a changed variable on their next
+No notebook-specific syntax is involved. `$name` is DuckDB's own shorthand for `getvariable('name')`,
+[introduced in DuckDB 2.0](https://duckdb.org/docs/2.0/sql/statements/set_variable.html), so notebooks
+need DuckDB 2.0 or later. The two differ when the variable is unset: `getvariable` returns `NULL`,
+while `$name` raises a missing-parameter error. Views pick up a changed variable on their next
 read, so changing an input does not require redefining the cells that use it.
 
 ## 3. Input cells
@@ -338,7 +339,7 @@ These properties were checked with the DuckDB 2.0.0 CLI and Python client while 
 - `-- %%` lines and block-comment bodies (including `;` inside them) are ignored by the parser.
 - Block comments nest; an unbalanced `*/` in a body is a parse error.
 - `$name` resolves to `SET VARIABLE name` when no value is bound, in a plain query and inside a view,
-  and a view reflects a later `SET VARIABLE`.
+  and a view reflects a later `SET VARIABLE`. This is documented 2.0 behaviour.
 - `STRUCT` and `LIST` variables work as specified: `$brush.lo`, `'EU' IN $regions`.
 - Variables and temporary views are private to a connection.
 - `examples/revenue.sql` parses; run as-is it stops at the first cross-cell reference, as §7 says.
