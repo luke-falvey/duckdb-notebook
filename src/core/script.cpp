@@ -25,6 +25,100 @@ std::string QuoteIdentifier(const std::string &name) {
 	return quoted + "\"";
 }
 
+std::string QuoteString(const std::string &text) {
+	std::string quoted = "'";
+	for (char c : text) {
+		quoted += c;
+		if (c == '\'') {
+			quoted += '\'';
+		}
+	}
+	return quoted + "'";
+}
+
+namespace {
+
+//! Splits `STRUCT(a DATE, b VARCHAR)` into field types, and `DATE[]` into its element type.
+std::string ElementType(const std::string &type) {
+	if (type.size() > 2 && type.compare(type.size() - 2, 2, "[]") == 0) {
+		return type.substr(0, type.size() - 2);
+	}
+	return type;
+}
+
+std::string FieldType(const std::string &type, const std::string &field) {
+	auto open = type.find('(');
+	if (type.compare(0, 6, "STRUCT") != 0 || open == std::string::npos) {
+		return type;
+	}
+	int depth = 0;
+	size_t start = open + 1;
+	for (size_t i = open + 1; i < type.size(); i++) {
+		char c = type[i];
+		if (c == '(') {
+			depth++;
+		} else if ((c == ',' || c == ')') && depth == 0) {
+			auto part = type.substr(start, i - start);
+			while (!part.empty() && part[0] == ' ') {
+				part.erase(0, 1);
+			}
+			auto space = part.find(' ');
+			if (space != std::string::npos) {
+				auto name = part.substr(0, space);
+				if (name.size() >= 2 && name.front() == '"') {
+					name = name.substr(1, name.size() - 2);
+				}
+				if (name == field) {
+					return part.substr(space + 1);
+				}
+			}
+			start = i + 1;
+		} else if (c == ')') {
+			depth--;
+		}
+	}
+	return std::string();
+}
+
+} // namespace
+
+std::string JsonToSqlLiteral(const Json &value, const std::string &type) {
+	switch (value.GetType()) {
+	case Json::Type::NUL:
+		return type.empty() ? "NULL" : "NULL::" + type;
+	case Json::Type::BOOL:
+		return value.Truthy() ? "true" : "false";
+	case Json::Type::NUMBER: {
+		auto literal = value.Dump();
+		return type.empty() ? literal : literal + "::" + type;
+	}
+	case Json::Type::STRING:
+	case Json::Type::RAW: {
+		auto literal = QuoteString(value.Str());
+		return type.empty() ? literal : literal + "::" + type;
+	}
+	case Json::Type::ARRAY: {
+		std::string out = "[";
+		auto element = ElementType(type);
+		for (size_t i = 0; i < value.Items().size(); i++) {
+			out += (i ? ", " : "") + JsonToSqlLiteral(value.Items()[i], element);
+		}
+		return out + "]";
+	}
+	case Json::Type::OBJECT: {
+		std::string out = "{";
+		bool first = true;
+		for (auto &entry : value.Entries()) {
+			out += (first ? "" : ", ") + QuoteString(entry.first) + ": " +
+			       JsonToSqlLiteral(entry.second, FieldType(type, entry.first));
+			first = false;
+		}
+		return out + "}";
+	}
+	}
+	return "NULL";
+}
+
 std::string CellSql(const Cell &cell) {
 	if (cell.kind == CellKind::INPUT) {
 		std::string result;

@@ -22,11 +22,17 @@ set(EXTENSION_SOURCES
     src/core/format.cpp
     src/core/script.cpp
     src/core/graph.cpp
+    src/core/json.cpp
+    src/core/yaml.cpp
+    src/core/chart.cpp
     src/functions/common.cpp
     src/functions/references.cpp
+    src/functions/session.cpp
     src/functions/notebook_cells.cpp
     src/functions/notebook_sql.cpp
     src/functions/notebook_run.cpp
+    src/functions/notebook_chart_query.cpp
+    src/functions/storage.cpp
     src/notebook_extension.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

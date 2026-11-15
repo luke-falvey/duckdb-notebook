@@ -1,0 +1,291 @@
+#include "notebook/functions.hpp"
+
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/function/table_function.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/prepared_statement.hpp"
+#include "notebook/script.hpp"
+
+// Notebooks stored inside a database (docs/DESIGN.md section 5). The `_notebook` schema holds the
+// same text as the file, one row per saved version:
+//   notebook_save(path, name := ..., message := ..., database := ..., force := ...)
+//   notebook_checkout(name, to := ..., version := ..., database := ..., force := ...)
+// Both run their SQL on a connection of their own, created in the scan and released after it.
+namespace duckdb {
+
+namespace {
+
+string Prefix(const string &database) {
+	return database.empty() ? string() : notebook::QuoteIdentifier(database) + ".";
+}
+
+void Check(unique_ptr<QueryResult> result) {
+	if (result->HasError()) {
+		result->ThrowError();
+	}
+}
+
+template <class... ARGS>
+unique_ptr<QueryResult> Execute(Connection &connection, const string &sql, ARGS... args) {
+	auto prepared = connection.Prepare(sql);
+	if (prepared->HasError()) {
+		throw InvalidInputException("%s", prepared->GetError());
+	}
+	vector<Value> values {Value(args)...};
+	auto result = prepared->Execute(values);
+	if (result->HasError()) {
+		result->ThrowError();
+	}
+	return result;
+}
+
+//! Rows of a result as values, for the small queries here.
+vector<vector<Value>> Rows(unique_ptr<QueryResult> result) {
+	vector<vector<Value>> rows;
+	while (auto chunk = result->Fetch()) {
+		for (idx_t r = 0; r < chunk->size(); r++) {
+			vector<Value> row;
+			for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+				row.push_back(chunk->GetValue(c, r));
+			}
+			rows.push_back(std::move(row));
+		}
+	}
+	return rows;
+}
+
+string FileStem(const string &path) {
+	auto name = path.substr(path.find_last_of("/\\") + 1);
+	auto dot = name.rfind('.');
+	return dot == string::npos || dot == 0 ? name : name.substr(0, dot);
+}
+
+string NamedString(TableFunctionBindInput &input, const char *key) {
+	auto found = input.named_parameters.find(key);
+	return found == input.named_parameters.end() || found->second.IsNull() ? string()
+	                                                                       : found->second.GetValue<string>();
+}
+
+bool NamedBool(TableFunctionBindInput &input, const char *key) {
+	auto found = input.named_parameters.find(key);
+	return found != input.named_parameters.end() && !found->second.IsNull() && found->second.GetValue<bool>();
+}
+
+struct SaveBindData : public TableFunctionData {
+	string path, name, message, database;
+	bool force = false;
+};
+
+struct OnceState : public GlobalTableFunctionState {
+	bool done = false;
+};
+
+unique_ptr<FunctionData> SaveBind(ClientContext &context, TableFunctionBindInput &input,
+                                  vector<LogicalType> &return_types, vector<Identifier> &names) {
+	auto result = make_uniq<SaveBindData>();
+	result->path = input.inputs[0].GetValue<string>();
+	result->name = NamedString(input, "name");
+	if (result->name.empty()) {
+		result->name = FileStem(result->path);
+	}
+	result->message = NamedString(input, "message");
+	result->database = NamedString(input, "database");
+	result->force = NamedBool(input, "force");
+	names.emplace_back("name");
+	return_types.push_back(LogicalType::VARCHAR);
+	names.emplace_back("version");
+	return_types.push_back(LogicalType::INTEGER);
+	names.emplace_back("saved");
+	return_types.push_back(LogicalType::BOOLEAN);
+	names.emplace_back("note");
+	return_types.push_back(LogicalType::VARCHAR);
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunctionInitInput &input) {
+	return make_uniq<OnceState>();
+}
+
+void SaveScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &state = data.global_state->Cast<OnceState>();
+	if (state.done) {
+		return;
+	}
+	state.done = true;
+	auto &bind = data.bind_data->Cast<SaveBindData>();
+	auto content = ReadNotebookText(context, bind.path);
+
+	Connection connection(DatabaseInstance::GetDatabase(context));
+	EnsureStorage(connection, bind.database);
+	auto prefix = Prefix(bind.database);
+	auto versions = Rows(Execute(connection,
+	                             "SELECT version, content_hash FROM " + prefix +
+	                                 "_notebook.versions WHERE name = ? ORDER BY version DESC",
+	                             bind.name));
+	auto hash = Rows(Execute(connection, "SELECT sha256(?)", content))[0][0].GetValue<string>();
+	int32_t current = versions.empty() ? 0 : versions[0][0].GetValue<int32_t>();
+	if (!versions.empty() && versions[0][1].GetValue<string>() == hash) {
+		output.data[0].Append(Value(bind.name));
+		output.data[1].Append(Value::INTEGER(current));
+		output.data[2].Append(Value::BOOLEAN(false));
+		output.data[3].Append(Value("unchanged since version " + std::to_string(current)));
+		return;
+	}
+	if (!bind.force) {
+		for (idx_t i = 1; i < versions.size(); i++) {
+			if (versions[i][1].GetValue<string>() == hash) {
+				// The file is an older version: saving it would hide newer work.
+				throw InvalidInputException(
+				    "notebook_save: \"%s\" matches version %d of '%s', but version %d is newer. "
+				    "Check out the newer version, or save with force := true",
+				    bind.path, versions[i][0].GetValue<int32_t>(), bind.name, current);
+			}
+		}
+	}
+	Check(connection.Query("BEGIN TRANSACTION"));
+	Execute(connection, "INSERT INTO " + prefix + "_notebook.notebooks (name) VALUES (?) ON CONFLICT DO NOTHING",
+	        bind.name);
+	Execute(connection,
+	        "INSERT INTO " + prefix +
+	            "_notebook.versions (name, version, content, content_hash, message) VALUES (?, ?, ?, ?, ?)",
+	        bind.name, current + 1, content, hash, bind.message.empty() ? Value() : Value(bind.message));
+	Check(connection.Query("COMMIT"));
+	output.data[0].Append(Value(bind.name));
+	output.data[1].Append(Value::INTEGER(current + 1));
+	output.data[2].Append(Value::BOOLEAN(true));
+	output.data[3].Append(Value(current == 0 ? "first version" : "new version"));
+}
+
+struct CheckoutBindData : public TableFunctionData {
+	string name, to, database;
+	int32_t version = 0;
+	bool force = false;
+};
+
+unique_ptr<FunctionData> CheckoutBind(ClientContext &context, TableFunctionBindInput &input,
+                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
+	auto result = make_uniq<CheckoutBindData>();
+	result->name = input.inputs[0].GetValue<string>();
+	result->to = NamedString(input, "to");
+	result->database = NamedString(input, "database");
+	result->force = NamedBool(input, "force");
+	auto version = input.named_parameters.find("version");
+	if (version != input.named_parameters.end() && !version->second.IsNull()) {
+		result->version = version->second.GetValue<int32_t>();
+	}
+	names.emplace_back("name");
+	return_types.push_back(LogicalType::VARCHAR);
+	names.emplace_back("version");
+	return_types.push_back(LogicalType::INTEGER);
+	names.emplace_back("path");
+	return_types.push_back(LogicalType::VARCHAR);
+	names.emplace_back("content");
+	return_types.push_back(LogicalType::VARCHAR);
+	return std::move(result);
+}
+
+void CheckoutScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &state = data.global_state->Cast<OnceState>();
+	if (state.done) {
+		return;
+	}
+	state.done = true;
+	auto &bind = data.bind_data->Cast<CheckoutBindData>();
+	Connection connection(DatabaseInstance::GetDatabase(context));
+	int32_t version;
+	auto content = StoredNotebook(connection, bind.database, bind.name, bind.version, version);
+	if (!bind.to.empty()) {
+		auto &fs = FileSystem::GetFileSystem(context);
+		if (fs.FileExists(bind.to) && !bind.force) {
+			auto existing = ReadNotebookText(context, bind.to);
+			if (existing != content) {
+				auto prefix = Prefix(bind.database);
+				auto known = Rows(Execute(connection,
+				                          "SELECT count(*) FROM " + prefix +
+				                              "_notebook.versions WHERE name = ? AND content_hash = sha256(?)",
+				                          bind.name, existing));
+				if (known[0][0].GetValue<int64_t>() == 0) {
+					throw InvalidInputException(
+					    "notebook_checkout: \"%s\" has changes that are not saved in '%s'. Save them with "
+					    "notebook_save, or check out with force := true",
+					    bind.to, bind.name);
+				}
+			}
+		}
+		WriteTextFile(context, bind.to, content);
+	}
+	output.data[0].Append(Value(bind.name));
+	output.data[1].Append(Value::INTEGER(version));
+	output.data[2].Append(bind.to.empty() ? Value(LogicalType::VARCHAR) : Value(bind.to));
+	output.data[3].Append(Value(content));
+}
+
+} // namespace
+
+void EnsureStorage(Connection &connection, const string &database) {
+	auto prefix = Prefix(database);
+	Check(connection.Query("CREATE SCHEMA IF NOT EXISTS " + prefix + "_notebook"));
+	Check(connection.Query("CREATE TABLE IF NOT EXISTS " + prefix +
+	                       "_notebook.notebooks (name VARCHAR PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL "
+	                       "DEFAULT now())"));
+	Check(connection.Query("CREATE TABLE IF NOT EXISTS " + prefix +
+	                       "_notebook.versions (name VARCHAR NOT NULL REFERENCES " + prefix +
+	                       "_notebook.notebooks (name), version INTEGER NOT NULL, content VARCHAR NOT NULL, "
+	                       "content_hash VARCHAR NOT NULL, saved_at TIMESTAMPTZ NOT NULL DEFAULT now(), message "
+	                       "VARCHAR, PRIMARY KEY (name, version))"));
+	Check(connection.Query("CREATE VIEW IF NOT EXISTS " + prefix + "_notebook.current AS SELECT * FROM " + prefix +
+	                       "_notebook.versions QUALIFY version = max(version) OVER (PARTITION BY name)"));
+}
+
+string StoredNotebook(Connection &connection, const string &database, const string &name, int32_t version,
+                      int32_t &found_version) {
+	auto prefix = Prefix(database);
+	auto table =
+	    connection.Query("SELECT 1 FROM duckdb_tables() WHERE schema_name = '_notebook' AND table_name = "
+	                     "'versions'" +
+	                     (database.empty() ? string() : " AND database_name = " + notebook::QuoteString(database)));
+	if (table->HasError() || Rows(std::move(table)).empty()) {
+		throw InvalidInputException("No notebooks are stored in %s: there is no _notebook.versions table",
+		                            database.empty() ? "this database" : database);
+	}
+	vector<vector<Value>> rows;
+	if (version > 0) {
+		rows = Rows(Execute(
+		    connection, "SELECT version, content FROM " + prefix + "_notebook.versions WHERE name = ? AND version = ?",
+		    name, version));
+	} else {
+		rows = Rows(Execute(connection,
+		                    "SELECT version, content FROM " + prefix +
+		                        "_notebook.versions WHERE name = ? ORDER BY version DESC LIMIT 1",
+		                    name));
+	}
+	if (rows.empty()) {
+		throw InvalidInputException("No stored notebook '%s'%s", name,
+		                            version > 0 ? " with version " + std::to_string(version) : string());
+	}
+	found_version = rows[0][0].GetValue<int32_t>();
+	return rows[0][1].GetValue<string>();
+}
+
+void RegisterNotebookStorage(ExtensionLoader &loader) {
+	TableFunction save("notebook_save", {LogicalType::VARCHAR}, SaveScan, SaveBind, OnceInit);
+	save.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("name", LogicalType::VARCHAR)
+		    .Add("message", LogicalType::VARCHAR)
+		    .Add("database", LogicalType::VARCHAR)
+		    .Add("force", LogicalType::BOOLEAN);
+	});
+	loader.RegisterFunction(save);
+
+	TableFunction checkout("notebook_checkout", {LogicalType::VARCHAR}, CheckoutScan, CheckoutBind, OnceInit);
+	checkout.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("to", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::INTEGER)
+		    .Add("database", LogicalType::VARCHAR)
+		    .Add("force", LogicalType::BOOLEAN);
+	});
+	loader.RegisterFunction(checkout);
+}
+
+} // namespace duckdb

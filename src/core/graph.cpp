@@ -1,5 +1,8 @@
 #include "notebook/graph.hpp"
 
+#include "notebook/chart.hpp"
+#include "notebook/yaml.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -15,17 +18,6 @@ std::string Lower(std::string s) {
 		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 	}
 	return s;
-}
-
-std::string TrimSpace(const std::string &s) {
-	size_t b = 0, e = s.size();
-	while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) {
-		b++;
-	}
-	while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) {
-		e--;
-	}
-	return s.substr(b, e - b);
 }
 
 void AddUnique(std::vector<std::string> &values, const std::string &value) {
@@ -44,86 +36,6 @@ std::string Describe(const std::string &name) {
 
 std::string CellLabel(const Cell &cell) {
 	return cell.name.empty() ? "line " + std::to_string(cell.start_line) : cell.name;
-}
-
-// A deliberately small reading of the chart spec's YAML: just enough to find the names a
-// chart defines and reads. The chart compiler will replace it with a real parser.
-
-std::string StripYamlScalar(std::string value) {
-	auto comment = value.find(" #");
-	if (comment != std::string::npos) {
-		value = value.substr(0, comment);
-	}
-	value = TrimSpace(value);
-	if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') && value.back() == value.front()) {
-		value = value.substr(1, value.size() - 2);
-	}
-	return value;
-}
-
-//! Finds `key:` at the start of an unindented line. Returns its inline value and, in
-//! `block`, the indented lines that follow it.
-bool TopLevelEntry(const std::string &spec, const std::string &key, std::string &value,
-                   std::vector<std::string> &block) {
-	size_t pos = 0;
-	bool found = false;
-	while (pos <= spec.size()) {
-		size_t end = spec.find('\n', pos);
-		if (end == std::string::npos) {
-			end = spec.size();
-		}
-		auto line = spec.substr(pos, end - pos);
-		bool indented = !line.empty() && std::isspace(static_cast<unsigned char>(line[0]));
-		if (found) {
-			if (!indented && !TrimSpace(line).empty()) {
-				break;
-			}
-			block.push_back(line);
-		} else if (line.compare(0, key.size() + 1, key + ":") == 0) {
-			value = line.substr(key.size() + 1);
-			found = true;
-		}
-		pos = end + 1;
-	}
-	return found;
-}
-
-//! Splits `a, b, {c: d}` on the commas that are not nested in braces or brackets.
-std::vector<std::string> SplitFlow(const std::string &inner) {
-	std::vector<std::string> parts;
-	std::string current;
-	int depth = 0;
-	char quote = 0;
-	for (char c : inner) {
-		if (quote) {
-			quote = c == quote ? 0 : quote;
-		} else if (c == '"' || c == '\'') {
-			quote = c;
-		} else if (c == '{' || c == '[') {
-			depth++;
-		} else if (c == '}' || c == ']') {
-			depth--;
-		} else if (c == ',' && depth == 0) {
-			parts.push_back(TrimSpace(current));
-			current.clear();
-			continue;
-		}
-		current += c;
-	}
-	if (!TrimSpace(current).empty()) {
-		parts.push_back(TrimSpace(current));
-	}
-	return parts;
-}
-
-std::string MappingValue(const std::vector<std::string> &entries, const std::string &key) {
-	for (auto &entry : entries) {
-		auto trimmed = TrimSpace(entry);
-		if (trimmed.compare(0, key.size() + 1, key + ":") == 0) {
-			return StripYamlScalar(trimmed.substr(key.size() + 1));
-		}
-	}
-	return std::string();
 }
 
 //! Tarjan's strongly connected components over `depends_on`.
@@ -241,41 +153,14 @@ void CollectReferences(Cell &cell, const ReferenceExtractor &extract) {
 } // namespace
 
 std::string ChartSelection(const std::string &spec) {
-	std::string value;
-	std::vector<std::string> block;
-	if (!TopLevelEntry(spec, "select", value, block)) {
-		return std::string();
-	}
-	value = StripYamlScalar(value);
-	if (value.size() >= 2 && value.front() == '{' && value.back() == '}') {
-		return MappingValue(SplitFlow(value.substr(1, value.size() - 2)), "as");
-	}
-	return value.empty() ? MappingValue(block, "as") : std::string();
+	return ChartSelectionInfo(spec).name;
 }
 
 std::vector<std::string> ChartFilters(const std::string &spec) {
-	std::string value;
-	std::vector<std::string> block;
-	std::vector<std::string> names;
-	if (!TopLevelEntry(spec, "filter", value, block)) {
-		return names;
-	}
-	value = StripYamlScalar(value);
-	if (value.size() >= 2 && value.front() == '[' && value.back() == ']') {
-		for (auto &part : SplitFlow(value.substr(1, value.size() - 2))) {
-			AddUnique(names, StripYamlScalar(part));
-		}
-	} else if (!value.empty()) {
-		names.push_back(value);
-	} else {
-		for (auto &line : block) {
-			auto item = TrimSpace(line);
-			if (item.compare(0, 2, "- ") == 0) {
-				AddUnique(names, StripYamlScalar(item.substr(2)));
-			}
-		}
-	}
-	return names;
+	std::string error;
+	auto yaml = ParseYaml(spec, error);
+	auto filter = yaml.Get("filter");
+	return filter ? filter->Strings() : std::vector<std::string>();
 }
 
 void AnalyzeNotebook(Notebook &notebook, const ReferenceExtractor &extract) {

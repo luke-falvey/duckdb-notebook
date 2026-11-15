@@ -324,6 +324,28 @@ std::vector<std::string> ReferencedVariables(const std::string &sql) {
 	return names;
 }
 
+bool IsConnectionState(const std::string &statement) {
+	auto tokens = CodeTokens(statement, 6);
+	if (tokens.empty()) {
+		return false;
+	}
+	auto &first = tokens[0].text;
+	if (first == "USE") {
+		return true;
+	}
+	if (first == "SET" || first == "RESET") {
+		return !(tokens.size() > 1 && tokens[1].text == "VARIABLE");
+	}
+	if (first == "CREATE") {
+		for (size_t i = 1; i < tokens.size(); i++) {
+			if (tokens[i].text == "TEMP" || tokens[i].text == "TEMPORARY") {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool IsSetVariable(const std::string &statement, std::string &name) {
 	auto tokens = CodeTokens(statement, 4);
 	if (tokens.size() < 4 || tokens[0].text != "SET" || tokens[1].text != "VARIABLE" || tokens[3].text != "=") {

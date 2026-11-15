@@ -61,6 +61,11 @@ bool IsQueryStatement(const std::string &statement);
 //! in order of first appearance. Positional parameters such as `$1` are ignored.
 std::vector<std::string> ReferencedVariables(const std::string &sql);
 
+//! True if the statement changes state that belongs to one connection and is not a variable:
+//! `CREATE TEMP ...`, `SET`/`RESET` of a setting, `USE`. A session that runs each request on a
+//! fresh connection replays these.
+bool IsConnectionState(const std::string &statement);
+
 //! If the statement is `SET VARIABLE <name> = ...`, returns true and the name.
 bool IsSetVariable(const std::string &statement, std::string &name);
 
