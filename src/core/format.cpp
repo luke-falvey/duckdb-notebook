@@ -219,7 +219,8 @@ Notebook ParseNotebook(const std::string &text) {
 		}
 	}
 
-	int total_lines = scan.Line();
+	// A final newline ends the last line; it does not start another one.
+	int total_lines = scan.Line() - (!text.empty() && text.back() == '\n' ? 1 : 0);
 	std::map<std::string, int> first_use;
 	for (size_t m = 0; m < markers.size(); m++) {
 		Cell cell;

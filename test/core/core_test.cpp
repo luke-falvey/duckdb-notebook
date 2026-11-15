@@ -68,6 +68,7 @@ static void TestParseNotebook() {
 	CHECK(nb.cells[2].name == "monthly" && nb.cells[2].is_query && nb.cells[2].variables.size() == 1);
 	CHECK(nb.cells[3].kind == CellKind::CHART && nb.cells[3].name.empty() && nb.cells[3].content == "mark: line");
 	CHECK(nb.cells[4].kind == CellKind::SQL && nb.cells[4].name.empty() && !nb.cells[4].is_query);
+	CHECK(nb.cells[4].start_line == 17 && nb.cells[4].end_line == 18);
 	CHECK(ParseNotebook("SELECT 1;").cells.empty());
 }
 

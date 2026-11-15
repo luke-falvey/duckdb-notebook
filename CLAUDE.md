@@ -47,9 +47,9 @@ Compiles and runs the `src/core` tests in a few seconds. Use this loop for anyth
 GEN=ninja make release
 ```
 
-Builds DuckDB and the extension. **The first build compiles all of DuckDB and takes about an hour on
-4 cores**; later builds only recompile the extension and take seconds. Start it in the background as
-soon as a session begins.
+Builds DuckDB and the extension. **The first build compiles all of DuckDB and takes about 15 minutes
+on 4 cores**; later builds only recompile the extension and take 5 to 15 seconds. Start it in the
+background as soon as a session begins.
 
 ```bash
 make test
@@ -61,7 +61,11 @@ Runs `test/sql/*.test` against the release build.
 ./build/release/duckdb
 ```
 
-A DuckDB shell with the extension already loaded, for trying things by hand.
+A DuckDB shell with the extension already linked in, for trying things by hand.
+
+The loadable file is `build/release/extension/notebook/notebook.duckdb_extension`. A local build
+stamps it with DuckDB's commit hash, because the submodule is a shallow clone with no tag, so it
+loads into the shell built here but not into a released DuckDB. CI builds are stamped `v2.0.0`.
 
 Run one test file with `./build/release/test/unittest "test/sql/notebook_run.test"`.
 
@@ -115,6 +119,15 @@ create, because all test files share one database.
 - `notebook_run` executes in a session of its own. Tables it creates persist; its temp views and
   variables are gone when it returns. To run a notebook in your own connection, execute the output of
   `notebook_sql`.
+- DuckDB 2.0's C++ API differs from older examples and from most of what you will find online.
+  Table functions write with `output.data[col].Append(Value(...))` and do not set a cardinality;
+  bind receives `vector<Identifier> &names`; `Connection::Query` returns `QueryResult`. Read
+  `duckdb/AGENTS.md` and copy from `duckdb/src/function/table/system/` when unsure.
+- sqllogictest expected results cannot contain blank lines or multi-line values. Flatten them in the
+  query, as `test/sql/notebook_sql.test` does.
+- `vcpkg.json` must exist at the repository root even with no dependencies, or CI fails at configure.
+- An extension is only linked into the build's `duckdb` shell if `extension_config.cmake` calls
+  `duckdb_extension_statically_link`.
 - The version of DuckDB in the `duckdb` submodule, the `duckdb_version` in
   `.github/workflows/MainDistributionPipeline.yml`, and the `extension-ci-tools` branch must all name
   the same release.

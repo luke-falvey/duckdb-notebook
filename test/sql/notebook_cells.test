@@ -30,10 +30,9 @@ table
 
 # A marker-looking line inside a block comment is content
 query I
-SELECT content FROM notebook_cells('test/notebooks/basic.sql') WHERE kind = 'markdown'
+SELECT replace(content, chr(10), ' / ') FROM notebook_cells('test/notebooks/basic.sql') WHERE kind = 'markdown'
 ----
-# Basic
--- %% this line is inside a comment, so it is not a cell marker
+# Basic / -- %% this line is inside a comment, so it is not a cell marker
 
 # Variables read with $name
 query II

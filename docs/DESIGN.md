@@ -478,11 +478,13 @@ Loading an extension must not do that. The C API has no way to go from a functio
 connection, and no weak reference.
 
 The C++ API does. A function can create a connection from its context when it needs one and release
-it afterwards, which is what `notebook_run` does. So the extension uses the C++ API, as the official
+it afterwards, which is what `notebook_run` does. The same check on the C++ build passed: after a
+run, the database closed and checkpointed and a second process could read it. So the extension uses
+the C++ API, as the official
 UI extension does. The costs are the ones §4 already named, now measured:
 
 - The extension is tied to one DuckDB release and is rebuilt for each.
-- The first build compiles all of DuckDB: about an hour on 4 cores. Later builds take seconds.
+- The first build compiles all of DuckDB: about 15 minutes on 4 cores. Later builds take seconds.
 
 The second cost shapes how the code is organised. Everything that does not need a database lives in
 `src/core`, which has no DuckDB dependency and whose tests compile and run in seconds. If DuckDB
