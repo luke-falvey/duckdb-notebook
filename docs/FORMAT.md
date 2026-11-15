@@ -91,6 +91,35 @@ SQL and input cells may only refer to cells **above** them. A forward reference 
 the file readable top to bottom and makes the expanded script (§7) a straight translation. Markdown and
 chart cells only display things, so they may refer to any cell.
 
+What a cell defines and reads is found by DuckDB's parser, without running anything:
+
+| Cell | Defines | Reads |
+|---|---|---|
+| SQL | Its name, if it is a named query cell; tables, views, schemas, macros, sequences and types it creates; databases it attaches; variables it sets | Tables and views in its SQL that are not CTEs, including the targets of `INSERT`, `UPDATE`, `DELETE`, `COPY` and `DROP`; `$name` and `getvariable('name')` |
+| Input | Its variable | The cell in `from=<cell>.<column>`; anything its default reads |
+| Markdown | Nothing | What its `{{ }}` expressions read |
+| Chart | Its `select: {as: …}` variable | Its `from`; the selections in its `filter` |
+
+Names compare case-insensitively, and `main.` and `temp.` qualifiers are ignored, so `main.orders`
+reads the cell that creates `orders`. A qualified name such as `wh.orders` depends on the cell that
+creates it or, failing that, on the cell that attached `wh` or created schema `wh`. A name that no cell
+defines is assumed to be a table or view in the database and needs no cell.
+
+These are errors, reported on every cell involved:
+
+- A name defined by more than one cell.
+- An SQL or input cell reading something defined further down.
+- A dependency cycle. With the rule above, a cycle can only pass through a chart, for example a chart
+  drawn `from` a cell that reads the chart's own selection.
+
+These are warnings, which do not stop a notebook from running:
+
+- A variable that some cell reads but no cell sets. It reads as `NULL` (see Parameters).
+- SQL the parser cannot read, such as a syntax error. Its dependencies are unknown, and running it
+  reports the error on that cell.
+
+Calls to macros, and uses of sequences and types, are not yet counted as reads.
+
 ### Parameters
 
 Parameters are DuckDB session variables, read with `$name`:
@@ -147,7 +176,10 @@ Total revenue in **{{ $region }}**: {{ (SELECT sum(revenue) FROM monthly) }}
 - CommonMark plus tables, footnotes, KaTeX maths (`$…$` / `$$…$$` are maths here, not parameters) and
   Mermaid diagrams in ```` ```mermaid ```` fences.
 - `{{ expr }}` is a DuckDB scalar expression. It is evaluated as `SELECT (expr)` and the value is
-  formatted inline. Dependencies are found the same way as for SQL cells.
+  formatted inline (`NULL` shows as `NULL`). Dependencies are found the same way as for SQL cells, and
+  the expressions are evaluated once the cells they read have run, so a summary may sit above them.
+  The closing `}}` is looked for in SQL, so `}}` inside a string or a struct literal does not end the
+  expression. An unclosed `{{` or an empty `{{ }}` is an error.
 - Raw HTML is sanitised. Scripts never run.
 - DuckDB block comments nest, so `/*` and `*/` inside the prose must be balanced. Write a literal
   `*/` as `*\/`.
@@ -230,7 +262,8 @@ WHERE $picked_months IS NULL
 ```
 
 A chart can take the filter without any SQL: `filter: picked_months` in another chart's spec applies
-the selection to that chart's `from` (cross-filtering).
+the selection to that chart's `from` (cross-filtering). `filter` takes one selection or a list,
+`[a, b]`. `select` and `filter` are read from the top level of the spec only.
 
 ### 5.3 Typed charts
 
@@ -312,8 +345,12 @@ Three levels, from least to most capable:
    extension. [`examples/revenue.expanded.sql`](../examples/revenue.expanded.sql) is that output for
    the example.
 3. **Headless with the extension.** `FROM notebook_run('revenue.sql')` runs every cell in a session
-   of its own and returns one row per cell with its status. Tables the notebook creates remain; its
-   views and variables do not reach the caller's connection.
+   of its own and returns one row per cell with its status, in the order the cells ran. Tables the
+   notebook creates remain; its views and variables do not reach the caller's connection. Markdown
+   cells come back rendered, with each `{{ }}` replaced by its value.
+   `notebook_run('revenue.sql', params := {region: 'US'})` runs with other values: a parameter
+   replaces an input's default, or sets a variable that nothing in the notebook sets, such as a chart
+   selection. A variable set by an SQL cell cannot be a parameter, because the cell would overwrite it.
 
 ## 8. Sidecar cache
 

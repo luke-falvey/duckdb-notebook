@@ -14,14 +14,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(src/include)
 
-# core/      plain C++ with no DuckDB dependency: format, lexer, script generation.
+# core/      plain C++ with no DuckDB dependency: format, lexer, script generation, graph.
 #            Unit-tested on its own with `make core_test`.
 # functions/ the SQL surface, one file per function, written against DuckDB's C++ API.
 set(EXTENSION_SOURCES
     src/core/sql_lexer.cpp
     src/core/format.cpp
     src/core/script.cpp
+    src/core/graph.cpp
     src/functions/common.cpp
+    src/functions/references.cpp
     src/functions/notebook_cells.cpp
     src/functions/notebook_sql.cpp
     src/functions/notebook_run.cpp

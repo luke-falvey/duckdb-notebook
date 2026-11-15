@@ -36,3 +36,8 @@ statement error
 SELECT sql FROM notebook_sql('test/notebooks/errors.sql')
 ----
 duplicate cell name 'totals'
+
+statement error
+SELECT sql FROM notebook_sql('test/notebooks/graph_errors.sql')
+----
+'later' is defined further down

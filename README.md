@@ -2,8 +2,8 @@
 
 A notebook environment for DuckDB where the notebook is a plain `.sql` file.
 
-**Status: early.** The design is written, and a first pass of the DuckDB extension parses notebooks
-and runs them headlessly. There is no user interface yet.
+**Status: early.** The design is written, and a first pass of the DuckDB extension parses notebooks,
+works out the dependencies between cells and runs them headlessly. There is no user interface yet.
 
 ```sql
 -- %% [markdown]
@@ -49,14 +49,20 @@ Build the extension (see [CLAUDE.md](CLAUDE.md) for details), then in `./build/r
 -- One row per cell: kind, name, options, body, and any format errors
 SELECT idx, kind, name, is_query, errors FROM notebook_cells('examples/revenue.sql');
 
+-- The dependency graph: what each cell defines and reads, and which cells it depends on
+SELECT idx, name, defines, reads, depends_on, warnings FROM notebook_cells('examples/revenue.sql');
+
 -- Run every cell in a session of its own; one row per cell with its outcome
 SELECT name, status, row_count, error FROM notebook_run('examples/revenue.sql');
+
+-- Run with other input values; markdown comes back with its {{ }} expressions filled in
+SELECT output FROM notebook_run('examples/revenue.sql', params := {region: 'US'}) WHERE kind = 'markdown';
 
 -- The notebook as a plain SQL script that any DuckDB 2.0 client can run
 SELECT sql FROM notebook_sql('examples/revenue.sql');
 ```
 
-Charts, inputs, the dependency graph, the server and exports are designed but not built.
+Charts, input widgets, the server and exports are designed but not built.
 
 ## Documents
 

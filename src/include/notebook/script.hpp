@@ -22,6 +22,11 @@ std::string CellSql(const Cell &cell);
 //! variable is an error in DuckDB, so the runner starts these as NULL.
 std::vector<std::string> UndefinedVariables(const Notebook &notebook);
 
+//! Empty if `name` can be given as a parameter to a run, otherwise why not. Parameters
+//! override input defaults and set variables that nothing in the notebook sets (chart
+//! selections); a variable that an SQL cell sets would be overwritten, so it is refused.
+std::string ParameterError(const Notebook &notebook, const std::string &name);
+
 //! A plain SQL script equivalent to running every cell in file order. It needs no
 //! extension: this is the `sql` export described in docs/FORMAT.md section 7.
 std::string ExpandNotebook(const Notebook &notebook, const std::string &source_name);

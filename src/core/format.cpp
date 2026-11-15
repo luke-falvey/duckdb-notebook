@@ -2,6 +2,7 @@
 
 #include "notebook/sql_lexer.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <map>
 
@@ -129,6 +130,19 @@ void CheckBody(Cell &cell) {
 		if (!SingleBlockComment(cell.body, cell.content)) {
 			cell.errors.push_back(std::string(CellKindName(cell.kind)) +
 			                      " cell body must be a single /* ... */ block comment");
+		} else if (cell.kind == CellKind::MARKDOWN) {
+			std::string error;
+			cell.expressions = FindExpressions(cell.content, error);
+			if (!error.empty()) {
+				cell.errors.push_back(error);
+			}
+			for (auto &expression : cell.expressions) {
+				for (auto &name : ReferencedVariables(expression.sql)) {
+					if (std::find(cell.variables.begin(), cell.variables.end(), name) == cell.variables.end()) {
+						cell.variables.push_back(name);
+					}
+				}
+			}
 		}
 		if (cell.kind == CellKind::CHART && cell.Option("from").empty()) {
 			cell.errors.push_back("chart cell needs from=<cell or table>");
@@ -188,6 +202,52 @@ bool Notebook::HasErrors() const {
 		}
 	}
 	return false;
+}
+
+std::vector<Expression> FindExpressions(const std::string &markdown, std::string &error) {
+	std::vector<Expression> expressions;
+	size_t from = 0;
+	while (true) {
+		size_t open = markdown.find("{{", from);
+		if (open == std::string::npos) {
+			return expressions;
+		}
+		// Scan the rest as SQL so braces inside strings and comments are skipped. Struct
+		// literals use braces too, so `}}` only closes at brace depth zero.
+		std::string rest = markdown.substr(open + 2);
+		SqlScanner scan(rest);
+		int depth = 0;
+		size_t close = std::string::npos;
+		while (!scan.Done()) {
+			size_t at = scan.Position();
+			if (scan.CurrentState() == SqlScanner::State::CODE) {
+				if (rest[at] == '{') {
+					depth++;
+				} else if (rest[at] == '}') {
+					if (depth == 0 && at + 1 < rest.size() && rest[at + 1] == '}') {
+						close = at;
+						break;
+					}
+					depth = depth > 0 ? depth - 1 : 0;
+				}
+			}
+			scan.Advance();
+		}
+		if (close == std::string::npos) {
+			error = "unterminated {{ in markdown; expressions are written {{ expr }}";
+			return expressions;
+		}
+		Expression expression;
+		expression.begin = open;
+		expression.end = open + 2 + close + 2;
+		expression.sql = TrimBlankLines(rest.substr(0, close));
+		if (expression.sql.empty()) {
+			error = "empty {{ }} in markdown";
+			return expressions;
+		}
+		expressions.push_back(std::move(expression));
+		from = expressions.back().end;
+	}
 }
 
 Notebook ParseNotebook(const std::string &text) {

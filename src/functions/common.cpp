@@ -18,7 +18,9 @@ notebook::Notebook ReadNotebook(ClientContext &context, const string &path) {
 		}
 		total += NumericCast<idx_t>(n);
 	}
-	return notebook::ParseNotebook(contents);
+	auto notebook = notebook::ParseNotebook(contents);
+	notebook::AnalyzeNotebook(notebook, [&](const std::string &sql) { return ExtractReferences(context, sql); });
+	return notebook;
 }
 
 void ThrowIfInvalid(const notebook::Notebook &notebook, const string &path) {

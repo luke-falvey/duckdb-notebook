@@ -1,7 +1,7 @@
 # DuckDB Notebook: design
 
-Status: draft for review. The first pass of the extension exists (format parser and headless runner;
-see §9 and §11). Everything else here is still design.
+Status: draft for review. The first pass of the extension exists (format parser, dependency graph and
+headless runner; see §9 and §11). Everything else here is still design.
 
 Companion documents: [FORMAT.md](FORMAT.md) specifies the file format; [RESEARCH.md](RESEARCH.md)
 records the survey this design draws on and what could not be verified.
@@ -186,9 +186,9 @@ or CI job with no browser.
 
 | Function | Purpose | State |
 |---|---|---|
-| `notebook_cells(path)` | One row per cell: kind, name, options, body, variables read, format errors. `defines` and `reads` come with the graph | Built, without the graph columns |
+| `notebook_cells(path)` | One row per cell: kind, name, options, body, variables read, `defines`, `reads`, `depends_on`, errors and warnings | Built |
 | `notebook_sql(path)` | The notebook as a plain SQL script (the `sql` export) | Built |
-| `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count and timing | Built, without `params` |
+| `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count, timing and rendered markdown | Built |
 | `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook | |
 | `notebook_stop()` | Stop it | |
 | `notebook_export(path, to := 'out.html', format := …, params := {…})` | Export (see §7) | |
@@ -416,7 +416,7 @@ a browser to produce the SVG.
 
 | ID | Question | Why it matters |
 |---|---|---|
-| S1 | Can the extension walk a parsed statement for table and parameter references across all statement kinds? | Core of the graph. `duckdb_get_table_names` is not enough: in 2.0.0 it binds, and so fails, on `JOIN … USING` and `INSERT` against tables that do not exist yet. `json_serialize_sql` handles only `SELECT` |
+| S1 | ~~Can the extension walk a parsed statement for table and parameter references across all statement kinds?~~ | **Done: yes, with the C++ parser and no binding.** See §11 |
 | S2 | Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder? | Result transport |
 | S3 | Size of the extension with the frontend embedded; lazy loading of heavy renderers | Download size and the community-extension build |
 | S4 | ~~DuckDB-WASM inlined in a single HTML file, opened from `file://`~~ | **Done: it works in Chromium.** See [the spike](../spikes/wasm-single-file/README.md). Firefox, Safari and inlined extensions are untested |
@@ -437,11 +437,11 @@ Other risks:
 
 ## 9. Roadmap
 
-1. **Format and headless runner.** Parser, `notebook_cells`, `notebook_run`, `sql` export. **Done**,
-   except for the items in 1b.
+1. **Format and headless runner.** Parser, `notebook_cells`, `notebook_run`, `sql` export. **Done.**
 
    1b. **Dependency graph.** `defines` and `reads` per cell from DuckDB's parser, forward-reference
    and cycle errors, `params` for `notebook_run`, `{{ }}` expressions in markdown. Resolves S1.
+   **Done.**
 2. **Server and minimal UI.** Editor, grid, reactive runs, file sync. Resolves S2, S3.
 3. **Charts and inputs.** Chart compiler, grammar charts, KPI and table, input widgets, selections.
 4. **In-database storage.** `_notebook` schema, save, checkout, history.
@@ -525,11 +525,31 @@ connection, and it reports `PIVOT` statements as not serialisable. The lexer is 
 only place that scans SQL text; it tracks strings, nested block comments and dollar-quoted strings,
 so a `-- %%` line inside a comment or string is not mistaken for a cell marker.
 
-### The dependency graph is still open (S1)
+### The dependency graph comes from the parser, not the binder (S1)
 
-The first pass extracts the variables a cell reads, but not the tables. With the C++ API the
-extension can call DuckDB's parser directly and walk the statement tree without binding it, which is
-what S1 needs. That is the next piece of work.
+`duckdb_get_table_names` binds, so it fails on statements whose tables do not exist yet, which is the
+normal state of a notebook that has not run. The graph instead calls DuckDB's `Parser` and walks the
+statement tree (`src/functions/references.cpp`). DuckDB 2.0 made this easier than expected: `INSERT`,
+`UPDATE`, `DELETE`, `MERGE` and `COPY` are query nodes, and `ParsedExpressionIterator` walks them all,
+so the walker only adds what the iterator skips: expression subqueries, the target of an `INSERT`,
+`COPY` and `DROP` tables, `CREATE` and `ATTACH` names, `SET VARIABLE`, and `getvariable('…')`.
+
+The split follows the rule above: the extension supplies one function, "what does this SQL define and
+read", and everything else (resolving names to cells, ordering, duplicates, cycles, run order) is in
+`src/core/graph.cpp` and unit-tested without a database. Findings:
+
+- `PIVOT` parses into a multi-statement that creates an internal `__pivot_enum_…` type; the walker
+  ignores it.
+- `ATTACH 'x.duckdb'` without `AS` keeps its path as an expression in 2.0; the walker derives the
+  alias `x` from it as DuckDB does.
+- CTE names are collected per statement rather than per scope. A CTE that shadows a real table hides
+  reads of that table elsewhere in the same statement; this has not mattered in practice.
+- Markdown cells may refer to cells below them, so the runner evaluates a markdown cell only after
+  everything it reads has run. `notebook_run` therefore returns rows in run order, not file order.
+- A syntax error is a warning on the cell, not a format error: the notebook still runs and the cell
+  fails on its own terms, as before.
+- The unknown-variable warning promised above exists. Chart selections are definitions, so a cell
+  reading `$picked_months` warns only if no chart selects into it.
 
 ### DuckDB 2.0 specifics worth knowing
 

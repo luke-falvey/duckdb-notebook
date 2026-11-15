@@ -5,21 +5,26 @@ built and why, and `docs/FORMAT.md` for the file format. This file is about how 
 
 ## Where things stand
 
-Roadmap step 1 of `docs/DESIGN.md` §9 is done: the format parser and a headless runner.
+Roadmap steps 1 and 1b of `docs/DESIGN.md` §9 are done: the format parser, the dependency graph and a
+headless runner.
 
 | SQL function | What it does | File |
 |---|---|---|
-| `notebook_cells(path)` | One row per cell: kind, name, options, body, errors | `src/functions/notebook_cells.cpp` |
+| `notebook_cells(path)` | One row per cell: kind, name, options, body, defines, reads, depends_on, errors, warnings | `src/functions/notebook_cells.cpp` |
 | `notebook_sql(path)` | The notebook as a plain SQL script | `src/functions/notebook_sql.cpp` |
-| `notebook_run(path)` | Runs every cell in its own session; one row per cell with status | `src/functions/notebook_run.cpp` |
+| `notebook_run(path, params := {…})` | Runs every cell in its own session; one row per cell with status and rendered markdown | `src/functions/notebook_run.cpp` |
 
-Not started: dependency graph, HTTP server, frontend, chart compiler, in-database storage, export.
+The graph is split in two: `src/functions/references.cpp` walks DuckDB's parse tree to say what SQL
+defines and reads, and `src/core/graph.cpp` does everything else (resolution, ordering errors, cycles,
+run order). `ReadNotebook` runs both, so every function sees an analysed notebook.
+
+Not started: HTTP server, frontend, chart compiler, in-database storage, export.
 `docs/DESIGN.md` §9 lists what comes next and §11 records what the first pass taught us.
 
 ## Layout
 
 ```
-src/core/          Plain C++17, no DuckDB headers. Lexer, format parser, script generation.
+src/core/          Plain C++17, no DuckDB headers. Lexer, format parser, script generation, graph.
 src/functions/     The SQL surface. One file per function, DuckDB C++ API.
 src/include/       Headers: notebook/*.hpp for core, notebook/functions.hpp for the SQL surface.
 test/core/         Unit tests for src/core. No DuckDB needed.
@@ -114,6 +119,9 @@ create, because all test files share one database.
   expressions or `find` on SQL text.
 - DuckDB block comments nest. `$$…$$` and `$tag$…$tag$` are string literals, while `$name` is a
   variable reference.
+- Graph names are lower-case relation names or variables with a leading `$` (`monthly`, `$region`).
+  Core tests use a fake extractor (`FakeExtract` in `test/core/core_test.cpp`); behaviour that depends
+  on DuckDB's real parse tree needs a SQL test.
 - Whether a cell is a query is decided by the lexer (`IsQueryStatement`), not by DuckDB's parser, so
   it works without a database. If you replace it with the real parser, keep the core tests passing.
 - `notebook_run` executes in a session of its own. Tables it creates persist; its temp views and

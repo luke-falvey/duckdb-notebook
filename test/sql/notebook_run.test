@@ -47,6 +47,45 @@ SELECT * FROM notebook_run('test/notebooks/errors.sql')
 ----
 Notebook "test/notebooks/errors.sql" has errors
 
+# Graph errors stop a run too
+statement error
+SELECT * FROM notebook_run('test/notebooks/graph_errors.sql')
+----
+'later' is defined further down, at line 5
+
+# params override input defaults and set selection variables
+query II
+SELECT name, row_count FROM notebook_run('test/notebooks/basic.sql', params := {lowest: 8, picked: [2]}) WHERE name IN ('kept', 'picked_rows') ORDER BY idx
+----
+kept	2
+picked_rows	1
+
+statement error
+SELECT * FROM notebook_run('test/notebooks/basic.sql', params := {nope: 1})
+----
+the notebook has no input or variable named 'nope'
+
+statement error
+SELECT * FROM notebook_run('test/notebooks/basic.sql', params := 5)
+----
+params must be a struct
+
+# Markdown {{ }} expressions are evaluated once the cells they read have run, so a
+# markdown cell may sit above them; rows come in run order
+query IIII
+SELECT idx, status, replace(output, chr(10), ' / '), error LIKE '%no_such_table_here%' FROM notebook_run('test/notebooks/markdown.sql')
+----
+1	ok	NULL	NULL
+2	ok	NULL	NULL
+0	ok	Total 3 at level 3; braces in }} are fine.	NULL
+3	skipped	No expressions here.	NULL
+4	error	NULL	true
+
+query I
+SELECT output FROM notebook_run('test/notebooks/markdown.sql', params := {level: 5}) WHERE idx = 0
+----
+Total 10 at level 5; braces in }} are fine.
+
 # The example notebook runs end to end
 query I
 SELECT count(*) FROM notebook_run('examples/revenue.sql') WHERE status = 'error'

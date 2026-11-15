@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "notebook/format.hpp"
+#include "notebook/graph.hpp"
 
 // The SQL surface of the extension. One Register function per SQL function, each in
 // its own file under src/functions. To add a function: declare it here, implement it
@@ -17,9 +18,14 @@ void RegisterNotebookSql(ExtensionLoader &loader);
 //! notebook_run(path): runs every cell in a fresh connection; one row per cell with its outcome.
 void RegisterNotebookRun(ExtensionLoader &loader);
 
-//! Reads and parses a notebook through DuckDB's file system, so local paths and, with
-//! httpfs loaded, URLs and object stores all work. Throws IOException if unreadable.
+//! Reads, parses and analyses a notebook (AnalyzeNotebook, with ExtractReferences) through
+//! DuckDB's file system, so local paths and, with httpfs loaded, URLs and object stores all
+//! work. Throws IOException if unreadable.
 notebook::Notebook ReadNotebook(ClientContext &context, const string &path);
+
+//! What SQL defines and reads, from DuckDB's parser. Does not bind, so nothing it names
+//! needs to exist. Never throws: a parse error is returned in References::error.
+notebook::References ExtractReferences(ClientContext &context, const string &sql);
 
 //! Throws InvalidInputException naming the first format error, if the notebook has any.
 void ThrowIfInvalid(const notebook::Notebook &notebook, const string &path);
