@@ -97,6 +97,15 @@ SELECT count(*) FILTER (status = 'error'), count(*) FILTER (kind = 'chart' AND s
 ----
 0	27
 
+# The [notebook] cell's attach: databases are attached before the first cell
+query II
+SELECT name, row_count FROM notebook_run('test/notebooks/metadata.sql') WHERE name IS NOT NULL
+----
+from_attached	1
+
+statement ok
+DETACH nb_meta_db
+
 # A chart whose spec does not compile fails like any other cell
 query II
 SELECT status, error FROM notebook_run('test/notebooks/bad_chart.sql') WHERE kind = 'chart'

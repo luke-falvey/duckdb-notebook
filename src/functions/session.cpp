@@ -6,6 +6,7 @@
 #include "notebook/chart.hpp"
 #include "notebook/script.hpp"
 #include "notebook/sql_lexer.hpp"
+#include "notebook/yaml.hpp"
 
 #include <cmath>
 #include "duckdb/common/string_util.hpp"
@@ -155,6 +156,49 @@ void Runner::Save() {
 	auto &config = ClientConfig::GetConfig(*connection->context);
 	for (auto &variable : config.user_variables) {
 		state.variables[variable.first.GetIdentifierName()] = variable.second;
+	}
+}
+
+void Runner::ApplyMetadata(const notebook::Notebook &notebook, const string &source) {
+	for (auto &cell : notebook.cells) {
+		if (cell.kind != notebook::CellKind::NOTEBOOK) {
+			continue;
+		}
+		string error;
+		auto meta = notebook::ParseYaml(cell.content, error);
+		auto run = [&](const string &sql) {
+			auto result = connection->Query(sql);
+			if (result->HasError()) {
+				throw InvalidInputException("notebook metadata: %s", result->GetError());
+			}
+		};
+		if (auto extensions = meta.Get("extensions")) {
+			for (auto &name : extensions->Strings()) {
+				run("LOAD " + notebook::QuoteIdentifier(name));
+			}
+		}
+		auto attach = meta.Get("attach");
+		if (!attach || !attach->IsList()) {
+			continue;
+		}
+		auto slash = source.find_last_of('/');
+		auto base = source.compare(0, 3, "db:") == 0 || slash == string::npos ? string() : source.substr(0, slash + 1);
+		for (auto &entry : attach->items) {
+			auto path = entry.IsMap() ? entry.Str("path") : entry.scalar;
+			if (path.empty()) {
+				continue;
+			}
+			bool relative = path[0] != '/' && path.find(':') == string::npos;
+			auto sql = "ATTACH IF NOT EXISTS " + notebook::QuoteString(relative ? base + path : path);
+			auto alias = entry.IsMap() ? entry.Str("as") : string();
+			if (!alias.empty()) {
+				sql += " AS " + notebook::QuoteIdentifier(alias);
+			}
+			if (entry.IsMap() && entry.Str("read_only") == "true") {
+				sql += " (READ_ONLY)";
+			}
+			run(sql);
+		}
 	}
 }
 

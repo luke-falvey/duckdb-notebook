@@ -51,6 +51,10 @@ public:
 		return *connection;
 	}
 
+	//! Applies the [notebook] cell: loads its `extensions` and attaches its `attach` databases
+	//! (paths relative to the notebook file). Throws if one fails.
+	void ApplyMetadata(const notebook::Notebook &notebook, const string &source);
+
 	//! Sets variables that cells read but nothing sets to NULL, or to their param.
 	void InitializeVariables(const notebook::Notebook &notebook, const std::map<string, Value> &params);
 

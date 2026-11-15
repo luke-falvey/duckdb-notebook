@@ -306,6 +306,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    Runner runner(*db, session->state);
 		    RunningGuard running(*session, runner);
 		    auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		    runner.ApplyMetadata(notebook, session->source);
 		    runner.InitializeVariables(notebook, {});
 		    RunnerOptions options;
 		    options.charts = true;

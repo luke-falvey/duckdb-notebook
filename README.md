@@ -2,8 +2,10 @@
 
 A notebook environment for DuckDB where the notebook is a plain `.sql` file.
 
-**Status: early.** The design is written, and a first pass of the DuckDB extension parses notebooks,
-works out the dependencies between cells and runs them headlessly. There is no user interface yet.
+**Status: early, but every part of the design has a first implementation.** A DuckDB extension
+parses notebooks, works out the dependencies between cells, runs them, serves an editor in your
+browser, draws charts, stores notebooks in the database, and exports them to HTML, PDF, Markdown,
+SQL, data files and a live DuckDB-WASM page.
 
 ```sql
 -- %% [markdown]
@@ -43,26 +45,53 @@ y: revenue
 
 ## What works today
 
-Build the extension (see [CLAUDE.md](CLAUDE.md) for details), then in `./build/release/duckdb`:
+Build the extension (see [CLAUDE.md](CLAUDE.md)), then in `./build/release/duckdb`:
 
 ```sql
--- One row per cell: kind, name, options, body, and any format errors
-SELECT idx, kind, name, is_query, errors FROM notebook_cells('examples/revenue.sql');
+-- The editor: opens in your browser, served from this DuckDB process on 127.0.0.1
+CALL notebook_start('examples/revenue.sql');
 
--- The dependency graph: what each cell defines and reads, and which cells it depends on
-SELECT idx, name, defines, reads, depends_on, warnings FROM notebook_cells('examples/revenue.sql');
+-- One row per cell: kind, name, what it defines and reads, and any errors
+SELECT idx, name, defines, reads, depends_on, errors FROM notebook_cells('examples/revenue.sql');
 
--- Run every cell in a session of its own; one row per cell with its outcome
-SELECT name, status, row_count, error FROM notebook_run('examples/revenue.sql');
+-- Run every cell in a session of its own, charts included; params override inputs
+SELECT name, status, row_count, error FROM notebook_run('examples/revenue.sql', params := {region: 'US'});
 
--- Run with other input values; markdown comes back with its {{ }} expressions filled in
-SELECT output FROM notebook_run('examples/revenue.sql', params := {region: 'US'}) WHERE kind = 'markdown';
+-- Exports: a single HTML file that needs no DuckDB, and the other formats
+FROM notebook_export('examples/revenue.sql', file := 'revenue.html');
+FROM notebook_export('examples/revenue.sql', file := 'revenue.html', interactive := 'precomputed');
+FROM notebook_export('examples/revenue.sql', format := 'pdf');      -- needs Chrome or Chromium
+FROM notebook_export('examples/revenue.sql', format := 'md');
+FROM notebook_export('examples/revenue.sql', format := 'data');     -- one Parquet file per query cell
 
--- The notebook as a plain SQL script that any DuckDB 2.0 client can run
-SELECT sql FROM notebook_sql('examples/revenue.sql');
+-- Notebooks stored in the database, with history; db:<name> works wherever a path does
+FROM notebook_save('examples/revenue.sql', message := 'first draft');
+SELECT name, version, saved_at FROM _notebook.versions;
+FROM notebook_checkout('revenue', file := 'revenue_copy.sql');
+
+-- What a chart spec compiles to
+FROM notebook_chart_query('mark: bar
+x: region
+y: {field: amount, agg: sum}', 'orders');
 ```
 
-Charts, input widgets, the server and exports are designed but not built.
+For an export that runs real SQL in the reader's browser, build the DuckDB-WASM runtime once (needs
+Node) and pass it in:
+
+```sh
+sh wasm/build.sh
+```
+
+```sql
+FROM notebook_export('examples/revenue.sql', format := 'html-wasm', wasm_runtime := 'wasm/dist');
+```
+
+[examples/charts.sql](examples/charts.sql) shows every chart type.
+
+Not yet built: the result cache, a CodeMirror editor (the editor is a plain text area with
+completion), and charting libraries for zoomable maps and GPU-scale networks (the built-in SVG
+renderers draw every chart type, simply). [docs/DESIGN.md](docs/DESIGN.md) §9 and §12 have the
+details.
 
 ## Documents
 
@@ -72,6 +101,7 @@ Charts, input widgets, the server and exports are designed but not built.
 - [docs/RESEARCH.md](docs/RESEARCH.md): the survey of existing tools behind the design, with sources
   and a list of what is not yet verified.
 - [CLAUDE.md](CLAUDE.md): how the code is organised, how to build and test, and conventions.
-- [examples/revenue.sql](examples/revenue.sql): an example notebook.
+- [examples/revenue.sql](examples/revenue.sql): an example notebook, and
+  [examples/charts.sql](examples/charts.sql), every chart type.
   [examples/revenue.expanded.sql](examples/revenue.expanded.sql) is the same notebook as a plain
   script that runs in any DuckDB 2.0 client.

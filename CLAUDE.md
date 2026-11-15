@@ -5,30 +5,44 @@ built and why, and `docs/FORMAT.md` for the file format. This file is about how 
 
 ## Where things stand
 
-Roadmap steps 1 and 1b of `docs/DESIGN.md` §9 are done: the format parser, the dependency graph and a
-headless runner.
+Every roadmap step of `docs/DESIGN.md` §9 has a first implementation; §12 records what building it
+taught us and where it departs from the design.
 
 | SQL function | What it does | File |
 |---|---|---|
 | `notebook_cells(path)` | One row per cell: kind, name, options, body, defines, reads, depends_on, errors, warnings | `src/functions/notebook_cells.cpp` |
 | `notebook_sql(path)` | The notebook as a plain SQL script | `src/functions/notebook_sql.cpp` |
-| `notebook_run(path, params := {…})` | Runs every cell in its own session; one row per cell with status and rendered markdown | `src/functions/notebook_run.cpp` |
+| `notebook_run(path, params := {…})` | Runs every cell (charts too) in its own session; one row per cell | `src/functions/notebook_run.cpp` |
+| `notebook_chart_query(spec, from)` | The SQL and render description a chart spec compiles to | `src/functions/notebook_chart_query.cpp` |
+| `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
+| `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
+| `notebook_start`, `notebook_stop` | The HTTP server and browser UI | `src/functions/server.cpp` |
+
+Every path argument also accepts `db:<name>[@version]` for a stored notebook.
 
 The graph is split in two: `src/functions/references.cpp` walks DuckDB's parse tree to say what SQL
 defines and reads, and `src/core/graph.cpp` does everything else (resolution, ordering errors, cycles,
 run order). `ReadNotebook` runs both, so every function sees an analysed notebook.
 
-Not started: HTTP server, frontend, chart compiler, in-database storage, export.
-`docs/DESIGN.md` §9 lists what comes next and §11 records what the first pass taught us.
+Running cells goes through one place, `Runner` in `src/functions/session.cpp`, used by `notebook_run`,
+the exports and the server. The chart compiler is `src/core/chart.cpp`; the browser draws its output
+with `frontend/render-*.js`.
+
+Not built: the result cache (FORMAT §8), a CodeMirror editor, charting libraries (see DESIGN §6).
 
 ## Layout
 
 ```
-src/core/          Plain C++17, no DuckDB headers. Lexer, format parser, script generation, graph.
-src/functions/     The SQL surface. One file per function, DuckDB C++ API.
+src/core/          Plain C++17, no DuckDB headers. Lexer, format parser, script generation, graph,
+                   YAML and JSON, chart compiler.
+src/functions/     The SQL surface (one file per function), the runner, the server. DuckDB C++ API.
+frontend/          The browser UI, export viewer and chart renderers: plain JS and CSS, no build
+                   step. CMake compiles every file here into the extension (GetAsset).
+wasm/              The DuckDB-WASM runtime for html-wasm exports, built separately with Node.
 src/include/       Headers: notebook/*.hpp for core, notebook/functions.hpp for the SQL surface.
 test/core/         Unit tests for src/core. No DuckDB needed.
 test/sql/          sqllogictest files: end-to-end tests through SQL.
+test/browser/      Playwright tests of the server, UI and exports in Chromium.
 test/notebooks/    Notebook files the SQL tests read.
 examples/          Notebooks for people to read. Tests check they stay valid and runnable.
 duckdb/            Submodule, pinned to the DuckDB release we build against (v2.0.0).
@@ -74,6 +88,24 @@ loads into the shell built here but not into a released DuckDB. CI builds are st
 
 Run one test file with `./build/release/test/unittest "test/sql/notebook_run.test"`.
 
+```bash
+make frontend_check
+```
+
+Checks that `frontend/*.js` parses (needs Node). The frontend is compiled into the extension, so a
+change to it needs `make release` (CMake notices the change and regenerates the asset table).
+
+```bash
+make browser_test
+```
+
+Runs `test/browser/test_browser.py`: starts the server from a DuckDB shell and drives the editor in
+Chromium (run all, inputs, brushing, editing, saving, file sync), then checks every export format.
+Needs `pip install playwright` and `playwright install chromium`. Set
+`NOTEBOOK_WASM_RUNTIME=$PWD/wasm/dist` after `make wasm_runtime` (Node and npm) to include the
+html-wasm export. On a machine without Chromium's system libraries, `apt-get download` the missing
+packages, `dpkg -x` them into a directory and point `LD_LIBRARY_PATH` at its `usr/lib/x86_64-linux-gnu`.
+
 ## Conventions
 
 **Put logic in `src/core`.** Anything that does not need a database (parsing, validation, generating
@@ -90,11 +122,17 @@ notebook call `ThrowIfInvalid`, which reports the first error and points at `not
 `CMakeLists.txt`, call it from `src/notebook_extension.cpp`, and add `test/sql/x.test`. Copy
 `notebook_sql.cpp` as the smallest example.
 
+**The frontend has no build step.** Plain browser JavaScript (no modules, no npm), so the extension
+build needs nothing but CMake. Shared rendering lives in `frontend/render-*.js` and is used by both
+the editor (`app.js`, `app-extra.js`) and exports (`viewer.js`). Results travel as JSON.
+
 **Never keep a `Connection` alive past a query.** A stored `Connection` owns the database instance.
 If the extension holds one, the database is not closed when the user closes it: the file stays locked
 and is not checkpointed. This was measured, not assumed (see DESIGN §11). Create connections where
-they are used and let them go, as `notebook_run` does. The future server must hold a
-`weak_ptr<DatabaseInstance>` and create connections on demand.
+they are used and let them go, as `notebook_run` does. The server holds a
+`weak_ptr<DatabaseInstance>`, and a notebook session is replayable state (`SessionState`), not a
+connection: each request opens one with `Runner`, which replays the session's variables and views.
+The server object lives in the database's object cache, so it stops when the database closes.
 
 **Release a `QueryResult` before the next query on the same connection.** In DuckDB 2.0 a result keeps
 its connection busy until it is consumed or destroyed.
@@ -133,6 +171,15 @@ create, because all test files share one database.
   `duckdb/AGENTS.md` and copy from `duckdb/src/function/table/system/` when unsure.
 - sqllogictest expected results cannot contain blank lines or multi-line values. Flatten them in the
   query, as `test/sql/notebook_sql.test` does.
+- `to` is a reserved word: a table function cannot take `to :=`. Output paths are `file :=`.
+- `ExtensionCallback::OnConnectionClosed` runs with DuckDB's connection-manager lock held. Do not
+  create or destroy connections from it.
+- Variables set from the browser arrive as JSON. Give them the SQL type of what produced them
+  (`VariableSqlType`), or a brush on a timestamp axis compares text with timestamps.
+- The html-wasm export runs on DuckDB-WASM 1.5: `$name` is rewritten to `getvariable('name')`, data
+  is written with `STORAGE_VERSION 'v1.5.0'`, and selection variables start as typed NULLs.
+- clang-format re-indents lambdas inside `server.cpp` with mixed tabs and spaces; match on content,
+  not indentation, when scripting edits there.
 - `vcpkg.json` must exist at the repository root even with no dependencies, or CI fails at configure.
 - An extension is only linked into the build's `duckdb` shell if `extension_config.cmake` calls
   `duckdb_extension_statically_link`.

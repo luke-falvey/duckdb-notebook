@@ -188,6 +188,7 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 	Runner runner(db, state);
 	auto notebook = AnalyzeText(*runner.Conn().context, text);
 	ThrowIfInvalid(notebook, source);
+	runner.ApplyMetadata(notebook, source);
 	runner.InitializeVariables(notebook, options.params);
 	RunnerOptions run;
 	run.page_rows = options.page_rows;
@@ -247,6 +248,7 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 	Runner runner(db, state);
 	auto &connection = runner.Conn();
 	auto notebook = AnalyzeText(*connection.context, text);
+	runner.ApplyMetadata(notebook, source);
 	runner.InitializeVariables(notebook, options.params);
 	RunnerOptions run;
 	run.params = options.params;
@@ -513,6 +515,7 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 		Runner runner(db, state);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		// Choices may come from cells (select from=cell.column), which must run first.
+		runner.ApplyMetadata(notebook, source);
 		runner.InitializeVariables(notebook, options.params);
 		RunnerOptions run_all;
 		run_all.params = options.params;
@@ -720,6 +723,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		Runner runner(db, session);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		ThrowIfInvalid(notebook, bind.source);
+		runner.ApplyMetadata(notebook, bind.source);
 		runner.InitializeVariables(notebook, bind.options.params);
 		RunnerOptions run;
 		run.params = bind.options.params;

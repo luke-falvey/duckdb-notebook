@@ -162,6 +162,11 @@ it. The file changes only if they choose "save as default".
 
 All widgets accept `label`. `from=` makes the input depend on that cell.
 
+A value set through a widget gets the widget's type: `VARCHAR` for `text`, `DOUBLE` for `number` and
+`slider`, `BOOLEAN` for `checkbox`, `DATE` for `date` and for both fields of `daterange`
+(`STRUCT(lo DATE, hi DATE)`). A `select` or `multiselect` with `from=` takes the type of that column
+(as a list for `multiselect`); with `options=` the values are text.
+
 ## 4. Markdown cells
 
 ```sql
@@ -174,13 +179,15 @@ Total revenue in **{{ $region }}**: {{ (SELECT sum(revenue) FROM monthly) }}
 ```
 
 - CommonMark plus tables, footnotes, KaTeX maths (`$…$` / `$$…$$` are maths here, not parameters) and
-  Mermaid diagrams in ```` ```mermaid ```` fences.
+  Mermaid diagrams in ```` ```mermaid ```` fences. The built-in renderer covers headings, emphasis,
+  code, links, lists, quotes, rules, tables and fenced code. No KaTeX or Mermaid library is bundled
+  yet: maths is shown as written, Mermaid fences as code, and footnotes as plain text.
 - `{{ expr }}` is a DuckDB scalar expression. It is evaluated as `SELECT (expr)` and the value is
   formatted inline (`NULL` shows as `NULL`). Dependencies are found the same way as for SQL cells, and
   the expressions are evaluated once the cells they read have run, so a summary may sit above them.
   The closing `}}` is looked for in SQL, so `}}` inside a string or a struct literal does not end the
   expression. An unclosed `{{` or an empty `{{ }}` is an error.
-- Raw HTML is sanitised. Scripts never run.
+- Raw HTML is escaped and shown as text. Scripts never run.
 - DuckDB block comments nest, so `/*` and `*/` inside the prose must be balanced. Write a literal
   `*/` as `*\/`.
 
@@ -220,14 +227,19 @@ and `facet` (`{row: …, col: …}`) for small multiples. A channel is a column 
 | `field` | Column in `from` |
 | `agg` | `sum`, `avg`, `min`, `max`, `count`, `count_distinct`, `median`, `p05`…`p99` |
 | `bin` | `true` or `{step: …}` / `{maxbins: …}` |
-| `timeunit` | `year`, `quarter`, `month`, `week`, `day`, `hours`, … Truncates, or extracts a cyclic part |
+| `timeunit` | Truncates: `year`, `quarter`, `month`, `week`, `date`, `hour`, `minute`, `second`. Extracts a cyclic part: `monthofyear`, `dayofmonth`, `dayofweek` (or `day`, 0 = Sunday), `hours` (or `hourofday`), `minutes` |
 | `sort` | `asc`, `desc`, or a channel with optional `-` (`-x`) |
 | `type` | `quantitative`, `temporal`, `ordinal`, `nominal`. Inferred from the column type if omitted |
 | `scale` | `{type: log}`, `{domain: [0, 100]}`, `{zero: false}` |
 | `scheme` | Named colour scheme |
 | `format`, `title` | d3-format string; axis or legend title |
 
-Channels without `agg` become `GROUP BY` keys when any channel has one.
+Channels without `agg` become `GROUP BY` keys when any channel has one. A bare name that is not a
+column of `from` is a constant (`color: red`); `{value: …}` says so explicitly. `arc` (pie and donut)
+takes its angle from `theta` (or `y`) and its slices from `color`.
+
+Spec-level keys: `title`; `limit` (rows a query may return, default 10,000); `sample: <n>`;
+`facet: {row: …, col: …}`.
 
 **Layers.** `layers:` is a list of specs drawn in one frame, sharing `from` and scales:
 
@@ -238,8 +250,11 @@ layers:
 ```
 
 **Large data.** The compiler never ships raw rows for a mark that would overplot: `line` over a
-continuous x is reduced to at most four points per horizontal pixel (M4), and `point`, `rect`, `hexbin`
-and `density` are binned to the plot's pixel grid. `sample: 5000` asks for a row sample instead.
+continuous x is reduced to at most four points per horizontal pixel (M4) once `from` has more than four
+rows per pixel, and `point`, `rect` and `tick` over two numeric axes are binned to a grid of 4-pixel
+cells once `from` has more than 5,000 rows (`hexbin` always is), each cell drawn by its row count.
+`histogram` bins `x` and counts; `density` bins `x` and normalises the counts. `sample: 5000` asks for
+a row sample instead.
 
 ### 5.2 Selections
 
@@ -262,8 +277,13 @@ WHERE $picked_months IS NULL
 ```
 
 A chart can take the filter without any SQL: `filter: picked_months` in another chart's spec applies
-the selection to that chart's `from` (cross-filtering). `filter` takes one selection or a list,
-`[a, b]`. `select` and `filter` are read from the top level of the spec only.
+the selection to that chart's `from` (cross-filtering), matching the selection's fields by name.
+`filter` takes one selection or a list, `[a, b]`. `select` and `filter` are read from the top level of
+the spec only.
+
+The values have the type of the selected field. A brush on a `DATE` field gives `TIMESTAMP` bounds,
+because a brush ends between days. In the UI, dragging on a chart with an `interval` selection
+brushes, a click clears it; clicking a mark of a `point` selection selects it (Shift adds to it).
 
 ### 5.3 Typed charts
 
@@ -272,18 +292,18 @@ Charts that are not marks on axes use `type:` with their own short vocabulary:
 | `type` | Required keys | Notes |
 |---|---|---|
 | `kpi` | `value` | `label`, `compare` (delta against another channel), `sparkline: {x, y}` |
-| `table` | | `columns`, per-column `format`, `bar` and `heat` cell decorations |
-| `pivot` | `rows`, `columns`, `values` | Subtotals, heat shading |
-| `map` | `geometry` or `lat` + `lon` | `layer: point \| heat \| hex \| choropleth \| arc \| path`, `color`, `size`, `basemap` |
+| `table` | | `columns`, per-column `format: {col: spec}`, `bar` and `heat` column decorations |
+| `pivot` | `rows`, `columns`, `values` | `heat: true` shading |
+| `map` | `geometry` or `lat` + `lon` | `layer: point \| heat \| hex \| arc` (`arc` needs `lat2`, `lon2`), `color`, `size`. `geometry` needs the `spatial` extension; polygons draw as a choropleth. No basemap: tiles are not available offline |
 | `sankey` | `source`, `target`, `value` | |
 | `chord` | `source`, `target`, `value` | |
 | `treemap`, `sunburst`, `icicle` | `path` (list of columns), `value` | |
-| `network` | `source`, `target` | `weight`, `node_color`, `node_size` |
+| `network` | `source`, `target` | `weight` |
 | `funnel` | `stage`, `value` | |
 | `candlestick` | `x`, `open`, `high`, `low`, `close` | |
 | `calendar` | `date`, `value` | Calendar heatmap |
 | `gantt` | `task`, `start`, `end` | |
-| `gauge` | `value` | `min`, `max`, `bands` |
+| `gauge` | `value` | `min`, `max`, `bands: [{from, to, color}]`, `label` |
 
 ```yaml
 type: kpi
@@ -302,7 +322,10 @@ color: {field: population, scheme: viridis}
 ### 5.4 Raw specs
 
 When the built-in vocabulary runs out, embed a native spec. The rows of `from` are supplied as the
-dataset; no pushdown or downsampling is applied, so aggregate in SQL first.
+dataset (up to `limit`, default 5,000); no pushdown or downsampling is applied, so aggregate in SQL
+first. No Vega or ECharts library is bundled: a Vega-Lite spec's `mark` and `encoding` (`x`, `y`,
+`color`, `size`, `text`, `theta`) are drawn by the built-in renderer, as is an ECharts `series` of
+type `line`, `bar`, `scatter` or `pie` with `encode`; anything else is shown as a table.
 
 ```yaml
 type: vega-lite
@@ -330,7 +353,8 @@ theme: light
 ```
 
 `format` is the version of this specification. `attach` and `extensions` are applied before the first
-cell runs. Paths are relative to the notebook file.
+cell runs (`LOAD` for each extension, `ATTACH IF NOT EXISTS` for each database). Paths are relative to
+the notebook file.
 
 ## 7. Running without the notebook
 
@@ -351,8 +375,12 @@ Three levels, from least to most capable:
    `notebook_run('revenue.sql', params := {region: 'US'})` runs with other values: a parameter
    replaces an input's default, or sets a variable that nothing in the notebook sets, such as a chart
    selection. A variable set by an SQL cell cannot be a parameter, because the cell would overwrite it.
+4. **Exported.** `notebook_export('revenue.sql', file := 'revenue.html')` writes a page that needs
+   neither DuckDB nor a server; see [DESIGN.md §7](DESIGN.md#7-export) for the formats.
 
 ## 8. Sidecar cache
+
+*Not implemented yet.* The editor shows results from the current session only.
 
 Outputs are cached next to the notebook in `.duckdb-notebook/`, which belongs in `.gitignore`:
 

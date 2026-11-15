@@ -88,6 +88,7 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 	// the caller's attached databases.
 	state->runner = make_uniq<Runner>(DatabaseInstance::GetDatabase(context), state->session);
 	auto &bind_data = input.bind_data->Cast<RunBindData>();
+	state->runner->ApplyMetadata(bind_data.notebook, bind_data.path);
 	state->runner->InitializeVariables(bind_data.notebook, bind_data.params);
 	return std::move(state);
 }
