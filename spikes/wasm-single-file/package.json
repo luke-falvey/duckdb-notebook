@@ -1,0 +1,14 @@
+{
+  "name": "wasm-single-file-spike",
+  "private": true,
+  "description": "Spike: DuckDB-WASM inlined in one HTML file, opened from file:// with no network",
+  "scripts": {
+    "build": "python3 build.py",
+    "test": "node run.js"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
+    "apache-arrow": "21.2.0",
+    "esbuild": "^0.25.0"
+  }
+}
