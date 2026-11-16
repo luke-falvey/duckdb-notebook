@@ -238,9 +238,14 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
   (type, null share, histogram or top values) was removed to keep tables quiet; the catalog sidebar
   still lists column types. A page-size picker under each table writes `rows=N` to the cell, so the
   choice is saved with the notebook and applies to exports.
-- Quiet by default: the buttons that add a cell appear only when the pointer is between cells, a
-  cell's run time sits in the bottom right corner of its box (`timing: false` in the `[notebook]` cell
-  hides it), and a table's chart picker stays behind a "+ chart" button until asked for. Re-rendering
+- Quiet by default: a cell's kind is a symbol in its top left (☰ settings, ¶ text, ◉ input, ▦ query,
+  ✎ SQL that changes the database, ∿ chart; named in its tooltip); the buttons that add a cell appear
+  only when the pointer is between cells; a cell's rows, what it defines and its run time sit in the
+  bottom right corner of its box (`timing: false` in the `[notebook]` cell hides the time); and a
+  table's chart picker stays behind a "+ chart" button until asked for.
+- Hover values: pointing at a mark shows its values in a paper note by the pointer, in the editor and
+  in exports. On line and area charts the nearest point anywhere along the line answers, marked with a
+  dot, even under a brush. Re-rendering
   keeps the scroll position, so changing an input or brushing a chart does not move the page.
 - Code and output switches in every cell header write `hide=` to the cell. While editing, a hidden
   part collapses to a line that reveals it; reading view and exports leave it out.

@@ -246,7 +246,8 @@
     container.appendChild(box);
   }
 
-  function tooltip(el, layer, row) {
+  // The values of a mark, one 'label: value' per line, shown by NB.tip on hover.
+  function tipText(layer, row) {
     var lines = [];
     ['x', 'y', 'color', 'size', 'text'].forEach(function (c) {
       var e = layer.encoding[c];
@@ -254,8 +255,9 @@
     });
     (layer.tooltip || []).forEach(function (e) { lines.push((e.title || e.column) + ': ' + NB.formatValue(row[e.column], '', e.format)); });
     if (layer.binned && row.count != null) lines.push('rows: ' + NB.formatNumber(row.count, ','));
-    s('title', {}, el).textContent = lines.join('\n');
+    return lines.join('\n');
   }
+  function tooltip(el, layer, row) { el.setAttribute('data-tip', tipText(layer, row)); }
 
   // ---- Marks ----------------------------------------------------------------------------------
 
@@ -292,6 +294,8 @@
         }).filter(function (p) { return isFinite(p[0]) && isFinite(p[1]); }).sort(function (a, b) { return a[0] - b[0]; });
         if (!pts.length) return;
         var c = colorOf(group[0]);
+        // Every point of a line answers hover, even where no dot is drawn (see hoverPoints).
+        if (g.__points) pts.forEach(function (p) { g.__points.push({ x: p[0], y: p[1], text: tipText(layer, p[2]), color: c }); });
         if (kind === 'area') {
           var base = y(Math.max(y.domain ? y.domain[0] : 0, 0));
           var area = Sketch.smooth(pts) + 'L' + pts[pts.length - 1][0].toFixed(1) + ',' + base + 'L' + pts[0][0].toFixed(1) + ',' + base + 'Z';
@@ -380,9 +384,33 @@
         Sketch.line(box, cx, lo, cx, hi, { stroke: c, width: 1.2 });
         Sketch.rect(box, cx - bw / 2, Math.min(q1, q3), bw, Math.abs(q1 - q3), { stroke: c, fill: NB.pastel(c), width: 1.3 });
         Sketch.line(box, cx - bw / 2, md, cx + bw / 2, md, { stroke: c, width: 2.2, rough: 0.5 });
-        s('title', {}, box).textContent = 'min ' + NB.formatNumber(r.y_min) + '\nq1 ' + NB.formatNumber(r.y_q1) + '\nmedian ' + NB.formatNumber(r.y_median) + '\nq3 ' + NB.formatNumber(r.y_q3) + '\nmax ' + NB.formatNumber(r.y_max);
+        box.setAttribute('data-tip', (ex && ex.column ? (ex.title || 'x') + ': ' + NB.formatValue(r[ex.column]) + '\n' : '') + 'max: ' + NB.formatNumber(r.y_max) + '\nq3: ' + NB.formatNumber(r.y_q3) + '\nmedian: ' + NB.formatNumber(r.y_median) + '\nq1: ' + NB.formatNumber(r.y_q1) + '\nmin: ' + NB.formatNumber(r.y_min));
       });
     }
+  }
+
+  // Lines are thin targets: hovering anywhere over the plot shows the values of the nearest line point,
+  // nearest in x first, marked with a dot. NB.tip calls svg.__nbHover.
+  function hoverPoints(svgEl, g, points, w, h) {
+    if (!points.length) return;
+    var dot = s('circle', { r: 5, 'class': 'nb-hover-dot', fill: 'none', 'stroke-width': 2, visibility: 'hidden' }, g);
+    svgEl.__nbHover = function (clientX, clientY) {
+      var m = g.getScreenCTM();
+      if (!m) return null;
+      var pt = svgEl.createSVGPoint();
+      pt.x = clientX; pt.y = clientY;
+      var p = pt.matrixTransform(m.inverse()), best = null, bestD = Infinity;
+      if (p.x < -4 || p.x > w + 4 || p.y < -4 || p.y > h + 4) { dot.setAttribute('visibility', 'hidden'); return null; }
+      points.forEach(function (q) {
+        var d = Math.abs(q.x - p.x) * 4 + Math.abs(q.y - p.y);
+        if (d < bestD) { bestD = d; best = q; }
+      });
+      if (!best) { dot.setAttribute('visibility', 'hidden'); return null; }
+      dot.setAttribute('cx', best.x); dot.setAttribute('cy', best.y); dot.setAttribute('stroke', best.color);
+      dot.setAttribute('visibility', 'visible');
+      return best.text;
+    };
+    svgEl.__nbLeave = function () { dot.setAttribute('visibility', 'hidden'); };
   }
 
   function arcChart(svgEl, layer, color, w, h) {
@@ -551,6 +579,7 @@
         axis(g, x, 'bottom', w, h, x.enc && x.enc.title);
         axis(g, y, 'left', w, h, y && y.enc && y.enc.title, left);
         var plot = s('g', { 'class': 'nb-plot' }, g);
+        plot.__points = [];
         allLayers.forEach(function (l) {
           var rows = l.rows.filter(function (r) {
             return (fr === null || key(r.facet_row) === key(fr)) && (fc === null || key(r.facet_col) === key(fc));
@@ -560,6 +589,7 @@
         var sel = render.selection;
         if (sel && sel.type === 'interval') brush(g, sel, x, y, w, h, opts);
         if (sel && sel.type === 'point') pointSelect(svgEl, sel, allLayers, opts);
+        hoverPoints(svgEl, g, plot.__points, w, h);
         grid.appendChild(panel);
       });
     });

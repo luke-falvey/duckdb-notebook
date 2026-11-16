@@ -85,7 +85,7 @@ code, pre, textarea.nb-code { font-family: var(--nb-mono); font-size: 13.5px; }
 .nb-cell { grid-column: span 12; min-width: 0; padding: 12px 18px 14px; }
 .nb-cell.focused > svg.sk-outline { color: var(--nb-accent); }
 .nb-cell-head { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--nb-muted); margin-bottom: 4px; }
-.nb-kind { color: var(--nb-ink); font-size: 16px; min-width: 52px; }
+.nb-kind { color: var(--nb-muted); font-size: 18px; min-width: 22px; text-align: center; cursor: default; font-family: var(--nb-hand), 'Segoe UI Symbol', 'DejaVu Sans', sans-serif; }
 .nb-cell-head input.nb-head { flex: 1; min-width: 60px; font-family: var(--nb-mono); font-size: 12px; color: var(--nb-faint); border: 0; background: transparent; padding: 2px 4px; }
 .nb-cell-head input.nb-head:focus { color: var(--nb-fg); outline: none; background: rgba(255, 255, 255, .6); border-radius: var(--nb-wobbly); }
 .nb-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 15px; color: var(--nb-muted); white-space: nowrap; }
@@ -108,7 +108,7 @@ textarea.nb-code { width: 100%; border: 0; resize: vertical; padding: 4px 2px; b
 .nb-meta { color: var(--nb-faint); font-size: 14px; }
 .nb-meta:empty { display: none; }
 /* How long the cell took, in the bottom right corner of its box. */
-.nb-time { text-align: right; color: var(--nb-faint); font-size: 13px; line-height: 1; margin: 6px -6px -6px 0; }
+.nb-foot { text-align: right; color: var(--nb-faint); font-size: 13px; line-height: 1.2; margin: 6px -6px -6px 0; }
 button.nb-pick-chart { display: block; margin-top: 4px; }
 .nb-error { color: var(--nb-error); white-space: pre-wrap; font-family: var(--nb-mono); font-size: 12.5px; padding: 4px 0; }
 .nb-warning { color: var(--nb-warn); font-size: 14px; }
@@ -235,3 +235,11 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
   .nb-toolbar-rule, .nb-graph { display: none !important; }
   body.print-no-output .nb-cell[data-kind="sql"] .nb-output, body.print-no-output .nb-cell[data-kind="chart"] .nb-output { display: none; }
 }
+
+/* Hover values: a paper note next to the pointer. */
+.nb-tip { position: fixed; z-index: 50; display: none; pointer-events: none; max-width: 320px; padding: 6px 10px; font-size: 15px; line-height: 1.35;
+  background: var(--nb-card); color: var(--nb-fg); border: 1.5px solid var(--nb-ink); border-radius: var(--nb-wobbly); box-shadow: 2px 3px 0 rgba(30, 30, 30, .12); }
+.nb-tip-key { color: var(--nb-muted); }
+.nb-tip-key::after { content: ':'; }
+.nb-hover-dot { pointer-events: none; }
+@media print { .nb-tip { display: none !important; } }

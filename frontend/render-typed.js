@@ -21,7 +21,7 @@
   function svgBox(container, w, h) {
     return s('svg', { viewBox: '0 0 ' + w + ' ' + h, width: w, 'class': 'nb-chart-svg', preserveAspectRatio: 'xMidYMid meet' }, container);
   }
-  function title(el, text) { s('title', {}, el).textContent = text; return el; }
+  function title(el, text) { el.setAttribute('data-tip', text); return el; }
   function fmt(v, enc) { return NB.formatValue(v, '', enc && enc.format); }
   function colorFor(values) {
     var idx = {};

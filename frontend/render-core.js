@@ -322,5 +322,51 @@ var NB = (function () {
     return bar;
   };
 
+  // ---- Hover values ----------------------------------------------------------------------------
+  // One tooltip for the page: any element with data-tip, or a chart that answers __nbHover (lines),
+  // shows its values next to the pointer. A brush overlay over the marks is looked through.
+  NB.tip = (function () {
+    var box = null, hoverSvg = null;
+    function show(text, e) {
+      if (!box) { box = NB.el('div', { 'class': 'nb-tip', role: 'tooltip' }); document.body.appendChild(box); }
+      box.innerHTML = '';
+      text.split('\n').forEach(function (line) {
+        var at = line.indexOf(': ');
+        box.appendChild(at > 0 ? NB.el('div', {}, [NB.el('span', { 'class': 'nb-tip-key', text: line.slice(0, at) }), document.createTextNode(' ' + line.slice(at + 2))])
+          : NB.el('div', { text: line }));
+      });
+      box.style.display = 'block';
+      var x = e.clientX + 14, y = e.clientY + 14, bw = box.offsetWidth, bh = box.offsetHeight;
+      if (x + bw > window.innerWidth - 8) x = e.clientX - bw - 14;
+      if (y + bh > window.innerHeight - 8) y = e.clientY - bh - 14;
+      box.style.left = Math.max(4, x) + 'px';
+      box.style.top = Math.max(4, y) + 'px';
+    }
+    function hide() {
+      if (box) box.style.display = 'none';
+      if (hoverSvg && hoverSvg.__nbLeave) hoverSvg.__nbLeave();
+      hoverSvg = null;
+    }
+    function under(e) {
+      var el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (el || !(e.target instanceof Element) || !e.target.classList.contains('nb-brush-overlay')) return el;
+      var stack = document.elementsFromPoint(e.clientX, e.clientY);
+      for (var i = 0; i < stack.length; i++) if (stack[i].hasAttribute && stack[i].hasAttribute('data-tip')) return stack[i];
+      return null;
+    }
+    document.addEventListener('mousemove', function (e) {
+      var svg = e.target && e.target.closest ? e.target.closest('svg') : null;
+      if (hoverSvg && hoverSvg !== svg) hide();
+      var lineText = svg && svg.__nbHover ? svg.__nbHover(e.clientX, e.clientY) : null;
+      if (lineText) { hoverSvg = svg; show(lineText, e); return; }
+      var el = under(e);
+      if (el && el.getAttribute('data-tip')) show(el.getAttribute('data-tip'), e);
+      else hide();
+    }, { passive: true });
+    document.addEventListener('mouseleave', hide);
+    window.addEventListener('scroll', hide, true);
+    return { show: show, hide: hide };
+  })();
+
   return NB;
 })();

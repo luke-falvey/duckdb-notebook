@@ -304,18 +304,35 @@ var App = (function () {
     return ms < 1000 ? Math.max(0, Math.round(ms)) + ' ms' : ms < 60000 ? (ms / 1000).toFixed(1) + ' s' : Math.floor(ms / 60000) + ' min ' + Math.round(ms % 60000 / 1000) + ' s';
   }
 
+  // A symbol for each kind of cell; the name is in its tooltip.
+  var KINDS = {
+    notebook: ['☰', 'Notebook settings'], markdown: ['¶', 'Text'], input: ['◉', 'Input'], chart: ['∿', 'Chart'],
+    query: ['▦', 'Query: its result is a table, with charts as tabs'], sql: ['✎', 'SQL that changes the database']
+  };
+  function kindMark(cell) {
+    var k = KINDS[cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind] || ['•', cell.kind];
+    return NB.el('span', { 'class': 'nb-kind', text: k[0], title: k[1], 'aria-label': k[1] });
+  }
+
   function messages(cell) {
     var box = NB.el('div', { 'class': 'nb-meta' });
     (cell.errors || []).forEach(function (m) { box.appendChild(NB.el('div', { 'class': 'nb-error', text: m })); });
     (cell.warnings || []).forEach(function (m) { box.appendChild(NB.el('div', { 'class': 'nb-warning', text: '⚠ ' + m })); });
-    var r = cell.result;
-    if (r && r.status !== 'skipped') {
-      var parts = [];
-      if (r.row_count != null) parts.push(NB.formatNumber(r.row_count, ',') + ' rows');
-      if (cell.defines && cell.defines.length) parts.push('defines ' + cell.defines.join(', '));
-      if (parts.length) box.appendChild(NB.el('div', { text: parts.join(' · ') }));
-    }
     return box;
+  }
+
+  // The bottom right corner of a cell: rows, what it defines, and how long it took.
+  function footer(cell) {
+    var r = cell.result;
+    if (!r || r.status === 'skipped' || A.reading) return null;
+    var parts = [];
+    if (r.row_count != null) parts.push(NB.el('span', { text: NB.formatNumber(r.row_count, ',') + (r.row_count === 1 ? ' row' : ' rows') }));
+    if (cell.defines && cell.defines.length) parts.push(NB.el('span', { text: 'defines ' + cell.defines.join(', ') }));
+    if (r.elapsed_ms != null && A.timing()) parts.push(NB.el('span', { 'class': 'nb-time', text: elapsed(r.elapsed_ms), title: 'Time this cell took to run' }));
+    if (!parts.length) return null;
+    var foot = NB.el('div', { 'class': 'nb-foot' });
+    parts.forEach(function (p, k) { if (k) foot.appendChild(document.createTextNode(' · ')); foot.appendChild(p); });
+    return foot;
   }
 
   function output(cell) {
@@ -450,7 +467,7 @@ var App = (function () {
       var head = NB.el('input', { 'class': 'nb-head', value: cell.head || '', placeholder: 'name and options', title: 'The -- %% marker line' });
       head.addEventListener('change', function () { cell.head = head.value.trim(); A.edited(cell); A.render(); });
       box.appendChild(NB.el('div', { 'class': 'nb-cell-head' }, [
-        NB.el('span', { 'class': 'nb-kind', text: cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind }),
+        kindMark(cell),
         head, badge(cell.state)
       ].concat(headButtons(cell, i))));
       var body = NB.el('div', { 'class': 'nb-cell-body' });
@@ -471,10 +488,8 @@ var App = (function () {
         body.appendChild(stub(cell.peekOutput ? '▾ output (hidden when reading)' : '▸ output hidden', function () { cell.peekOutput = !cell.peekOutput; A.render(); }));
       }
       body.appendChild(output(cell));
-      var r = cell.result;
-      if (r && r.elapsed_ms != null && r.status !== 'skipped' && A.timing() && !A.reading) {
-        body.appendChild(NB.el('div', { 'class': 'nb-time', text: elapsed(r.elapsed_ms), title: 'Time this cell took to run' }));
-      }
+      var foot = footer(cell);
+      if (foot) body.appendChild(foot);
       box.appendChild(body);
       root.appendChild(box);
       if (cell.kind === 'markdown') box.addEventListener('dblclick', function (e) { if (!cell.editing && !A.reading && e.target.closest('.nb-output')) { cell.editing = true; A.render(); } });

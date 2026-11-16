@@ -50,8 +50,11 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
 - In a cell header: `</>` and `◫` write `hide=code` / `hide=output`; under a table the page-size picker
   writes `rows=N`, and "+ chart" opens the chart picker. Under a query's charts: tabs, "edit chart
   spec", "+ chart".
-- Buttons to add a cell appear when the pointer is between two cells. A cell's run time is in the
-  bottom right of its box; the gear's "timing" switch writes `timing: false` into the `[notebook]` cell.
+- Buttons to add a cell appear when the pointer is between two cells. A cell's kind is the symbol in
+  its top left (☰ settings, ¶ text, ◉ input, ▦ query, ✎ SQL that changes data, ∿ chart). Its rows, what
+  it defines and its run time are in the bottom right; the gear's "timing" switch writes
+  `timing: false` into the `[notebook]` cell.
+- Pointing at a chart shows the values under the pointer (the nearest point on lines).
 
 ## Looking at it (agents)
 

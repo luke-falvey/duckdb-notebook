@@ -120,6 +120,12 @@ SELECT * FROM filtered
 WHERE $picked_months IS NULL OR day BETWEEN $picked_months.lo AND $picked_months.hi;
 ```
 
+## Hover values
+
+Pointing at a mark shows its channels' values (formatted with each channel's `format` and named by its
+`title`), plus any `tooltip:` fields. On lines and areas the nearest point answers, so give channels
+readable `title`s and `format`s: they are what the reader sees there.
+
 ## Large data
 
 You do not need to pre-aggregate for size: `line` is reduced to four points per pixel (M4), and

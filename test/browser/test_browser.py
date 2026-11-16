@@ -73,8 +73,28 @@ def test_server(browser, work):
     check(page.locator(".nb-badge.failed").count() == 0, "Run all: no cell fails")
     check(page.locator("svg.nb-chart-svg").count() >= 2, "Run all draws the charts")
     check("EU" in page.locator(".nb-md").first.text_content(), "markdown shows {{ $region }}")
-    check(page.locator(".nb-cell[data-idx='6'] .nb-time").count() == 1 and " ms" not in page.locator(".nb-cell[data-idx='6'] .nb-meta").text_content(),
-          "a cell's run time sits at the bottom of its box, not in its summary line")
+    foot = page.locator(".nb-cell[data-idx='6'] .nb-foot")
+    check(foot.count() == 1 and "rows" in foot.text_content() and "defines filtered" in foot.text_content() and foot.locator(".nb-time").count() == 1
+          and "rows" not in page.locator(".nb-cell[data-idx='6'] .nb-meta").text_content(),
+          "rows, what a cell defines and its run time sit together in the bottom right of its box")
+    kinds = page.locator(".nb-kind").all()
+    check([k.text_content() for k in kinds[:8]] == ["☰", "¶", "✎", "▦", "◉", "◉", "▦", "▦"] and "Query" in kinds[3].get_attribute("title"),
+          "cell kinds are symbols, named in their tooltips")
+    trend = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
+    trend.scroll_into_view_if_needed()
+    tb = trend.bounding_box()
+    page.mouse.move(tb["x"] + tb["width"] * 0.5, tb["y"] + tb["height"] * 0.5)
+    page.mouse.move(tb["x"] + tb["width"] * 0.5 + 3, tb["y"] + tb["height"] * 0.5 + 3)
+    page.wait_for_selector(".nb-tip", state="visible", timeout=5000)
+    check("revenue" in page.locator(".nb-tip").text_content() and page.locator(".nb-cell[data-idx='7'] .nb-hover-dot[visibility='visible']").count() == 1,
+          "hovering a line chart shows the nearest point's values, through the brush overlay")
+    heat = page.locator(".nb-cell[data-idx='9'] [data-tip]").nth(5)
+    heat.scroll_into_view_if_needed()
+    heat.hover(force=True)
+    page.wait_for_function("(document.querySelector('.nb-tip') || {}).textContent && document.querySelector('.nb-tip').textContent.includes('amount')", timeout=5000)
+    check(True, "hovering a mark shows its values")
+    page.mouse.move(5, 5)
+    check(not page.locator(".nb-tip").is_visible(), "the values go away when the pointer leaves")
     add_bar = page.locator(".nb-add").nth(3)
     check(add_bar.evaluate("e => getComputedStyle(e).opacity") == "0", "the add-cell buttons between cells are hidden")
     add_bar.hover()
