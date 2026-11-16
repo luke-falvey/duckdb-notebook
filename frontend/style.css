@@ -194,6 +194,15 @@ td.nb-null { color: var(--nb-faint); }
 /* Chart switcher under results */
 .nb-switcher { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 14px; padding: 8px 0 0; color: var(--nb-muted); }
 .nb-switcher select, .nb-switcher button { font-size: 14px; padding: 0 8px 1px; }
+/* A query's charts and table as tabs: the picked tab is underlined like a highlighter stroke. */
+.nb-tabs { display: flex; gap: 4px 14px; flex-wrap: wrap; align-items: baseline; margin: 0 0 8px; }
+button.nb-tab, button.nb-tab:hover:not(:disabled) { background: none; border: none; box-shadow: none; padding: 0 2px; font-size: 16px; color: var(--nb-muted); }
+button.nb-tab:hover:not(:disabled) { color: var(--nb-fg); }
+button.nb-tab.on { color: var(--nb-fg); background: linear-gradient(transparent 60%, var(--nb-mark) 60%, var(--nb-mark) 92%, transparent 92%); }
+button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
+.nb-spec-area { margin-top: 4px; }
+.nb-spec-actions { display: flex; gap: 6px; margin-top: 4px; }
+.nb-spec-actions button { font-size: 14px; padding: 0 8px 1px; }
 
 /* Graph view */
 .nb-graph { max-width: 1000px; margin: 0 auto 20px; padding: 10px 14px; }

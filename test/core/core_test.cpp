@@ -370,6 +370,57 @@ static void TestCellOptions() {
 	CHECK(nb.cells[4].errors.empty());
 }
 
+static void TestQueryCharts() {
+	// Chart comments after the query are charts; the SQL is what is left.
+	auto nb = Analyzed("-- %% monthly\nSELECT 1 AS m, 2 AS n -- totals\n/* a note */\n/* chart\nmark: line\nx: m\n*/\n"
+	                   "/*chart mark: bar */\n");
+	auto &cell = nb.cells[0];
+	CHECK(cell.errors.empty());
+	CHECK(cell.charts.size() == 2);
+	CHECK(cell.charts[0] == "mark: line\nx: m");
+	CHECK(cell.charts[1] == "mark: bar");
+	CHECK(cell.sql == "SELECT 1 AS m, 2 AS n -- totals\n/* a note */");
+	CHECK(cell.is_query);
+	CHECK(ChartFrom(cell) == "monthly");
+	CHECK(CellSql(cell).find("chart") == std::string::npos);
+
+	// Unnamed: the chart reads the query itself.
+	nb = Analyzed("-- %%\nSELECT 1 AS m -- note\n/* chart\nmark: bar\n*/\n");
+	CHECK(ChartFrom(nb.cells[0]) == "(\nSELECT 1 AS m -- note\n)");
+
+	// A chart comment before the query's end is a comment, with a warning; one inside a string is text.
+	nb = Analyzed("-- %% a\nSELECT 1 /* chart\nmark: bar */ AS m\n-- %% b\nSELECT '/* chart */' AS m\n");
+	CHECK(nb.cells[0].charts.empty() && HasMessage(nb.cells[0].warnings, "only at the end"));
+	CHECK(nb.cells[1].charts.empty() && nb.cells[1].warnings.empty());
+	// /* charts */ or /* chartreuse */ is not a chart.
+	nb = Analyzed("-- %% a\nSELECT 1 AS m\n/* chartreuse */\n");
+	CHECK(nb.cells[0].charts.empty());
+
+	// Only a query can be charted.
+	nb = Analyzed("-- %% t\nCREATE TABLE t AS SELECT 1 AS m;\n/* chart\nmark: bar\n*/\n");
+	CHECK(HasMessage(nb.cells[0].errors, "ends in a query"));
+
+	// A chart's selection is defined by the cell; filters are read without ordering or cycles.
+	nb = Analyzed("-- %% detail\nSELECT 1 AS m\n/* chart\nmark: bar\nfilter: picked\n*/\n"
+	              "-- %% overview\nSELECT * FROM detail\n/* chart\nmark: bar\nselect: {as: picked}\n*/\n"
+	              "/* chart\nmark: point\nfilter: picked\n*/\n"
+	              "-- %% below\nSELECT * FROM detail WHERE m = $picked.lo\n");
+	CHECK(nb.cells[0].errors.empty() && nb.cells[1].errors.empty() && nb.cells[2].errors.empty());
+	CHECK(std::find(nb.cells[1].defines.begin(), nb.cells[1].defines.end(), "$picked") != nb.cells[1].defines.end());
+	CHECK(std::find(nb.cells[0].reads.begin(), nb.cells[0].reads.end(), "$picked") != nb.cells[0].reads.end());
+	CHECK(nb.cells[0].depends_on.empty());
+	CHECK(std::find(nb.cells[1].reads.begin(), nb.cells[1].reads.end(), "$picked") != nb.cells[1].reads.end());
+	CHECK(nb.cells[2].depends_on == std::vector<int>({0, 1}));
+
+	// A cell's SQL cannot read its own chart's selection.
+	nb = Analyzed("-- %% a\nSELECT 1 AS m WHERE $picked IS NULL\n/* chart\nmark: bar\nselect: {as: picked}\n*/\n");
+	CHECK(HasMessage(nb.cells[0].errors, "its own chart sets"));
+
+	// Chart cells keep working: their spec is their one chart.
+	nb = Analyzed("-- %% a\nSELECT 1 AS m\n-- %% chart from=a\n/*\nmark: bar\n*/\n");
+	CHECK(nb.cells[1].charts.size() == 1 && nb.cells[1].charts[0] == "mark: bar" && ChartFrom(nb.cells[1]) == "a");
+}
+
 int main() {
 	TestSplitStatements();
 	TestIsQueryStatement();
@@ -387,6 +438,7 @@ int main() {
 	TestLiterals();
 	TestChartCompiler();
 	TestCellOptions();
+	TestQueryCharts();
 	if (failures) {
 		std::cerr << failures << " check(s) failed" << std::endl;
 		return 1;

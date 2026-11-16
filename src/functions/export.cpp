@@ -168,7 +168,10 @@ Json CellJson(const notebook::Cell &cell) {
 	json.Set("options", OptionsJson(cell));
 	json.Set("body", Json::String(cell.body));
 	json.Set("content", Json::String(cell.content));
+	json.Set("sql", Json::String(cell.sql));
+	json.Set("chart_specs", StringArray(cell.charts));
 	json.Set("is_query", Json::Bool(cell.is_query));
+	json.Set("variables", StringArray(cell.variables));
 	json.Set("defines", StringArray(cell.defines));
 	json.Set("reads", StringArray(cell.reads));
 	auto depends = Json::Array();
@@ -213,6 +216,9 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 			json.Set("chart", data);
 		} else if (!data.IsNull()) {
 			json.Set("table", data);
+		}
+		if (!outcome.charts.IsNull()) {
+			json.Set("charts", outcome.charts);
 		}
 		cells[NumericCast<idx_t>(index)] = std::move(json);
 	}
@@ -309,8 +315,10 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 		// NULLs of their eventual type.
 		string type;
 		for (auto &cell : notebook.cells) {
-			if (cell.kind == notebook::CellKind::CHART && notebook::ChartSelectionInfo(cell.content).name == name) {
-				type = VariableSqlType(connection, notebook, cell, name);
+			for (auto &spec : cell.charts) {
+				if (notebook::ChartSelectionInfo(spec).name == name) {
+					type = VariableSqlType(connection, notebook, cell, name);
+				}
 			}
 		}
 		setup.Push(Json::String("SET VARIABLE " + notebook::QuoteIdentifier(name) + " = NULL" +
@@ -335,6 +343,31 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 
 //! The SQL a viewer running DuckDB-WASM needs per cell to refresh it.
 void AddWasmQueries(Json &cell_json, const notebook::Cell &cell) {
+	// Chart queries of an unnamed query cell contain its SQL, which may read $variables.
+	for (auto key : {"chart", "charts"}) {
+		auto charts = cell_json.Get(key);
+		if (!charts || charts->IsNull()) {
+			continue;
+		}
+		auto list = *charts;
+		if (list.GetType() != Json::Type::ARRAY) {
+			list = Json::Array();
+			list.Push(*charts);
+		}
+		auto rewritten = Json::Array();
+		for (auto chart : list.Items()) {
+			if (auto queries = chart.Get("queries")) {
+				auto plain = Json::Array();
+				for (auto &query : queries->Items()) {
+					plain.Push(Json::String(notebook::RewriteVariables(query.Str())));
+				}
+				chart.Set("queries", plain);
+			}
+			rewritten.Push(std::move(chart));
+		}
+		bool many = charts->GetType() == Json::Type::ARRAY;
+		cell_json.Set(key, many ? rewritten : rewritten.Items()[0]);
+	}
 	if (cell.kind == notebook::CellKind::SQL && cell.is_query) {
 		auto sql = Runner::DisplaySql(cell);
 		cell_json.Set("display_sql", Json::String(notebook::RewriteVariables(sql)));
@@ -428,6 +461,21 @@ string MarkdownTable(const Json &table, idx_t max_rows) {
 	return out;
 }
 
+//! A chart in markdown: its title and the data it draws.
+string MarkdownChart(const Json &chart) {
+	string title = "Chart";
+	if (chart.Get("render") && chart.Get("render")->Get("title")) {
+		title = chart.Get("render")->Get("title")->Str();
+	}
+	string out = "*" + title + "* (chart data; charts are drawn in the HTML export)\n\n";
+	if (chart.Get("datasets") && chart.Get("datasets")->Size() > 0) {
+		out += MarkdownTable(chart.Get("datasets")->Items()[0], 20) + "\n";
+	} else if (chart.Get("error")) {
+		out += "> Error: " + chart.Get("error")->Str() + "\n\n";
+	}
+	return out;
+}
+
 bool Hides(const string &hide, const char *what) {
 	return hide == "all" || hide == what;
 }
@@ -449,9 +497,14 @@ string Markdown(const Json &payload) {
 			}
 		} else if (kind == "sql") {
 			if (show_code) {
-				out += "```sql\n" + cell.Get("body")->Str() + "\n```\n\n";
+				out += "```sql\n" + cell.Get("sql")->Str() + "\n```\n\n";
 			}
-			if (show_output) {
+			auto charts = cell.Get("charts");
+			if (show_output && charts && charts->Size() > 0) {
+				for (auto &chart : charts->Items()) {
+					out += MarkdownChart(chart);
+				}
+			} else if (show_output) {
 				if (cell.Get("error") && !cell.Get("error")->IsNull()) {
 					out += "> Error: " + cell.Get("error")->Str() + "\n\n";
 				} else if (auto table = cell.Get("table")) {
@@ -461,18 +514,8 @@ string Markdown(const Json &payload) {
 		} else if (kind == "input") {
 			auto label = options && options->Get("label") ? options->Get("label")->Str() : cell.Get("name")->Str();
 			out += "**" + label + "**: " + Cellish(cell.Get("value") ? *cell.Get("value") : Json()) + "\n\n";
-		} else if (kind == "chart" && show_output) {
-			auto chart = cell.Get("chart");
-			string title = "Chart";
-			if (chart && chart->Get("render") && chart->Get("render")->Get("title")) {
-				title = chart->Get("render")->Get("title")->Str();
-			}
-			out += "*" + title + "* (chart data; charts are drawn in the HTML export)\n\n";
-			if (chart && chart->Get("datasets") && chart->Get("datasets")->Size() > 0) {
-				out += MarkdownTable(chart->Get("datasets")->Items()[0], 20) + "\n";
-			} else if (chart && chart->Get("error")) {
-				out += "> Error: " + chart->Get("error")->Str() + "\n\n";
-			}
+		} else if (kind == "chart" && show_output && cell.Get("chart")) {
+			out += MarkdownChart(*cell.Get("chart"));
 		}
 	}
 	return out;

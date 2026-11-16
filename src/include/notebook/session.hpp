@@ -31,6 +31,8 @@ struct CellOutcome {
 	//! Markdown cells: the rendered text. `has_output` tells an empty render from none.
 	string output;
 	bool has_output = false;
+	//! Query cells with charts, when charts are requested: one Runner::Chart result per chart.
+	notebook::Json charts;
 };
 
 struct RunnerOptions {
@@ -70,8 +72,11 @@ public:
 	//! `{columns: [{name, type}], rows: [[...]], truncated}` for a query, at most `limit` rows.
 	notebook::Json Page(const string &sql, idx_t limit, string &error);
 
-	//! `{render, datasets: [...]} ` for a chart cell, or `{error}`.
-	notebook::Json Chart(const notebook::Notebook &notebook, const notebook::Cell &cell);
+	//! `{render, datasets: [...], queries: [...]}` for one of a cell's charts, or `{error}`.
+	notebook::Json Chart(const notebook::Notebook &notebook, const notebook::Cell &cell, const string &spec);
+
+	//! Every chart of a cell, in order. Sets `error` to the first chart's error, if any.
+	notebook::Json Charts(const notebook::Notebook &notebook, const notebook::Cell &cell, string &error);
 
 	//! The SQL whose rows a query cell displays, or empty for other cells.
 	static string DisplaySql(const notebook::Cell &cell);

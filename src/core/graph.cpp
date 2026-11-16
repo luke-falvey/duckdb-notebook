@@ -83,7 +83,8 @@ struct Components {
 	}
 };
 
-void CollectReferences(Cell &cell, const ReferenceExtractor &extract) {
+//! Fills the cell's defines and reads. Returns the reads that only its charts' filters make.
+std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &extract) {
 	auto analyse = [&](const std::string &sql, const std::string &what) {
 		auto refs = extract(sql);
 		if (!refs.error.empty()) {
@@ -103,8 +104,8 @@ void CollectReferences(Cell &cell, const ReferenceExtractor &extract) {
 		if (cell.is_query && !cell.name.empty()) {
 			cell.defines.push_back(cell.name);
 		}
-		if (!cell.body.empty()) {
-			analyse(cell.body, "this cell's SQL");
+		if (!cell.sql.empty()) {
+			analyse(cell.sql, "this cell's SQL");
 		}
 		break;
 	case CellKind::INPUT: {
@@ -130,15 +131,19 @@ void CollectReferences(Cell &cell, const ReferenceExtractor &extract) {
 		if (!from.empty()) {
 			AddUnique(cell.reads, Lower(from));
 		}
-		for (auto &filter : ChartFilters(cell.content)) {
-			AddUnique(cell.reads, "$" + filter);
-		}
-		auto selection = ChartSelection(cell.content);
-		if (!selection.empty()) {
-			cell.defines.push_back("$" + selection);
-		}
 		break;
 	}
+	}
+	for (auto &spec : cell.charts) {
+		auto selection = ChartSelection(spec);
+		if (selection.empty()) {
+			continue;
+		}
+		if (std::find(cell.variables.begin(), cell.variables.end(), selection) != cell.variables.end()) {
+			cell.errors.push_back("this cell's SQL reads $" + selection +
+			                      ", which its own chart sets; read it in another cell");
+		}
+		AddUnique(cell.defines, "$" + selection);
 	}
 	// What a cell defines for itself is not a dependency (CREATE TABLE t; INSERT INTO t ...).
 	auto &reads = cell.reads;
@@ -148,6 +153,17 @@ void CollectReferences(Cell &cell, const ReferenceExtractor &extract) {
 		                                  cell.defines.end();
 	                           }),
 	            reads.end());
+	// A chart may filter on a selection of its own cell, so these are kept.
+	std::set<std::string> chart_only;
+	for (auto &spec : cell.charts) {
+		for (auto &filter : ChartFilters(spec)) {
+			if (std::find(cell.reads.begin(), cell.reads.end(), "$" + filter) == cell.reads.end()) {
+				chart_only.insert("$" + filter);
+				cell.reads.push_back("$" + filter);
+			}
+		}
+	}
+	return chart_only;
 }
 
 } // namespace
@@ -165,11 +181,12 @@ std::vector<std::string> ChartFilters(const std::string &spec) {
 
 void AnalyzeNotebook(Notebook &notebook, const ReferenceExtractor &extract) {
 	auto &cells = notebook.cells;
+	std::vector<std::set<std::string>> chart_only(cells.size());
 	for (auto &cell : cells) {
 		cell.defines.clear();
 		cell.reads.clear();
 		cell.depends_on.clear();
-		CollectReferences(cell, extract);
+		chart_only[cell.index] = CollectReferences(cell, extract);
 	}
 
 	// One definition per name.
@@ -222,6 +239,11 @@ void AnalyzeNotebook(Notebook &notebook, const ReferenceExtractor &extract) {
 			}
 			int definer = found->second.front();
 			if (definer == cell.index) {
+				continue;
+			}
+			// A query cell's chart redraws when a selection it filters on changes; its query does
+			// not depend on it, so a selection made further down is neither out of order nor a cycle.
+			if (cell.kind == CellKind::SQL && chart_only[cell.index].count(name)) {
 				continue;
 			}
 			depends_on.insert(definer);

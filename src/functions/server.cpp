@@ -315,7 +315,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    options.charts = true;
 		    options.mark_values = true;
 		    options.page_rows = body.Get("page_rows") ? static_cast<idx_t>(body.Get("page_rows")->Num()) : 100;
-		    std::set<int> wanted;
+		    std::set<int> wanted, redraw;
 		    auto cells = body.Get("cells");
 		    bool all = !cells || cells->IsNull();
 		    if (!all) {
@@ -323,15 +323,32 @@ void Routes(shared_ptr<ServerState> &shared) {
 				    wanted.insert(static_cast<int>(item.Num()));
 			    }
 		    }
+		    // Cells whose charts are drawn again without running their SQL: a chart spec changed, or a
+		    // selection their charts filter on.
+		    if (auto list = body.Get("redraw")) {
+			    for (auto &item : list->Items()) {
+				    redraw.insert(static_cast<int>(item.Num()));
+			    }
+		    }
 		    auto results = Json::Array();
 		    for (auto index : notebook::RunOrder(notebook)) {
-			    if (!all && !wanted.count(index)) {
+			    bool redrawing = redraw.count(index) && !all && !wanted.count(index);
+			    if (!all && !wanted.count(index) && !redrawing) {
 				    continue;
 			    }
 			    auto &cell = notebook.cells[NumericCast<idx_t>(index)];
 			    auto result = Json::Object().Set("idx", Json::Number(index));
 			    if (!cell.errors.empty()) {
 				    result.Set("status", Json::String("error")).Set("error", Json::String(cell.errors[0]));
+				    results.Push(result);
+				    continue;
+			    }
+			    if (redrawing && cell.kind == notebook::CellKind::SQL) {
+				    string error;
+				    auto charts = runner.Charts(notebook, cell, error);
+				    result.Set("redraw", Json::Bool(true)).Set("charts", charts);
+				    result.Set("status", Json::String(error.empty() ? "ok" : "error"));
+				    result.Set("error", error.empty() ? Json() : Json::String(error));
 				    results.Push(result);
 				    continue;
 			    }
@@ -347,6 +364,9 @@ void Routes(shared_ptr<ServerState> &shared) {
 			    }
 			    if (!data.IsNull()) {
 				    result.Set("data", data);
+			    }
+			    if (!outcome.charts.IsNull()) {
+				    result.Set("charts", outcome.charts);
 			    }
 			    if (cell.kind == notebook::CellKind::INPUT) {
 				    auto value = runner.Conn().Query("SELECT getvariable(" + notebook::QuoteString(cell.name) + ")");

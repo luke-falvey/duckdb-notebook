@@ -10,7 +10,7 @@ taught us and where it departs from the design.
 
 | SQL function | What it does | File |
 |---|---|---|
-| `notebook_cells(path)` | One row per cell: kind, name, options, body, defines, reads, depends_on, errors, warnings | `src/functions/notebook_cells.cpp` |
+| `notebook_cells(path)` | One row per cell: kind, name, options, body, charts, defines, reads, depends_on, errors, warnings | `src/functions/notebook_cells.cpp` |
 | `notebook_sql(path)` | The notebook as a plain SQL script | `src/functions/notebook_sql.cpp` |
 | `notebook_run(path, params := {…})` | Runs every cell (charts too) in its own session; one row per cell | `src/functions/notebook_run.cpp` |
 | `notebook_chart_query(spec, from)` | The SQL and render description a chart spec compiles to | `src/functions/notebook_chart_query.cpp` |
@@ -158,6 +158,9 @@ create, because all test files share one database.
 
 ## Things that are easy to get wrong
 
+- A SQL cell's `body` is its full text, chart comments included; what runs is `Cell::sql`, and its charts
+  are `Cell::charts`. Use `sql` for anything that executes or analyses SQL, and `ChartFrom` for the
+  relation a cell's charts read. The editor edits `sql` and the specs separately and rebuilds `body`.
 - A `-- %%` line inside a block comment or string literal is content, not a marker. All text scanning
   goes through `SqlScanner` in `src/core/sql_lexer.cpp`, which tracks that state. Do not use regular
   expressions or `find` on SQL text.

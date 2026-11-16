@@ -118,10 +118,9 @@ var AppExtra = (function () {
     list.focus();
   };
 
-  // ---- Chart switcher: build a chart from a result and write it into the file as a chart cell. ----
+  // ---- Chart picker: build a chart from a result and write it into the cell as a /* chart */ comment. ----
   X.switcher = function (cell, columns) {
     var box = NB.el('div', { 'class': 'nb-switcher nb-hide-reading' });
-    if (!cell.name) { box.appendChild(NB.el('span', { text: 'Name this cell to chart it.' })); return box; }
     var marks = ['suggested', 'line', 'bar', 'area', 'point', 'histogram', 'rect', 'kpi', 'table'];
     var mark = NB.el('select', {}), x = NB.el('select', {}), y = NB.el('select', {}), color = NB.el('select', {});
     marks.forEach(function (m) { mark.appendChild(NB.el('option', { value: m, text: m })); });
@@ -143,12 +142,7 @@ var AppExtra = (function () {
     };
     box.appendChild(NB.el('span', { text: 'Chart:' }));
     [mark, x, y, color].forEach(function (s) { box.appendChild(s); });
-    box.appendChild(NB.el('button', { text: 'Add chart cell', onclick: function () {
-      var at = App.cells.indexOf(cell) + 1;
-      App.cells.splice(at, 0, { head: 'chart from=' + cell.name, body: '/*\n' + spec() + '\n*/', kind: 'chart', state: 'stale', options: { from: cell.name } });
-      App.edited(App.cells[at]);
-      App.analyse().then(function () { App.run([at]); });
-    } }));
+    box.appendChild(NB.el('button', { 'class': 'nb-add-chart', text: 'Add chart', onclick: function () { App.addChart(cell, spec()); } }));
     return box;
   };
 

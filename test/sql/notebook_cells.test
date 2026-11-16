@@ -108,7 +108,7 @@ SELECT idx, errors[1] FROM notebook_cells('test/notebooks/errors.sql') ORDER BY 
 query II
 SELECT count(*), count(*) FILTER (len(errors) > 0) FROM notebook_cells('examples/revenue.sql')
 ----
-13	0
+11	0
 
 statement error
 SELECT * FROM notebook_cells('test/notebooks/missing.sql')

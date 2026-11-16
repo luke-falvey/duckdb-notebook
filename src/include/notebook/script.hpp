@@ -18,6 +18,10 @@ std::string QuoteIdentifier(const std::string &name);
 //!  - anything else: the body unchanged
 std::string CellSql(const Cell &cell);
 
+//! The relation a cell's charts read, as a chart `from`: a chart cell's from=, a named query
+//! cell's name, or an unnamed query cell's query in parentheses. Empty for other cells.
+std::string ChartFrom(const Cell &cell);
+
 //! Variables that cells read with `$name` but that no input cell or SET VARIABLE
 //! in the notebook defines (chart selections, typically). `$name` on an unset
 //! variable is an error in DuckDB, so the runner starts these as NULL.

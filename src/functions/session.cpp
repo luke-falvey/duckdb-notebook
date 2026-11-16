@@ -118,7 +118,7 @@ string ReplaySql(const notebook::Cell &cell) {
 	if (cell.is_query && !cell.name.empty()) {
 		// The view (or temp table) the cell defines, plus anything else per-connection before it.
 		string replay;
-		auto statements = notebook::SplitStatements(cell.body);
+		auto statements = notebook::SplitStatements(cell.sql);
 		for (size_t i = 0; i + 1 < statements.size(); i++) {
 			if (notebook::IsConnectionState(statements[i].text)) {
 				replay += statements[i].text + ";\n";
@@ -128,7 +128,7 @@ string ReplaySql(const notebook::Cell &cell) {
 		return replay + (wrapped.empty() ? string() : wrapped.back().text + ";\n");
 	}
 	string replay;
-	for (auto &statement : notebook::SplitStatements(cell.body)) {
+	for (auto &statement : notebook::SplitStatements(cell.sql)) {
 		if (notebook::IsConnectionState(statement.text)) {
 			replay += statement.text + ";\n";
 		}
@@ -229,7 +229,7 @@ string Runner::DisplaySql(const notebook::Cell &cell) {
 	if (!cell.name.empty()) {
 		return "SELECT * FROM " + notebook::QuoteIdentifier(cell.name);
 	}
-	auto statements = notebook::SplitStatements(cell.body);
+	auto statements = notebook::SplitStatements(cell.sql);
 	return statements.empty() ? string() : statements.back().text;
 }
 
@@ -243,8 +243,8 @@ Json Runner::Page(const string &sql, idx_t limit, string &error) {
 	return ResultToJson(*result, limit, total);
 }
 
-Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cell) {
-	auto from = cell.Option("from");
+Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cell, const string &spec) {
+	auto from = notebook::ChartFrom(cell);
 	notebook::ChartContext context;
 	context.width = std::atoi(cell.Option("width", "640").c_str());
 	context.height = std::atoi(cell.Option("height", "320").c_str());
@@ -269,14 +269,14 @@ Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cel
 		}
 	}
 	for (auto &other : notebook.cells) {
-		if (other.kind == notebook::CellKind::CHART) {
-			auto selection = notebook::ChartSelectionInfo(other.content);
+		for (auto &other_spec : other.charts) {
+			auto selection = notebook::ChartSelectionInfo(other_spec);
 			if (!selection.name.empty()) {
 				context.selections[selection.name] = selection;
 			}
 		}
 	}
-	auto plan = notebook::CompileChart(cell.content, from, context);
+	auto plan = notebook::CompileChart(spec, from, context);
 	if (!plan.error.empty()) {
 		return Json::Object().Set("error", Json::String(plan.error));
 	}
@@ -294,6 +294,21 @@ Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cel
 		queries.Push(Json::String(sql));
 	}
 	return Json::Object().Set("render", plan.render).Set("datasets", datasets).Set("queries", queries);
+}
+
+Json Runner::Charts(const notebook::Notebook &notebook, const notebook::Cell &cell, string &error) {
+	auto charts = Json::Array();
+	for (idx_t i = 0; i < cell.charts.size(); i++) {
+		auto chart = Chart(notebook, cell, cell.charts[i]);
+		if (auto message = chart.Get("error")) {
+			if (error.empty()) {
+				error =
+				    cell.charts.size() > 1 ? "chart " + std::to_string(i + 1) + ": " + message->Str() : message->Str();
+			}
+		}
+		charts.Push(std::move(chart));
+	}
+	return charts;
 }
 
 CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell &cell, const RunnerOptions &options,
@@ -343,7 +358,7 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	}
 	if (cell.kind == notebook::CellKind::CHART) {
 		if (options.charts) {
-			auto chart = Chart(notebook, cell);
+			auto chart = Chart(notebook, cell, cell.content);
 			if (auto error = chart.Get("error")) {
 				outcome.status = "error";
 				outcome.error = error->Str();
@@ -400,9 +415,14 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 			*data = Page(DisplaySql(cell), page_rows, error);
 		}
 	}
+	if (!failed && options.charts && !cell.charts.empty()) {
+		// The query ran; a chart that fails is reported without hiding the result.
+		outcome.charts = Charts(notebook, cell, message);
+		failed = !message.empty();
+	}
 	outcome.status = failed ? "error" : "ok";
 	outcome.error = message;
-	if (!failed) {
+	if (!failed || !outcome.charts.IsNull()) {
 		auto replay = ReplaySql(cell);
 		if (replay.empty()) {
 			state.replay.erase(cell.index);
@@ -453,12 +473,12 @@ string VariableSqlType(Connection &connection, const notebook::Notebook &noteboo
 		}
 		return string();
 	}
-	if (cell.kind == notebook::CellKind::CHART) {
-		auto selection = notebook::ChartSelectionInfo(cell.content);
+	for (auto &spec : cell.charts) {
+		auto selection = notebook::ChartSelectionInfo(spec);
 		if (selection.name != name) {
-			return string();
+			continue;
 		}
-		auto relation = notebook::RelationSql(cell.Option("from"));
+		auto relation = notebook::RelationSql(notebook::ChartFrom(cell));
 		vector<string> types;
 		for (auto &field : selection.fields) {
 			auto type = ColumnType(connection, relation, field);

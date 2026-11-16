@@ -59,7 +59,7 @@ def test_server(browser, work):
     page.goto(url)
     page.wait_for_selector(".nb-cell")
     check(page.locator("#title").text_content() == "Revenue review", "the editor shows the notebook's title")
-    check(page.locator(".nb-cell").count() == 13, "one editor cell per notebook cell")
+    check(page.locator(".nb-cell").count() == 11, "one editor cell per notebook cell")
     check(page.locator(".nb-badge.fresh").count() == 0, "opening a notebook does not run it")
 
     check(not page.locator("#menu").is_visible(), "options live behind the gear, closed by default")
@@ -71,15 +71,15 @@ def test_server(browser, work):
     page.click("#run-all")
     page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
     check(page.locator(".nb-badge.failed").count() == 0, "Run all: no cell fails")
-    check(page.locator("svg.nb-chart-svg").count() >= 3, "Run all draws the charts")
+    check(page.locator("svg.nb-chart-svg").count() >= 2, "Run all draws the charts")
     check("EU" in page.locator(".nb-md").first.text_content(), "markdown shows {{ $region }}")
 
     page.locator(".nb-input select").first.select_option(label="US")
     page.wait_for_function("document.querySelector('.nb-md').textContent.includes('US')", timeout=30000)
     check(True, "changing an input re-runs the cells that read it")
 
-    before = page.locator(".nb-cell[data-idx='12'] table.nb-grid tbody tr").first.text_content()
-    overlay = page.locator(".nb-cell[data-idx='9'] .nb-brush-overlay")
+    before = page.locator(".nb-cell[data-idx='10'] table.nb-grid tbody tr").first.text_content()
+    overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
     overlay.scroll_into_view_if_needed()
     box = overlay.bounding_box()
     page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + 20)
@@ -87,11 +87,28 @@ def test_server(browser, work):
     page.mouse.move(box["x"] + box["width"] * 0.3, box["y"] + 40, steps=5)
     page.mouse.up()
     page.wait_for_function(
-        "(b) => { const r = document.querySelector(\".nb-cell[data-idx='12'] table.nb-grid tbody tr\"); "
+        "(b) => { const r = document.querySelector(\".nb-cell[data-idx='10'] table.nb-grid tbody tr\"); "
         "return r && r.textContent !== b; }", arg=before, timeout=30000)
-    months = page.locator(".nb-cell[data-idx='12'] table.nb-grid tbody tr td:nth-child(3)").all_text_contents()
+    months = page.locator(".nb-cell[data-idx='10'] table.nb-grid tbody tr td:nth-child(3)").all_text_contents()
     check(len(months) > 0 and all(m[5:7] in ("03", "04") for m in months),
           f"brushing the trend chart filters top_orders ({sorted(set(m[:7] for m in months))})")
+
+    # A query's charts are tabs over its result, with the table last.
+    monthly = page.locator(".nb-cell[data-idx='7']")
+    tabs = monthly.locator(".nb-tab")
+    check(tabs.count() == 4 and "on" in tabs.first.get_attribute("class") and "Monthly revenue" in tabs.first.text_content(),
+          "a query's charts are tabs, the first one open")
+    check(monthly.locator(".nb-chart-title").count() == 0, "a chart in a tab is titled by its tab")
+    monthly.locator(".nb-tab", has_text="table").click()
+    check(monthly.locator("table.nb-grid").count() == 1, "the table tab shows the query's rows")
+    monthly.locator(".nb-tab", has_text="Category mix").click()
+    monthly.locator(".nb-stub", has_text="chart spec").click()
+    spec = monthly.locator("textarea.nb-spec")
+    spec.fill(spec.input_value().replace("Category mix", "Revenue by category"))
+    spec.press("Shift+Enter")
+    page.wait_for_function("[...document.querySelectorAll(\".nb-cell[data-idx='7'] .nb-tab\")].some(t => t.textContent === 'Revenue by category')",
+                           timeout=15000)
+    check(page.locator("#status").text_content().startswith("Ran 1 cell "), "editing a chart spec draws that chart again")
 
     # Page size: the picker under a table writes rows=N to the cell, so it is saved with the notebook.
     filtered = page.locator(".nb-cell[data-idx='6']")
@@ -125,15 +142,24 @@ def test_server(browser, work):
                            timeout=30000)
     check("42" in page.locator(".nb-cell").last.locator("table.nb-grid").text_content(),
           "a new cell runs with Shift+Enter")
+    answer = page.locator(".nb-cell").last
+    answer.locator("button.nb-add-chart").click()
+    page.wait_for_function("[...document.querySelectorAll('.nb-cell')].pop().querySelectorAll('.nb-tab').length === 3",
+                           timeout=15000)
+    page.wait_for_function("[...document.querySelectorAll('.nb-cell')].pop().querySelector('.nb-tab-body').children.length > 0",
+                           timeout=15000)
+    check(answer.locator(".nb-tab-body .nb-error").count() == 0, "the chart picker adds a chart to the cell and draws it")
     page.keyboard.press("Control+s")
     page.wait_for_function("document.getElementById('status').textContent.startsWith('Saved')", timeout=10000)
     saved = open(notebook).read()
     check("SELECT 41 + 1 AS answer;" in saved, "Ctrl+S writes the cell to the file")
     check("-- %% filtered rows=10" in saved, "the chosen page size is saved in the file")
+    check("SELECT 41 + 1 AS answer;\n\n/* chart\ntype: kpi" in saved, "an added chart is saved as a /* chart */ comment in its cell")
+    check("title: Revenue by category" in saved and "title: Category mix" not in saved, "an edited chart spec is saved in its cell")
 
     with open(notebook, "a") as f:
         f.write("\n-- %% from_disk\nSELECT 'edited elsewhere' AS note;\n")
-    page.wait_for_function("document.querySelectorAll('.nb-cell').length === 15", timeout=15000)
+    page.wait_for_function("document.querySelectorAll('.nb-cell').length === 13", timeout=15000)
     check(True, "an edit made to the file by another program appears in the editor")
 
     page.click("#gear")
@@ -179,8 +205,13 @@ def test_exports(browser, work, chromium):
     page.route("**/*", lambda r: r.abort() if not r.request.url.startswith("file:") else r.continue_())
     page.goto("file://" + html)
     page.wait_for_function("window.__NB_READY === true")
-    check(page.locator("svg.nb-chart-svg").count() >= 3, "HTML export draws its charts offline")
+    check(page.locator("svg.nb-chart-svg").count() >= 2, "HTML export draws its charts offline")
     check(page.locator("pre.nb-source").count() >= 3, "an export shows the SQL by default")
+    monthly = page.locator(".nb-cell[data-idx='7']")
+    check(monthly.locator(".nb-tab").count() == 3 and "/* chart" not in monthly.locator("pre.nb-source").text_content(),
+          "an export shows a query's charts as tabs and its SQL without them")
+    monthly.locator(".nb-tab", has_text="table").click()
+    check(page.locator(".nb-cell[data-idx='7'] table.nb-grid").count() == 1, "an export's table tab shows the rows")
     check(page.evaluate("document.fonts.check('20px Excalifont')"), "an export carries its handwriting font")
     first = page.locator(".nb-cell[data-kind='sql'] table.nb-grid").nth(1)
     check(first.locator("tbody tr").count() == 25, "exported tables page 25 rows at a time")

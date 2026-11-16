@@ -36,6 +36,11 @@ struct Cell {
 	std::string body;
 	//! For notebook, markdown and chart cells: the text inside the block comment.
 	std::string content;
+	//! SQL and input cells: the SQL to run, which is the body without its trailing chart comments.
+	std::string sql;
+	//! The chart specs (YAML) the cell draws: a chart cell's content, or the `/* chart ... */`
+	//! comments that end a query cell, in order.
+	std::vector<std::string> charts;
 	//! SQL cells: true if the last statement returns rows, making the cell a view.
 	bool is_query = false;
 	//! Variables the cell reads as `$name`.

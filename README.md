@@ -21,9 +21,7 @@ SELECT date_trunc('month', ts) AS month, sum(amount) AS revenue
 FROM orders
 WHERE region = $region
 GROUP BY ALL;
-
--- %% chart from=monthly
-/*
+/* chart
 mark: line
 x: month
 y: revenue
@@ -38,8 +36,8 @@ y: revenue
   already have, with the frontend built in. No network access is needed.
 - **Cells are reactive.** A named query is a view; inputs and chart selections are DuckDB variables.
   Change one and everything that depends on it updates.
-- **Charts are declarative.** A short YAML spec compiles to an aggregate query, so charts stay fast on
-  large tables.
+- **Charts are declarative.** A query shows a table until you give it charts: short YAML specs after
+  the query, shown as tabs. Each compiles to an aggregate query, so charts stay fast on large tables.
 - **Notebooks can live in the database.** The same text is stored with version history in a table.
 - **Share without DuckDB.** Export to a single self-contained HTML file, or to PDF.
 - **Looks like a sketchbook.** Paper, handwriting and hand-drawn charts, after Excalidraw, in the

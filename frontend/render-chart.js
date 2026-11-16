@@ -515,6 +515,17 @@
       var sums = stackTotals('y', 'x');
       if (sums.length) { var hi = Math.max.apply(null, sums.concat([y.domain[1]])); y = linear([Math.min(0, y.domain[0]), hi], [h, 0], true); y.enc = allLayers[0].encoding.y; }
     }
+    // Formatted numbers on the y axis ($150,000) need room too; the x scale is then rebuilt narrower.
+    if (y && y.kind !== 'band') {
+      var longest = 0;
+      y.ticks(Math.max(2, Math.floor(h / 40))).forEach(function (t) { longest = Math.max(longest, tickLabel(y, t).length); });
+      var need = Math.min(170, 30 + 7.6 * longest);
+      if (need > left) {
+        left = need;
+        w = panelW - left - M.right;
+        x = makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars);
+      }
+    }
     if (x && x.kind === 'linear' && y && y.kind === 'band' && hasBars) {
       var sx = stackTotals('x', 'y');
       if (sx.length) { var hx = Math.max.apply(null, sx.concat([x.domain[1]])); x = linear([Math.min(0, x.domain[0]), hx], [0, w], true); x.enc = allLayers[0].encoding.x; }
@@ -562,7 +573,8 @@
     var render = chart.render || {}, datasets = (chart.datasets || []).map(NB.objects);
     // A stable wobble per chart: the same chart is drawn the same way every time.
     Sketch.reseed((opts && opts.seed) || ((render.title || '') + JSON.stringify(render.layers || render.kind).length + '/' + datasets.map(function (d) { return d.length; }).join(',')));
-    if (render.title) container.appendChild(NB.el('div', { 'class': 'nb-chart-title', text: render.title }));
+    // In a query cell's tabs the title is already the tab's label.
+    if (render.title && !(opts && opts.inTab)) container.appendChild(NB.el('div', { 'class': 'nb-chart-title', text: render.title }));
     var body = NB.el('div', { 'class': 'nb-chart-body' });
     container.appendChild(body);
     try {

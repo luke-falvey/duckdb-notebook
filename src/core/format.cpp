@@ -142,6 +142,80 @@ void CheckOptions(Cell &cell) {
 	}
 }
 
+//! A chart comment's spec: the text after `chart`, without the blank rest of its first line.
+bool ChartComment(const std::string &comment, std::string &spec) {
+	auto inner = comment.substr(2, comment.size() - 4);
+	auto start = inner.find_first_not_of(" \t");
+	if (start == std::string::npos || inner.compare(start, 5, "chart") != 0) {
+		return false;
+	}
+	auto rest = inner.substr(start + 5);
+	if (!rest.empty() && !std::isspace(static_cast<unsigned char>(rest[0]))) {
+		return false;
+	}
+	auto newline = rest.find('\n');
+	auto first = rest.substr(0, newline);
+	auto text = first.find_first_not_of(" \t\r");
+	if (text == std::string::npos) {
+		spec = newline == std::string::npos ? std::string() : rest.substr(newline + 1);
+	} else {
+		spec = rest.substr(text);
+	}
+	while (!spec.empty() && std::isspace(static_cast<unsigned char>(spec.back()))) {
+		spec.pop_back();
+	}
+	return true;
+}
+
+//! Takes the `/* chart ... */` comments that follow a SQL cell's last statement out of its body.
+void SplitCharts(Cell &cell) {
+	struct Range {
+		size_t begin;
+		size_t end;
+	};
+	const auto &body = cell.body;
+	std::vector<Range> comments;
+	size_t code_end = 0, open = std::string::npos;
+	SqlScanner scan(body);
+	while (!scan.Done()) {
+		auto before = scan.CurrentState();
+		size_t at = scan.Position();
+		scan.Advance();
+		auto after = scan.CurrentState();
+		if (before == SqlScanner::State::CODE && after == SqlScanner::State::BLOCK_COMMENT) {
+			open = at;
+		} else if (before == SqlScanner::State::BLOCK_COMMENT && after == SqlScanner::State::CODE &&
+		           open != std::string::npos) {
+			comments.push_back({open, scan.Position()});
+			open = std::string::npos;
+		} else if (before == SqlScanner::State::CODE && after != SqlScanner::State::LINE_COMMENT &&
+		           !std::isspace(static_cast<unsigned char>(body[at]))) {
+			code_end = scan.Position();
+		}
+	}
+	std::string sql;
+	size_t copied = 0;
+	bool misplaced = false;
+	for (auto &comment : comments) {
+		std::string spec;
+		if (!ChartComment(body.substr(comment.begin, comment.end - comment.begin), spec)) {
+			continue;
+		}
+		if (comment.begin < code_end) {
+			misplaced = true;
+			continue;
+		}
+		cell.charts.push_back(spec);
+		sql += body.substr(copied, comment.begin - copied);
+		copied = comment.end;
+	}
+	sql += body.substr(copied);
+	cell.sql = TrimBlankLines(sql);
+	if (misplaced) {
+		cell.warnings.push_back("a /* chart */ comment draws a chart only at the end of the cell, after its query");
+	}
+}
+
 void CheckBody(Cell &cell) {
 	switch (cell.kind) {
 	case CellKind::NOTEBOOK:
@@ -167,8 +241,12 @@ void CheckBody(Cell &cell) {
 		if (cell.kind == CellKind::CHART && cell.Option("from").empty()) {
 			cell.errors.push_back("chart cell needs from=<cell or table>");
 		}
+		if (cell.kind == CellKind::CHART) {
+			cell.charts.push_back(cell.content);
+		}
 		break;
 	case CellKind::INPUT: {
+		cell.sql = cell.body;
 		auto statements = SplitStatements(cell.body);
 		std::string variable;
 		if (statements.size() != 1 || !IsSetVariable(statements[0].text, variable)) {
@@ -180,9 +258,14 @@ void CheckBody(Cell &cell) {
 		break;
 	}
 	case CellKind::SQL: {
-		auto statements = SplitStatements(cell.body);
+		SplitCharts(cell);
+		auto statements = SplitStatements(cell.sql);
 		cell.is_query = !statements.empty() && IsQueryStatement(statements.back().text);
-		cell.variables = ReferencedVariables(cell.body);
+		cell.variables = ReferencedVariables(cell.sql);
+		if (!cell.charts.empty() && !cell.is_query) {
+			cell.errors.push_back("only a cell that ends in a query can draw a chart; its last statement must "
+			                      "return rows");
+		}
 		break;
 	}
 	}

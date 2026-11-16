@@ -48,17 +48,7 @@ SELECT
 FROM filtered
 GROUP BY ALL
 ORDER BY month, category;
-
--- %% chart headline from=monthly
-/*
-type: kpi
-value: {field: revenue, agg: sum, format: "$,.0f"}
-label: Revenue
-sparkline: {x: month, y: revenue}
-*/
-
--- %% chart revenue_trend from=monthly
-/*
+/* chart
 title: Monthly revenue by category
 mark: line
 x: month
@@ -66,13 +56,19 @@ y: {field: revenue, format: "$,.0f"}
 color: category
 select: {as: picked_months, type: interval, on: x}
 */
-
--- %% chart category_mix from=monthly
-/*
+/* chart
 title: Category mix
 mark: bar
 x: {field: revenue, agg: sum}
 y: {field: category, sort: -x}
+*/
+
+-- %% chart headline from=monthly
+/*
+type: kpi
+value: {field: revenue, agg: sum, format: "$,.0f"}
+label: Revenue
+sparkline: {x: month, y: revenue}
 */
 
 -- %% chart order_sizes from=filtered

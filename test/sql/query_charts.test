@@ -1,0 +1,56 @@
+# name: test/sql/query_charts.test
+# description: charts written at the end of a query cell
+# group: [notebook]
+
+require notebook
+
+# Trailing /* chart */ comments are the cell's charts; its SQL is the rest
+query IITTT
+SELECT idx, name, len(charts), charts[1] LIKE 'mark: %', body LIKE '%/* chart%' FROM notebook_cells('test/notebooks/query_charts.sql') WHERE kind = 'sql' ORDER BY idx
+----
+1	sales	2	true	true
+2	NULL	1	true	true
+3	broken	1	true	true
+4	picked	0	NULL	false
+
+# A chart's selection is defined by its cell; a filter is read without making the query depend on it
+query ITT
+SELECT idx, list_contains(defines, '$picked_groups'), depends_on FROM notebook_cells('test/notebooks/query_charts.sql') WHERE idx IN (1, 2, 4) ORDER BY idx
+----
+1	true	[]
+2	false	[1]
+4	false	[1]
+
+# Charts run with their cell; a chart that fails is an error without losing the result's row count
+query IIII
+SELECT idx, status, error, row_count FROM notebook_run('test/notebooks/query_charts.sql') WHERE kind = 'sql' ORDER BY idx
+----
+1	ok	NULL	9
+2	ok	NULL	3
+3	error	channel x: no column named 'no_such_column' in broken	1
+4	ok	NULL	9
+
+# The plain script leaves the charts out
+query I
+SELECT sql LIKE '%/* chart%' FROM notebook_sql('test/notebooks/query_charts.sql')
+----
+false
+
+# Markdown shows each chart's title and data, and the SQL without the chart comments
+statement ok
+FROM notebook_export('test/notebooks/query_charts.sql', file := '__TEST_DIR__/query_charts.md', format := 'md')
+
+query TTTT
+SELECT content LIKE '%*Amount by group*%', content LIKE '%```sql
+SELECT range AS day%', content NOT LIKE '%/* chart%', content LIKE '%no column named%' FROM read_text('__TEST_DIR__/query_charts.md')
+----
+true	true	true	true
+
+# The HTML export carries each query cell's charts
+statement ok
+FROM notebook_export('test/notebooks/query_charts.sql', file := '__TEST_DIR__/query_charts.html')
+
+query I
+SELECT content LIKE '%id="nb-data">H4sI%' FROM read_text('__TEST_DIR__/query_charts.html')
+----
+true

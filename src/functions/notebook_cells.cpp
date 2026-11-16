@@ -43,6 +43,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	column("options", LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR));
 	column("body", LogicalType::VARCHAR);
 	column("content", LogicalType::VARCHAR);
+	column("charts", LogicalType::LIST(LogicalType::VARCHAR));
 	column("is_query", LogicalType::BOOLEAN);
 	column("variables", LogicalType::LIST(LogicalType::VARCHAR));
 	column("defines", LogicalType::LIST(LogicalType::VARCHAR));
@@ -84,6 +85,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		    Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, std::move(keys), std::move(values)));
 		output.data[col++].Append(Value(cell.body));
 		output.data[col++].Append(has_content ? Value(cell.content) : Value(LogicalType::VARCHAR));
+		output.data[col++].Append(StringList(cell.charts));
 		output.data[col++].Append(is_sql ? Value::BOOLEAN(cell.is_query) : Value(LogicalType::BOOLEAN));
 		output.data[col++].Append(StringList(cell.variables));
 		output.data[col++].Append(StringList(cell.defines));

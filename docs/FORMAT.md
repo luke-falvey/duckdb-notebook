@@ -25,8 +25,8 @@ The first token of the head decides the cell kind:
 | `[notebook]` | Notebook metadata (at most one, first cell) | One block comment containing YAML |
 | `[markdown]` | Prose | One block comment containing Markdown |
 | `input` | Input widget | One `SET VARIABLE` statement |
-| `chart` | Visualisation | One block comment containing a YAML chart spec |
-| anything else, or nothing | SQL | DuckDB statements |
+| `chart` | Visualisation of another cell or table | One block comment containing a YAML chart spec |
+| anything else, or nothing | SQL | DuckDB statements, optionally followed by `/* chart */` comments (§2) |
 
 After the kind comes an optional name and then `key=value` options. Quote values that contain spaces:
 `label="Minimum order value"`.
@@ -80,6 +80,48 @@ GROUP BY ALL;
 
 The file keeps the bare `SELECT`. The view wrapper is added at run time.
 
+**Charts.** A query cell draws its result as a table. To chart it instead, end the cell with one or
+more block comments that start with `chart`, each holding a chart spec (§5):
+
+```sql
+-- %% monthly
+SELECT date_trunc('month', ts) AS month, category, sum(amount) AS revenue
+FROM filtered
+GROUP BY ALL;
+/* chart
+title: Monthly revenue
+mark: line
+x: month
+y: revenue
+color: category
+*/
+/* chart
+mark: bar
+x: {field: revenue, agg: sum}
+y: category
+*/
+```
+
+The query defines the data and the charts are views of it: a reader sees one tab per chart, in file
+order, and a last tab with the table. The first chart is shown until another tab is picked. A chart
+comment is a comment like any other, so the file still runs as plain SQL, and the expanded script (§7)
+leaves the charts out.
+
+- Only comments after the cell's last statement are charts. A `/* chart */` comment before or inside
+  the query is an ordinary comment, with a warning.
+- Only a cell whose last statement returns rows can have charts. Its name is optional: the charts of an
+  unnamed cell read its query directly.
+- The spec is the comment's text after `chart`, on the following lines or on the same line
+  (`/* chart mark: bar */`). Leading blank lines and trailing whitespace are dropped.
+- The cell's `width` and `height` options size all of its charts.
+- A chart's `select` variable is defined by its cell (§5.2). The cell's own SQL cannot read it: that
+  would make the query depend on a chart of itself. Its charts may `filter` on it, and on any other
+  selection; those filters redraw the charts without running the query.
+- Changing a spec redraws that cell's charts; the query does not run again.
+
+A chart cell (§5) draws a chart of another cell or of a table, for when one result feeds several
+places or a chart reads a table that no cell defines.
+
 **Effect cells.** A cell containing anything other than queries (`CREATE`, `INSERT`, `UPDATE`,
 `DELETE`, `ATTACH`, `COPY`, `INSTALL`, `LOAD`, `SET`, …) is an effect cell. It defines whatever its
 statements create. Effect cells run only when asked (see [DESIGN.md §3](DESIGN.md#3-execution-model)).
@@ -100,7 +142,7 @@ What a cell defines and reads is found by DuckDB's parser, without running anyth
 
 | Cell | Defines | Reads |
 |---|---|---|
-| SQL | Its name, if it is a named query cell; tables, views, schemas, macros, sequences and types it creates; databases it attaches; variables it sets | Tables and views in its SQL that are not CTEs, including the targets of `INSERT`, `UPDATE`, `DELETE`, `COPY` and `DROP`; `$name` and `getvariable('name')` |
+| SQL | Its name, if it is a named query cell; tables, views, schemas, macros, sequences and types it creates; databases it attaches; variables it sets; its charts' `select: {as: …}` variables | Tables and views in its SQL that are not CTEs, including the targets of `INSERT`, `UPDATE`, `DELETE`, `COPY` and `DROP`; `$name` and `getvariable('name')`; the selections in its charts' `filter`, which add no dependency |
 | Input | Its variable | The cell in `from=<cell>.<column>`; anything its default reads |
 | Markdown | Nothing | What its `{{ }}` expressions read |
 | Chart | Its `select: {as: …}` variable | Its `from`; the selections in its `filter` |
@@ -113,13 +155,17 @@ defines is assumed to be a table or view in the database and needs no cell.
 These are errors, reported on every cell involved:
 
 - A name defined by more than one cell.
-- An SQL or input cell reading something defined further down.
+- An SQL or input cell reading something defined further down. A query cell's chart filters are
+  exempt: a selection may come from any chart.
 - A dependency cycle. With the rule above, a cycle can only pass through a chart, for example a chart
   drawn `from` a cell that reads the chart's own selection.
+- A query cell whose SQL reads the selection of one of its own charts.
+- Chart comments on a cell whose last statement does not return rows.
 
 These are warnings, which do not stop a notebook from running:
 
 - A variable that some cell reads but no cell sets. It reads as `NULL` (see Parameters).
+- A `/* chart */` comment that is not at the end of its cell, which is not drawn.
 - SQL the parser cannot read, such as a syntax error. Its dependencies are unknown, and running it
   reports the error on that cell.
 
@@ -196,18 +242,28 @@ Total revenue in **{{ $region }}**: {{ (SELECT sum(revenue) FROM monthly) }}
 - DuckDB block comments nest, so `/*` and `*/` inside the prose must be balanced. Write a literal
   `*/` as `*\/`.
 
-## 5. Chart cells
+## 5. Charts
+
+A chart spec is written in one of two places:
 
 ```sql
+-- %% monthly
+SELECT ...;
+/* chart
+<YAML spec>
+*/
+
 -- %% chart [name] from=<relation> [options]
 /*
 <YAML spec>
 */
 ```
 
-`from` names a cell, table or view. The spec says how to turn that relation into a picture. The runner
-compiles each spec into one aggregate SQL query over `from` plus a small render description, so the
-browser receives only the rows the picture needs.
+At the end of a query cell (§2) the chart draws that cell's result. A chart cell draws `from`, which
+names a cell, table or view. The spec says how to turn that relation into a picture. The runner
+compiles each spec into one aggregate SQL query over the relation plus a small render description, so
+the browser receives only the rows the picture needs. Below, `from` means the relation a chart draws,
+whichever way it is written.
 
 ### 5.1 Grammar charts
 

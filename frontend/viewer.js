@@ -78,6 +78,22 @@
     return box;
   }
 
+  // A query cell's charts as tabs, with its table last. The first chart shows until another is picked.
+  function queryTabs(cell, out) {
+    var charts = cell.charts, tab = Math.min(cell.tab || 0, charts.length);
+    var items = charts.map(function (c, k) { return { label: (c && c.error ? '⚠ ' : '') + NB.chartLabel(c, k) }; }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+    out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; render(); }));
+    var holder = NB.el('div', { 'class': 'nb-tab-body' });
+    out.appendChild(holder);
+    if (tab < charts.length) {
+      NB.chart(holder, charts[tab], { selected: selected, onSelect: wasm ? onSelect : null, seed: 'cell' + cell.idx + '/' + tab, inTab: true });
+    } else if (cell.table) {
+      NB.table(holder, cell.table, { pageSize: +option(cell, 'rows', 25) });
+    } else if (cell.error) {
+      holder.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
+    }
+  }
+
   function widgetType(cell) {
     return { date: 'DATE', daterange: 'DATE', number: 'DOUBLE', slider: 'DOUBLE' }[cell.widget] || '';
   }
@@ -103,15 +119,18 @@
       var showOutput = !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
       var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
       var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
-      if (cell.kind === 'sql' && showCode && cell.body) {
+      if (cell.kind === 'sql' && showCode && cell.sql) {
         box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
-        box.appendChild(NB.el('pre', { 'class': 'nb-source', text: cell.body }));
+        box.appendChild(NB.el('pre', { 'class': 'nb-source', text: cell.sql }));
         shown++;
       }
       if (showOutput) {
         if (cell.kind === 'markdown') {
           if (cell.error) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
           else out.appendChild(NB.el('div', { 'class': 'nb-md', html: NB.markdown(cell.output != null ? cell.output : cell.content) }));
+          shown++;
+        } else if (cell.kind === 'sql' && cell.charts && cell.charts.length) {
+          queryTabs(cell, out);
           shown++;
         } else if (cell.kind === 'sql') {
           if (cell.error) { out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error })); shown++; }
@@ -158,13 +177,15 @@
   function onSelect(name, value) {
     var type = '';
     current.forEach(function (c) {
-      var r = c.chart && c.chart.render;
-      if (r && r.selection && r.selection.as === name) {
-        (r.layers || []).forEach(function (l) {
-          var e = l.encoding[(r.selection.channels || ['x'])[0]];
-          if (e && e.type === 'temporal') type = 'TIMESTAMP';
-        });
-      }
+      (c.chart ? [c.chart] : []).concat(c.charts || []).forEach(function (chart) {
+        var r = chart && chart.render;
+        if (r && r.selection && r.selection.as === name) {
+          (r.layers || []).forEach(function (l) {
+            var e = l.encoding[(r.selection.channels || ['x'])[0]];
+            if (e && e.type === 'temporal') type = 'TIMESTAMP';
+          });
+        }
+      });
     });
     selected[name] = value;
     wasm.query('SET VARIABLE "' + name.replace(/"/g, '""') + '" = ' + literal(value, type)).then(refresh);
@@ -173,7 +194,8 @@
   function refresh() {
     var jobs = current.map(function (cell) {
       if (cell.kind === 'sql' && cell.display_sql) {
-        return wasm.query('SELECT * FROM (' + cell.display_sql + ') LIMIT ' + Math.max(100, +option(cell, 'rows', 0))).then(function (t) { cell.table = t; cell.error = null; }, function (e) { cell.error = String(e.message || e); });
+        var table = wasm.query('SELECT * FROM (' + cell.display_sql + ') LIMIT ' + Math.max(100, +option(cell, 'rows', 0))).then(function (t) { cell.table = t; cell.error = null; }, function (e) { cell.error = String(e.message || e); });
+        return Promise.all([table].concat((cell.charts || []).map(redrawChart)));
       }
       if (cell.kind === 'markdown' && cell.expressions && cell.expressions.length) {
         return Promise.all(cell.expressions.map(function (x) { return wasm.query('SELECT (' + x.sql + ')'); })).then(function (results) {
@@ -187,12 +209,15 @@
           cell.error = null;
         }, function (e) { cell.error = String(e.message || e); });
       }
-      if (cell.kind === 'chart' && cell.chart && cell.chart.queries) {
-        return Promise.all(cell.chart.queries.map(function (q) { return wasm.query(q); })).then(function (sets) { cell.chart.datasets = sets; cell.chart.error = null; }, function (e) { cell.chart.error = String(e.message || e); });
-      }
+      if (cell.kind === 'chart' && cell.chart) return redrawChart(cell.chart);
       return null;
     });
     return Promise.all(jobs).then(render);
+  }
+
+  function redrawChart(chart) {
+    if (!chart || !chart.queries) return null;
+    return Promise.all(chart.queries.map(function (q) { return wasm.query(q); })).then(function (sets) { chart.datasets = sets; chart.error = null; }, function (e) { chart.error = String(e.message || e); });
   }
 
   function bootWasm() {

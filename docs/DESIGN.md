@@ -74,9 +74,7 @@ SELECT date_trunc('month', ts) AS month, sum(amount) AS revenue
 FROM orders
 WHERE region = $region
 GROUP BY ALL;
-
--- %% chart from=monthly
-/*
+/* chart
 mark: line
 x: month
 y: revenue
@@ -86,6 +84,8 @@ y: revenue
 - **Markers are comments.** `-- %%` starts a cell; prose and chart specs sit in block comments. DuckDB,
   sqlfluff and any editor see a normal SQL file.
 - **A named query cell is a view.** `monthly` above can be queried by any later cell.
+- **A query's output is a table until it is given charts.** Chart specs written after the query are
+  views of its result, shown as tabs (§14).
 - **Parameters are DuckDB variables.** An input cell is a real `SET VARIABLE` statement, and `$region`
   reads it. This needs no templating layer: `$name` is DuckDB 2.0's documented shorthand for
   `getvariable('name')`. Notebooks therefore need DuckDB 2.0 or later.
@@ -116,7 +116,7 @@ the extension writes an expanded script with the wrappers spelled out
 
 | Cell | Defines | Reads |
 |---|---|---|
-| Query cell | Its own name | Tables, views and variables in its SQL |
+| Query cell | Its own name; its charts' selection variables | Tables, views and variables in its SQL; its charts' `filter` selections (no dependency) |
 | Effect cell | Objects it creates or attaches; variables it sets | Same |
 | Input | Its variable | The `from=` cell, if any |
 | Chart | Its selection variable, if any | `from`, `filter`, fields |
@@ -190,7 +190,7 @@ or CI job with no browser.
 
 | Function | Purpose | State |
 |---|---|---|
-| `notebook_cells(path)` | One row per cell: kind, name, options, body, variables read, `defines`, `reads`, `depends_on`, errors and warnings | Built |
+| `notebook_cells(path)` | One row per cell: kind, name, options, body, chart specs, variables read, `defines`, `reads`, `depends_on`, errors and warnings | Built |
 | `notebook_sql(path)` | The notebook as a plain SQL script (the `sql` export) | Built |
 | `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count, timing and rendered markdown | Built |
 | `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook | Built |
@@ -243,8 +243,9 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 - Prose, chart, input and metadata cells show their result and keep their source behind an "edit"
   line (or a double-click on prose); SQL cells show their code.
 - Catalog browser for attached databases, with click and drag to insert.
-- Chart switcher under every named result: pick a mark and columns, or take the suggested chart, and
-  it is written into the file as a chart cell.
+- A query's charts as tabs over its result, with the table last. A chart picker under the table (or
+  "+ chart") writes a new `/* chart */` comment into the cell; "edit chart spec" opens a chart's spec,
+  and Shift+Enter redraws it without running the query.
 - Graph view of cells, showing stale and failed cells.
 - Editing view (cells with code) and reading view (code hidden, grid layout via `span`).
 - **Two-way file sync.** Saving writes the `.sql` file; an edit made in another editor or by an agent
@@ -308,10 +309,10 @@ private `ui.db`; using the user's own database and the plain-text format is what
 
 ### Principle: the extension writes the query, the browser draws the result
 
-A chart cell is a short YAML spec ([FORMAT.md §5](FORMAT.md#5-chart-cells)). The extension compiles
-it into two things:
+A chart is a short YAML spec ([FORMAT.md §5](FORMAT.md#5-charts)), written at the end of a query cell
+or as a chart cell. The extension compiles it into two things:
 
-1. **A data query**: one aggregate SQL statement over the cell's `from` relation. Grouping, binning,
+1. **A data query**: one aggregate SQL statement over the relation the chart draws. Grouping, binning,
    time truncation and downsampling all happen in DuckDB.
 2. **A render description**: marks, scales and axes for the browser, referring to the query's columns.
 
@@ -360,8 +361,8 @@ libraries remain the upgrade path for richer interaction (zoom, GPU-scale networ
 ### Building charts
 
 - **Chart switcher under every result**, as in Zeppelin: pick a chart type and columns for its
-  channels. The difference is that the result is written into the file as a chart cell, so a chart
-  made by clicking is reviewable and editable as text.
+  channels. The difference is that the result is written into the file as a `/* chart */` comment in
+  the query's cell, so a chart made by clicking is reviewable and editable as text.
 - **Suggested chart** from the result's column types: one time column and one number gives a line; one
   category and one number, a bar; two numbers, a scatter or a binned heatmap when large; a single
   value, a KPI tile; a geometry or latitude/longitude pair, a map.
@@ -681,3 +682,29 @@ Arrow hands decimals over unscaled, and bundlers rename Arrow's classes, so the 
   and the Markdown export strips them. `notebook_run` output is unchanged.
 - **SVG attributes do not resolve CSS variables.** Hand-drawn ink is `currentColor`, with the colour
   set in CSS, so themes reach it.
+
+## 14. Charts belong to their query
+
+The first design made every chart a cell of its own, `-- %% chart from=<cell>`. In use, that meant
+naming a query only so a chart could find it, and keeping two cells in step for one idea. Now a query
+cell can end with `/* chart */` comments: the query says what data is fetched, the charts how it is
+shown, and the table remains as the last tab. Chart cells stay for a chart of another cell or of a
+table, and every existing notebook still parses.
+
+- **The file is still plain SQL.** A chart is a block comment after the last statement, so DuckDB
+  ignores it and `notebook_sql` leaves it out. The parser takes the comments off the body (`Cell::sql`
+  is what runs, `Cell::charts` the specs), and the editor rebuilds the body from the two when either
+  changes.
+- **One relation for every chart.** `ChartFrom` gives the relation a cell's charts read: a chart cell's
+  `from`, a named cell's view, or an unnamed cell's query in parentheses. The compiler and the runner
+  treat chart cells and query charts alike, so `notebook_chart_query`, exports and DuckDB-WASM needed
+  no new chart code.
+- **Redraw without re-running.** Editing a spec, or a selection that only a cell's charts filter on,
+  redraws that cell's charts (`/api/run` with `redraw`); its query and the cells below it do not run.
+- **Selections without cycles.** An overview chart that selects and a detail chart that filters on the
+  same query used to be two chart cells reading one view. As charts of one cell, or of cells in either
+  order, a filter must not become a dependency, or the pair would form a cycle or a forward reference.
+  A query cell's chart filters are therefore listed in `reads` but add no edge to `depends_on`. The
+  one thing ruled out is a cell's SQL reading its own chart's selection.
+- **A failing chart keeps its result.** The query ran, so its rows and row count stay; the cell is
+  reported as an error with the chart's message, which shows in that chart's tab.

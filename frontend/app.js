@@ -34,9 +34,12 @@ var App = (function () {
   A.merge = function (analysis) {
     analysis.forEach(function (a, i) {
       var c = A.cells[i] || (A.cells[i] = { state: 'stale' });
-      ['idx', 'kind', 'name', 'widget', 'options', 'is_query', 'defines', 'reads', 'depends_on', 'errors', 'warnings', 'content', 'start_line'].forEach(function (k) { c[k] = a[k]; });
+      ['idx', 'kind', 'name', 'widget', 'options', 'is_query', 'variables', 'defines', 'reads', 'depends_on', 'errors', 'warnings', 'content', 'start_line'].forEach(function (k) { c[k] = a[k]; });
       if (c.head === undefined) c.head = a.head;
-      if (c.body === undefined) c.body = a.body;
+      if (c.body === undefined) { c.body = a.body; c.sql = a.sql; c.specs = (a.chart_specs || []).slice(); }
+      // A query cell is edited as its SQL plus its chart specs; the body is rebuilt from them.
+      if (c.kind === 'sql' && c.sql === undefined) { c.sql = c.body || ''; c.specs = []; }
+      if (c.kind === 'chart') c.specs = (a.chart_specs || []).slice();
     });
     A.cells.length = analysis.length;
   };
@@ -51,6 +54,13 @@ var App = (function () {
     $('source').textContent = A.source;
     document.title = (data.title || A.source) + ' · DuckDB Notebook';
     A.render();
+  };
+
+  // A query cell's body: its SQL, then one /* chart */ comment per chart.
+  A.compose = function (cell) {
+    cell.body = (cell.sql || '').replace(/\s+$/, '') + (cell.specs || []).map(function (spec) {
+      return '\n\n/* chart\n' + spec.replace(/\s+$/, '') + '\n*/';
+    }).join('');
   };
 
   A.analyse = function () {
@@ -89,19 +99,25 @@ var App = (function () {
   };
 
   // ---- Running ------------------------------------------------------------------------------
-  A.run = function (indexes) {
+  // Runs cells (all of them without indexes). Cells in redraw only draw their charts again.
+  A.run = function (indexes, redraw) {
     if (A.running) return Promise.resolve();
     A.running = true;
     $('interrupt').hidden = false;
-    (indexes || A.cells.map(function (_, i) { return i; })).forEach(function (i) { if (A.cells[i]) A.cells[i].state = 'running'; });
+    (indexes || A.cells.map(function (_, i) { return i; })).concat(redraw || []).forEach(function (i) { if (A.cells[i]) A.cells[i].state = 'running'; });
     A.render();
     A.status('Running…');
     var started = performance.now();
-    return A.api('POST', '/api/run', { text: A.text(), cells: indexes || null, page_rows: A.pageSize }).then(function (r) {
+    return A.api('POST', '/api/run', { text: A.text(), cells: indexes || null, redraw: redraw || [], page_rows: A.pageSize }).then(function (r) {
       A.merge(r.cells);
       r.results.forEach(function (res) {
         var c = A.cells[res.idx];
         if (!c) return;
+        if (res.redraw) {
+          c.result = Object.assign({}, c.result, { charts: res.charts, status: res.status, error: res.error });
+          c.state = res.status === 'error' ? 'failed' : 'fresh';
+          return;
+        }
         c.result = res;
         c.offset = 0;
         if (res.choices) c.choices = res.choices;
@@ -120,6 +136,13 @@ var App = (function () {
     });
   };
 
+  // Draws a query cell's charts again without running its SQL, once it has run.
+  A.redraw = function (cell) {
+    var r = cell.result;
+    if (!r || !r.data || cell.state === 'stale') return A.runCell(cell);
+    return A.run([], [A.cells.indexOf(cell)]);
+  };
+
   A.runCell = function (cell) {
     var i = A.cells.indexOf(cell), list = [i];
     if (A.autorun) A.downstream([i]).forEach(function (j) { if (A.isAuto(A.cells[j])) list.push(j); });
@@ -128,11 +151,18 @@ var App = (function () {
 
   A.setVariable = function (name, value, cell) {
     return A.api('POST', '/api/variable', { name: name, value: value, cell: cell.idx }).then(function () {
-      var readers = A.readers(name), list = readers.concat(A.downstream(readers));
+      // A query cell whose SQL does not read the variable only filters its charts on it: redraw them.
+      var readers = A.readers(name), redraw = readers.filter(function (j) {
+        var c = A.cells[j];
+        return c.kind === 'sql' && (c.variables || []).indexOf(name) < 0;
+      });
+      var full = readers.filter(function (j) { return redraw.indexOf(j) < 0; });
+      var list = full.concat(A.downstream(full));
       list.forEach(function (j) { A.cells[j].state = 'stale'; });
+      redraw = redraw.filter(function (j) { return list.indexOf(j) < 0 && A.cells[j].result && A.cells[j].result.data; });
       var auto = list.filter(function (j) { return A.isAuto(A.cells[j]); });
       auto = auto.filter(function (j, k) { return auto.indexOf(j) === k; }).sort(function (a, b) { return a - b; });
-      if (A.autorun && auto.length) return A.run(auto);
+      if (A.autorun && (auto.length || redraw.length)) return A.run(auto, redraw);
       A.render();
     }).catch(function (e) { A.status(e.message); });
   };
@@ -191,26 +221,60 @@ var App = (function () {
     return NB.el('div', { 'class': 'nb-add' }, [
       NB.el('button', { text: '+ SQL', onclick: add('', '') }),
       NB.el('button', { text: '+ Markdown', onclick: add('[markdown]', '/*\n\n*/') }),
-      NB.el('button', { text: '+ Input', onclick: add('input value number', 'SET VARIABLE value = 0;') }),
-      NB.el('button', { text: '+ Chart', onclick: add('chart from=', '/*\nmark: bar\nx:\ny:\n*/') })
+      NB.el('button', { text: '+ Input', onclick: add('input value number', 'SET VARIABLE value = 0;') })
     ]);
   }
 
-  function codeArea(cell, rows) {
-    var ta = NB.el('textarea', { 'class': 'nb-code', spellcheck: 'false', rows: rows || Math.min(24, Math.max(2, (cell.body || '').split('\n').length + 1)) });
-    ta.value = cell.body || '';
-    ta.addEventListener('input', function () { cell.body = ta.value; A.edited(cell); });
+  // A text area over part of a cell. The default edits the body; a query cell's SQL and its chart
+  // specs pass their own get/set, and run with their own action.
+  function codeArea(cell, part) {
+    part = part || {
+      get: function () { return cell.kind === 'sql' ? cell.sql : cell.body; },
+      set: function (v) { if (cell.kind === 'sql') { cell.sql = v; A.compose(cell); } else cell.body = v; A.edited(cell); },
+      run: function () { A.runCell(cell); }
+    };
+    var text = part.get() || '';
+    var ta = NB.el('textarea', { 'class': 'nb-code' + (part.className ? ' ' + part.className : ''), spellcheck: 'false', rows: Math.min(24, Math.max(2, text.split('\n').length + 1)) });
+    ta.value = text;
+    ta.addEventListener('input', function () { part.set(ta.value); });
     ta.addEventListener('keydown', function (e) {
-      if ((e.shiftKey || e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); A.runCell(cell); }
+      if ((e.shiftKey || e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); part.run(); }
       else if (e.key === 'Tab' && !e.shiftKey) {
         e.preventDefault();
         var s0 = ta.selectionStart;
         ta.setRangeText('    ', s0, ta.selectionEnd, 'end');
-        cell.body = ta.value; A.edited(cell);
+        part.set(ta.value);
       } else if (e.ctrlKey && e.key === ' ' && window.AppExtra) { e.preventDefault(); AppExtra.complete(ta, cell); }
     });
     return ta;
   }
+
+  // A chart spec of a query cell was edited: only that cell's charts need drawing again.
+  A.specEdited = function (cell) {
+    A.compose(cell);
+    A.dirty = true;
+    clearTimeout(analyseTimer);
+    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 500);
+    A.status('Unsaved changes');
+  };
+
+  A.addChart = function (cell, spec) {
+    cell.specs = (cell.specs || []).concat([spec]);
+    cell.tab = cell.specs.length - 1;
+    cell.editingChart = false;
+    cell.picking = false;
+    A.specEdited(cell);
+    clearTimeout(analyseTimer);
+    return A.analyse().then(function () { return A.redraw(cell); });
+  };
+
+  A.removeChart = function (cell, k) {
+    cell.specs.splice(k, 1);
+    if (cell.result && cell.result.charts) cell.result.charts.splice(k, 1);
+    cell.tab = Math.min(cell.tab || 0, cell.specs.length);
+    A.specEdited(cell);
+    A.render();
+  };
 
   function messages(cell) {
     var box = NB.el('div', { 'class': 'nb-meta' });
@@ -229,29 +293,71 @@ var App = (function () {
 
   function output(cell) {
     var out = NB.el('div', { 'class': 'nb-output' }), r = cell.result || {};
-    if (r.status === 'error') { out.appendChild(NB.el('div', { 'class': 'nb-error', text: r.error })); return out; }
+    // A query whose chart failed still shows its result; the chart's tab shows the error.
+    if (r.status === 'error' && !(cell.kind === 'sql' && r.data)) { out.appendChild(NB.el('div', { 'class': 'nb-error', text: r.error })); return out; }
     if (cell.kind === 'markdown') {
       // Before a run, {{ expressions }} show as code rather than as half-rendered markdown.
       var text = r.output != null ? r.output : (cell.content || '').replace(/\{\{([\s\S]*?)\}\}/g, function (_, e) { return '`' + e.trim() + '`'; });
       out.appendChild(NB.el('div', { 'class': 'nb-md', html: NB.markdown(text) }));
     } else if (cell.kind === 'chart' && r.data) {
       NB.chart(out, r.data, { selected: A.selected, onSelect: function (name, value) { A.selected[name] = value; A.setVariable(name, value, cell); } });
-    } else if (cell.kind === 'sql' && r.data) {
+    } else if (cell.kind === 'sql') {
+      queryOutput(cell, out);
+    }
+    return out;
+  }
+
+  // A query's output: its table, or tabs for its charts with the table last. Without charts, the
+  // table and the chart picker that starts one.
+  function queryOutput(cell, out) {
+    var r = cell.result || {}, specs = cell.specs || [];
+    var tab = specs.length ? Math.min(cell.tab || 0, specs.length) : specs.length;
+    if (specs.length) {
+      var items = specs.map(function (_, k) {
+        var chart = (r.charts || [])[k];
+        return { label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) };
+      }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+      out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; A.render(); },
+        [NB.el('button', { 'class': 'nb-tab nb-tab-add nb-hide-reading', text: '+ chart', title: 'Add a chart of this result', onclick: function () { cell.tab = specs.length; cell.picking = true; A.render(); } })]));
+    }
+    if (tab < specs.length) {
+      var holder = NB.el('div', { 'class': 'nb-tab-body' });
+      out.appendChild(holder);
+      var chart = (r.charts || [])[tab];
+      if (chart) NB.chart(holder, chart, { selected: A.selected, seed: 'cell' + cell.idx + '/' + tab, inTab: true, onSelect: function (name, value) { A.selected[name] = value; A.setVariable(name, value, cell); } });
+      else holder.appendChild(NB.el('div', { 'class': 'nb-stub', text: 'Not drawn yet: run the cell (Shift+Enter).' }));
+      if (!A.reading) {
+        out.appendChild(stub((cell.editingChart ? '▾ ' : '▸ edit ') + 'chart spec', function () { cell.editingChart = !cell.editingChart; A.render(); }));
+        if (cell.editingChart) {
+          var k = tab;
+          out.appendChild(NB.el('div', { 'class': 'nb-code-area nb-spec-area' }, [
+            codeArea(cell, { className: 'nb-spec', get: function () { return specs[k]; }, set: function (v) { specs[k] = v; A.specEdited(cell); }, run: function () { A.redraw(cell); } }),
+            NB.el('div', { 'class': 'nb-spec-actions' }, [
+              NB.el('button', { text: '▶ Draw', title: 'Draw this chart again (Shift+Enter)', onclick: function () { A.redraw(cell); } }),
+              NB.el('button', { text: 'Remove chart', onclick: function () { A.removeChart(cell, k); } })
+            ])
+          ]));
+        }
+      }
+      return;
+    }
+    if (r.data) {
       var size = +((cell.options && cell.options.rows) || A.pageSize);
       var fetchPage = function (offset, limit) {
         return A.api('GET', '/api/page?cell=' + cell.idx + '&offset=' + offset + '&limit=' + limit).then(function (data) {
           cell.offset = offset; data.total = r.data.total; r.data = data; A.render();
         }).catch(function (e) { A.status(e.message); });
       };
-      NB.table(out, r.data, {
+      var grid = NB.el('div', { 'class': 'nb-tab-body' });
+      out.appendChild(grid);
+      NB.table(grid, r.data, {
         offset: cell.offset || 0, pageSize: size,
         onPage: fetchPage,
         // The page size is part of the notebook: it is written to the cell as rows=N.
         onPageSize: function (next) { A.setOption(cell, 'rows', next); fetchPage(0, next); }
       });
-      if (window.AppExtra) out.appendChild(AppExtra.switcher(cell, r.data.columns));
+      if (window.AppExtra && (!specs.length || cell.picking)) out.appendChild(AppExtra.switcher(cell, r.data.columns));
     }
-    return out;
   }
 
   function inputCell(cell) {

@@ -302,5 +302,25 @@ var NB = (function () {
     return 'type: table';
   };
 
+  // A short name for a chart: its title, else its mark or type.
+  NB.chartLabel = function (chart, k) {
+    var r = (chart && chart.render) || {};
+    if (r.title) return r.title;
+    var layer = (r.layers || [])[0];
+    if (r.kind === 'grammar' && layer) return layer.from_mark || layer.mark;
+    return r.kind || 'chart ' + (k + 1);
+  };
+
+  // A row of tabs. items: [{label, title}]; extra: elements appended after the tabs.
+  NB.tabs = function (items, active, onPick, extra) {
+    var bar = NB.el('div', { 'class': 'nb-tabs', role: 'tablist' });
+    items.forEach(function (item, k) {
+      bar.appendChild(NB.el('button', { 'class': 'nb-tab' + (k === active ? ' on' : ''), role: 'tab', 'aria-selected': k === active ? 'true' : 'false',
+        text: item.label, title: item.title || item.label, onclick: function () { onPick(k); } }));
+    });
+    (extra || []).forEach(function (e) { bar.appendChild(e); });
+    return bar;
+  };
+
   return NB;
 })();
