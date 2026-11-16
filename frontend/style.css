@@ -242,4 +242,5 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
 .nb-tip-key { color: var(--nb-muted); }
 .nb-tip-key::after { content: ':'; }
 .nb-hover-dot { pointer-events: none; }
+.nb-hover-band { pointer-events: none; fill: var(--nb-mark); opacity: .35; }
 @media print { .nb-tip { display: none !important; } }

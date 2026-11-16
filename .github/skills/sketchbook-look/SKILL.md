@@ -56,6 +56,9 @@ both anyway.
   `SKETCH_LIMIT` (and the network limits, 300 nodes and 400 edges) for anything that can be large.
 - **Outlines** (`Sketch.outline`) draw an SVG behind an element at its measured size and redraw on
   resize; the element needs `isolation: isolate` (class `sk-box`) and the SVG sits at `z-index: -1`.
+- **Hover needs area, not ink.** Hatching leaves gaps; filled `Sketch` shapes add an invisible
+  `.sk-hit` path underneath so the whole shape answers. Measure shapes by `.sk-hit`, not the group:
+  a group's bounding box includes hatch lines the clip path hides.
 - **`getBBox` fails on detached SVG**: compute geometry from data, or hatch across the whole viewBox as
   `render-typed.js` does.
 - **`NB.table` and `NB.chart` clear their container.** Give each its own holder element when other

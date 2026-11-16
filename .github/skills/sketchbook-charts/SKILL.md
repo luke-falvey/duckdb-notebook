@@ -123,8 +123,9 @@ WHERE $picked_months IS NULL OR day BETWEEN $picked_months.lo AND $picked_months
 ## Hover values
 
 Pointing at a mark shows its channels' values (formatted with each channel's `format` and named by its
-`title`), plus any `tooltip:` fields. On lines and areas the nearest point answers, so give channels
-readable `title`s and `format`s: they are what the reader sees there.
+`title`), plus any `tooltip:` fields. On lines and areas the nearest point answers, and a bar answers
+anywhere in its column, so give channels readable `title`s and `format`s: they are what the reader
+sees there. Dates truncated with `timeunit` read in that unit ("Jun 2026").
 
 ## Large data
 

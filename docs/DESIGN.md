@@ -245,7 +245,10 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
   table's chart picker stays behind a "+ chart" button until asked for.
 - Hover values: pointing at a mark shows its values in a paper note by the pointer, in the editor and
   in exports. On line and area charts the nearest point anywhere along the line answers, marked with a
-  dot, even under a brush. Re-rendering
+  dot, even under a brush; a bar answers anywhere in its column (its row, when horizontal), which is
+  highlighted. Hatched shapes carry an invisible hit area, so the gaps between hatch lines count.
+  Bars on a continuous x (months on a date axis) are as wide as the spacing allows, and the axis is
+  padded so the first and last are too. Re-rendering
   keeps the scroll position, so changing an input or brushing a chart does not move the page.
 - Code and output switches in every cell header write `hide=` to the cell. While editing, a hidden
   part collapses to a line that reveals it; reading view and exports leave it out.

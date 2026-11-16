@@ -251,7 +251,9 @@
     var lines = [];
     ['x', 'y', 'color', 'size', 'text'].forEach(function (c) {
       var e = layer.encoding[c];
-      if (e && e.column && row[e.column] !== undefined) lines.push((e.title || c) + ': ' + (e.type === 'temporal' ? NB.formatDate(row[e.column]) : NB.formatValue(row[e.column], '', e.format)));
+      // Truncated dates read as their unit: a month bar says "Jun 2026", not its first day.
+      var unit = { year: 'year', quarter: 'month', month: 'month', week: 'day', date: 'day' }[e && e.timeunit];
+      if (e && e.column && row[e.column] !== undefined) lines.push((e.title || c) + ': ' + (e.type === 'temporal' ? NB.formatDate(row[e.column], unit) : NB.formatValue(row[e.column], '', e.format)));
     });
     (layer.tooltip || []).forEach(function (e) { lines.push((e.title || e.column) + ': ' + NB.formatValue(row[e.column], '', e.format)); });
     if (layer.binned && row.count != null) lines.push('rows: ' + NB.formatNumber(row.count, ','));
@@ -309,6 +311,14 @@
     } else if (kind === 'bar') {
       var horizontal = y.kind === 'band' && x.kind !== 'band';
       var stack = {};
+      // Bars on a continuous x (months on a date axis) are as wide as the gap to their neighbours allows.
+      var slot = 4;
+      if (!horizontal && x.kind !== 'band' && !ex.end) {
+        var xs = rows.map(function (r) { return x(numeric(r[ex.column], ex.type)); }).filter(isFinite).sort(function (a, b) { return a - b; });
+        var gap = Infinity;
+        for (var i = 1; i < xs.length; i++) if (xs[i] - xs[i - 1] > 0.5) gap = Math.min(gap, xs[i] - xs[i - 1]);
+        slot = isFinite(gap) ? Math.max(3, Math.min(64, gap * 0.75)) : 24;
+      }
       rows.forEach(function (r) {
         var c = colorOf(r), bx, by, bw, bh;
         if (horizontal) {
@@ -322,13 +332,20 @@
           var y0 = y(st), y1 = y(st + vy);
           bx = x(r[ex.column]); by = Math.min(y0, y1); bw = x.bandwidth; bh = Math.abs(y1 - y0);
         } else {
-          var a = x(numeric(r[ex.column], ex.type)), b = ex.end ? x(numeric(r[ex.end], ex.type)) : a + 4;
+          var a = x(numeric(r[ex.column], ex.type)), b = ex.end ? x(numeric(r[ex.end], ex.type)) : a + slot / 2;
+          if (!ex.end) a -= slot / 2;
           var yy = y(numeric(r[ey.column], ey.type)), zero = y(0);
           bx = Math.min(a, b) + 0.5; by = Math.min(yy, zero); bw = Math.max(1, Math.abs(b - a) - 1); bh = Math.abs(zero - yy);
+          if (!ex.end) { var right = Math.min(w, bx + bw); bx = Math.max(0, bx); bw = Math.max(1, right - bx); }
         }
         if (!isFinite(bx) || !isFinite(by)) return;
+        // A bar answers hover anywhere in its column (its row, for horizontal bars), so short bars
+        // need no aim. See hoverPoints.
+        if (g.__bars) g.__bars.push({ x0: bx, x1: bx + bw, y0: by, y1: by + bh, horizontal: horizontal, text: tipText(layer, r), color: c });
         var el = plain ? s('rect', { x: bx, y: by, width: bw, height: bh, fill: fillOf(c), stroke: c }, g)
-          : Sketch.rect(g, bx, by, bw, bh, { stroke: c, fill: fillOf(c), width: 1.3, gap: Math.max(4, Math.min(7, bw / 4)) });
+          : Sketch.rect(g, bx, by, bw, bh, { stroke: c, fill: fillOf(c), width: 1.3, gap: Math.max(4, Math.min(7, bw / 4)),
+            // Narrow bars scribble when drawn twice with full wobble: one calmer stroke.
+            rough: bw < 14 ? 0.4 : 1, double: bw >= 14 });
         mark(el, layer, r);
       });
     } else if (kind === 'point' || kind === 'tick' || kind === 'text') {
@@ -391,26 +408,55 @@
 
   // Lines are thin targets: hovering anywhere over the plot shows the values of the nearest line point,
   // nearest in x first, marked with a dot. NB.tip calls svg.__nbHover.
-  function hoverPoints(svgEl, g, points, w, h) {
-    if (!points.length) return;
+  function hoverPoints(svgEl, g, points, bars, w, h) {
+    if (!points.length && !bars.length) return;
+    var band = s('rect', { 'class': 'nb-hover-band', visibility: 'hidden' }, g);
+    g.insertBefore(band, g.firstChild);
     var dot = s('circle', { r: 5, 'class': 'nb-hover-dot', fill: 'none', 'stroke-width': 2, visibility: 'hidden' }, g);
+    // The bar whose column (or row) holds the pointer: the one under it, else the nearest.
+    function barAt(p) {
+      var best = null, bestD = Infinity;
+      bars.forEach(function (b) {
+        var inBand = b.horizontal ? p.y >= b.y0 - 1 && p.y <= b.y1 + 1 : p.x >= b.x0 - 1 && p.x <= b.x1 + 1;
+        if (!inBand) return;
+        var d = b.horizontal ? (p.x < b.x0 ? b.x0 - p.x : p.x > b.x1 ? p.x - b.x1 : 0) : (p.y < b.y0 ? b.y0 - p.y : p.y > b.y1 ? p.y - b.y1 : 0);
+        if (d < bestD) { bestD = d; best = b; }
+      });
+      if (best) return best;
+      // Between bars: the nearest one across, within reach.
+      bars.forEach(function (b) {
+        var d = b.horizontal ? Math.max(b.y0 - p.y, p.y - b.y1) : Math.max(b.x0 - p.x, p.x - b.x1);
+        if (d < bestD && d < 40) { bestD = d; best = b; }
+      });
+      return best;
+    }
+    function off() { dot.setAttribute('visibility', 'hidden'); band.setAttribute('visibility', 'hidden'); return null; }
     svgEl.__nbHover = function (clientX, clientY) {
       var m = g.getScreenCTM();
       if (!m) return null;
       var pt = svgEl.createSVGPoint();
       pt.x = clientX; pt.y = clientY;
       var p = pt.matrixTransform(m.inverse()), best = null, bestD = Infinity;
-      if (p.x < -4 || p.x > w + 4 || p.y < -4 || p.y > h + 4) { dot.setAttribute('visibility', 'hidden'); return null; }
+      if (p.x < -4 || p.x > w + 4 || p.y < -4 || p.y > h + 4) return off();
+      var bar = bars.length ? barAt(p) : null;
+      if (bar) {
+        dot.setAttribute('visibility', 'hidden');
+        if (bar.horizontal) { band.setAttribute('x', 0); band.setAttribute('width', w); band.setAttribute('y', bar.y0); band.setAttribute('height', bar.y1 - bar.y0); }
+        else { band.setAttribute('x', bar.x0); band.setAttribute('width', bar.x1 - bar.x0); band.setAttribute('y', 0); band.setAttribute('height', h); }
+        band.setAttribute('visibility', 'visible');
+        return bar.text;
+      }
+      band.setAttribute('visibility', 'hidden');
       points.forEach(function (q) {
         var d = Math.abs(q.x - p.x) * 4 + Math.abs(q.y - p.y);
         if (d < bestD) { bestD = d; best = q; }
       });
-      if (!best) { dot.setAttribute('visibility', 'hidden'); return null; }
+      if (!best) return off();
       dot.setAttribute('cx', best.x); dot.setAttribute('cy', best.y); dot.setAttribute('stroke', best.color);
       dot.setAttribute('visibility', 'visible');
       return best.text;
     };
-    svgEl.__nbLeave = function () { dot.setAttribute('visibility', 'hidden'); };
+    svgEl.__nbLeave = off;
   }
 
   function arcChart(svgEl, layer, color, w, h) {
@@ -538,7 +584,25 @@
       for (var k in sums) out.push(sums[k]);
       return out;
     };
-    var x = makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars);
+    // Bars on a continuous x are centred on their value: pad the axis by half the smallest gap so the
+    // first and last bars are as wide as the rest.
+    var padForBars = function (sc, width) {
+      if (!sc || sc.kind === 'band' || horizontalBars) return sc;
+      var vals = [];
+      allLayers.forEach(function (l) {
+        var e = l.encoding.x;
+        if (l.mark === 'bar' && e && e.column && !e.end) l.rows.forEach(function (r) { vals.push(numeric(r[e.column], e.type)); });
+      });
+      vals = vals.filter(isFinite).sort(function (a, b) { return a - b; });
+      var gap = Infinity;
+      for (var i = 1; i < vals.length; i++) if (vals[i] > vals[i - 1]) gap = Math.min(gap, vals[i] - vals[i - 1]);
+      if (!vals.length || !isFinite(gap)) return sc;
+      var lo = vals[0] - gap / 2, hi = vals[vals.length - 1] + gap / 2;
+      var padded = sc.enc && sc.enc.type === 'temporal' ? time([lo, hi], [0, width]) : linear([lo, hi], [0, width], false);
+      padded.enc = sc.enc;
+      return padded;
+    };
+    var x = padForBars(makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars), w);
     var y = makeScale(allLayers, 'y', [h, 0], hasBars && !horizontalBars);
     if (y && y.kind === 'linear' && x && x.kind === 'band' && hasBars) {
       var sums = stackTotals('y', 'x');
@@ -552,7 +616,7 @@
       if (need > left) {
         left = need;
         w = panelW - left - M.right;
-        x = makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars);
+        x = padForBars(makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars), w);
       }
     }
     if (x && x.kind === 'linear' && y && y.kind === 'band' && hasBars) {
@@ -580,6 +644,7 @@
         axis(g, y, 'left', w, h, y && y.enc && y.enc.title, left);
         var plot = s('g', { 'class': 'nb-plot' }, g);
         plot.__points = [];
+        plot.__bars = [];
         allLayers.forEach(function (l) {
           var rows = l.rows.filter(function (r) {
             return (fr === null || key(r.facet_row) === key(fr)) && (fc === null || key(r.facet_col) === key(fc));
@@ -589,7 +654,7 @@
         var sel = render.selection;
         if (sel && sel.type === 'interval') brush(g, sel, x, y, w, h, opts);
         if (sel && sel.type === 'point') pointSelect(svgEl, sel, allLayers, opts);
-        hoverPoints(svgEl, g, plot.__points, w, h);
+        hoverPoints(svgEl, g, plot.__points, plot.__bars, w, h);
         grid.appendChild(panel);
       });
     });

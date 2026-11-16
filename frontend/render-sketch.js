@@ -51,6 +51,12 @@ var Sketch = (function () {
     };
   }
 
+  // Hatching leaves gaps the pointer falls through; an invisible copy of a filled shape underneath
+  // makes all of it answer hover and clicks.
+  function hit(g, d) {
+    S.el('path', { d: d, fill: 'transparent', stroke: 'none', 'class': 'sk-hit' }, g);
+  }
+
   function path(parent, d, o) {
     return S.el('path', {
       d: d, fill: 'none', stroke: o.stroke, 'stroke-width': o.width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
@@ -97,7 +103,11 @@ var Sketch = (function () {
     var g = S.el('g', {}, parent);
     if (w < 0) { x += w; w = -w; }
     if (h < 0) { y += h; h = -h; }
-    if (o.fill) S.fill(g, 'M' + x + ',' + y + 'h' + w + 'v' + h + 'h' + -w + 'Z', { x: x, y: y, w: w, h: h }, o);
+    if (o.fill) {
+      var area = 'M' + x + ',' + y + 'h' + w + 'v' + h + 'h' + -w + 'Z';
+      hit(g, area);
+      S.fill(g, area, { x: x, y: y, w: w, h: h }, o);
+    }
     if (o.stroke !== 'none' && w > 0.5 && h > 0.5) {
       var d = '', ov = Math.min(3, w / 6, h / 6);
       for (var pass = 0; pass < (o.double ? 2 : 1); pass++) {
@@ -147,7 +157,7 @@ var Sketch = (function () {
     o = opts(o);
     var g = S.el('g', {}, parent);
     var shape = 'M' + (cx - rx) + ',' + cy + 'a' + rx + ',' + ry + ' 0 1,0 ' + 2 * rx + ',0a' + rx + ',' + ry + ' 0 1,0 ' + -2 * rx + ',0';
-    if (o.fill) S.fill(g, shape, { x: cx - rx, y: cy - ry, w: 2 * rx, h: 2 * ry }, o);
+    if (o.fill) { hit(g, shape); S.fill(g, shape, { x: cx - rx, y: cy - ry, w: 2 * rx, h: 2 * ry }, o); }
     if (o.stroke === 'none') return g;
     var d = '';
     for (var pass = 0; pass < (o.double ? 2 : 1); pass++) {
@@ -176,7 +186,7 @@ var Sketch = (function () {
   S.shape = function (parent, d, box, o) {
     o = opts(o);
     var g = S.el('g', {}, parent);
-    if (o.fill) S.fill(g, d, box, o);
+    if (o.fill) { hit(g, d); S.fill(g, d, box, o); }
     if (o.stroke !== 'none') {
       path(g, d, o);
       if (o.double) path(g, d, o).setAttribute('transform', 'translate(' + f(off(0.8)) + ',' + f(off(0.8)) + ')');

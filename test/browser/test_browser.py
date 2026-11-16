@@ -88,6 +88,16 @@ def test_server(browser, work):
     page.wait_for_selector(".nb-tip", state="visible", timeout=5000)
     check("revenue" in page.locator(".nb-tip").text_content() and page.locator(".nb-cell[data-idx='7'] .nb-hover-dot[visibility='visible']").count() == 1,
           "hovering a line chart shows the nearest point's values, through the brush overlay")
+    monthly_cell = page.locator(".nb-cell[data-idx='7']")
+    monthly_cell.locator(".nb-tab", has_text="Category mix").click()
+    bar = monthly_cell.locator("svg.nb-chart-svg [data-tip]").first
+    bb, plot = bar.bounding_box(), monthly_cell.locator("svg.nb-chart-svg").bounding_box()
+    # Past the end of the bar, in its row: the bar still answers.
+    page.mouse.move(plot["x"] + plot["width"] - 30, bb["y"] + bb["height"] / 2)
+    page.mouse.move(plot["x"] + plot["width"] - 28, bb["y"] + bb["height"] / 2 + 1)
+    page.wait_for_function("(document.querySelector('.nb-tip') || {}).style && document.querySelector('.nb-tip').style.display === 'block' && document.querySelector('.nb-tip').textContent.includes('category')", timeout=5000)
+    check(monthly_cell.locator(".nb-hover-band[visibility='visible']").count() == 1, "a bar answers hover anywhere in its row, highlighted")
+    monthly_cell.locator(".nb-tab").first.click()
     heat = page.locator(".nb-cell[data-idx='9'] [data-tip]").nth(5)
     heat.scroll_into_view_if_needed()
     heat.hover(force=True)
@@ -290,6 +300,9 @@ def test_exports(browser, work, chromium):
     page.wait_for_function("window.__NB_READY === true")
     check(page.locator("svg.nb-chart-svg").count() >= 24 and page.locator(".nb-error").count() == 0,
           "every chart type in examples/charts.sql draws without errors")
+    widths = page.locator(".nb-cell[data-idx='15'] svg.nb-chart-svg [data-tip] > .sk-hit").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
+    check(len(widths) == 48 and min(widths) > 0.9 * max(widths),
+          f"bars on a date axis fill their slot, the first and last as wide as the rest ({min(widths or [0]):.1f}-{max(widths or [0]):.1f}px)")
     check(not errors, f"no browser errors in the exports {errors[:3]}")
 
     check(open(pdf, "rb").read(5) == b"%PDF-", "PDF export prints through headless Chromium")
