@@ -345,6 +345,10 @@ def test_exports(browser, work, chromium):
     page.wait_for_function("window.__NB_READY === true")
     check(page.locator("svg.nb-chart-svg").count() >= 24 and page.locator(".nb-error").count() == 0,
           "every chart type in examples/charts.sql draws without errors")
+    legend = page.locator(".nb-cell[data-idx='6'] .nb-legend-item").evaluate_all(
+        "els => els.map(e => e.textContent + '=' + getComputedStyle(e.querySelector('i')).borderColor)")
+    check(legend == ["North=rgb(25, 113, 194)", "South=rgb(47, 158, 68)", "East=rgb(232, 89, 12)", "West=rgb(156, 54, 181)"],
+          f"a color scale's domain and range fix each category's order and colour ({legend})")
     widths = page.locator(".nb-cell[data-idx='15'] svg.nb-chart-svg [data-tip] > .sk-hit").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
     check(len(widths) == 48 and min(widths) > 0.9 * max(widths),
           f"bars on a date axis fill their slot, the first and last as wide as the rest ({min(widths or [0]):.1f}-{max(widths or [0]):.1f}px)")

@@ -64,7 +64,7 @@ title: Revenue by region (click a bar to filter)
 mark: bar
 x: region
 y: {field: revenue, agg: sum, format: "$,.0f"}
-color: region
+color: {field: region, scale: {domain: [North, South, East, West], range: ["#1971c2", "#2f9e44", "#e8590c", "#9c36b5"]}}
 select: {as: picked_region, type: point, on: x}
 */
 

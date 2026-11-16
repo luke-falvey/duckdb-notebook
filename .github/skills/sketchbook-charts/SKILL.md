@@ -98,7 +98,9 @@ Spec keys: `title`, `limit` (rows a query may return, default 10,000), `sample: 
 
 **Colour schemes** for continuous colour: `blues` (default), `greens`, `reds`, `oranges`, `purples`,
 `greys`, `viridis`, `magma`. Categories use the Excalidraw palette in order (blue, orange, green, red,
-violet, cyan, yellow, indigo, ...), filled with matching pastels.
+violet, cyan, yellow, indigo, ...), filled with matching pastels. To give categories fixed colours
+(statuses, traffic lights), set the order and colours on the channel:
+`color: {field: status, scale: {domain: [PASS, WARNING, ERROR], range: ["#2f9e44", "#f08c00", "#e03131"]}}`.
 
 ## Selections and cross-filtering
 

@@ -177,10 +177,14 @@
       f.continuous = [lo, hi];
       f.ramp = ramp;
     } else {
-      var domain = distinct(values), idx = {};
+      // scale: {domain: [...], range: [...]} fixes the order of the values and their colours, so a status
+      // is always the same colour (PASS green, ERROR red) whatever the data holds.
+      var sc = enc.scale || {}, domain = Array.isArray(sc.domain) ? sc.domain.slice() : [], idx = {};
+      distinct(values).forEach(function (v) { if (!domain.some(function (d) { return key(d) === key(v); })) domain.push(v); });
+      var range = Array.isArray(sc.range) && sc.range.length ? sc.range : NB.palette;
       domain.forEach(function (d, i) { idx[key(d)] = i; });
-      f = function (v) { return NB.palette[(idx[key(v)] || 0) % NB.palette.length]; };
-      f.domain = domain;
+      f = function (v) { return range[(idx[key(v)] || 0) % range.length]; };
+      f.domain = domain.filter(function (d) { return values.some(function (v) { return key(v) === key(d); }); });
     }
     f.enc = enc;
     return f;
