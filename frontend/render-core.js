@@ -196,49 +196,6 @@ var NB = (function () {
   };
 
   // ---- Result grid --------------------------------------------------------------------------
-  // data: {columns: [{name, type}], rows: [[...]], total}. A profile row under the header shows
-  // each column's null share and either a histogram (numbers, dates) or its top values, computed
-  // from the rows on hand.
-
-  function profile(rows, c, type) {
-    var values = [], nulls = 0;
-    rows.forEach(function (r) { if (r[c] == null) nulls++; else values.push(r[c]); });
-    var p = { nulls: rows.length ? nulls / rows.length : 0, n: values.length };
-    if (NB.isNumericType(type) || NB.isTemporalType(type)) {
-      var nums = values.map(function (v) { return NB.isTemporalType(type) ? +NB.toDate(v) : Number(v); }).filter(isFinite);
-      if (nums.length) {
-        var lo = Math.min.apply(null, nums), hi = Math.max.apply(null, nums), bins = new Array(12).fill(0);
-        nums.forEach(function (v) { bins[hi > lo ? Math.min(11, Math.floor((v - lo) / (hi - lo) * 12)) : 0]++; });
-        p.hist = bins;
-        p.lo = NB.isTemporalType(type) ? NB.formatDate(lo) : NB.formatNumber(lo);
-        p.hi = NB.isTemporalType(type) ? NB.formatDate(hi) : NB.formatNumber(hi);
-      }
-    } else {
-      var counts = {};
-      values.forEach(function (v) { var k = typeof v === 'object' ? JSON.stringify(v) : String(v); counts[k] = (counts[k] || 0) + 1; });
-      p.distinct = Object.keys(counts).length;
-      p.top = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).slice(0, 3).map(function (k) { return [k, counts[k]]; });
-    }
-    return p;
-  }
-
-  function profileCell(p) {
-    var html = '';
-    if (p.hist) {
-      var max = Math.max.apply(null, p.hist) || 1;
-      html += '<svg class="nb-spark" width="72" height="18">' + p.hist.map(function (b, k) {
-        var h = Math.round(b / max * 16);
-        return '<rect x="' + k * 6 + '" y="' + (17 - h) + '" width="5" height="' + h + '"></rect>';
-      }).join('') + '</svg><div class="nb-prof-range">' + NB.esc(p.lo) + ' – ' + NB.esc(p.hi) + '</div>';
-    } else if (p.top) {
-      html += '<div class="nb-prof-top">' + p.top.map(function (t) {
-        return '<span title="' + NB.esc(t[0]) + '">' + NB.esc(t[0].length > 14 ? t[0].slice(0, 13) + '…' : t[0]) + '</span> ' + t[1];
-      }).join('<br>') + '</div><div class="nb-prof-range">' + p.distinct + ' distinct</div>';
-    }
-    if (p.nulls > 0) html += '<div class="nb-prof-null">' + Math.round(p.nulls * 100) + '% null</div>';
-    return html;
-  }
-
   NB.pageSizes = [10, 25, 50, 100, 250, 1000];
 
   // A result grid with a page-size picker.
@@ -247,7 +204,7 @@ var NB = (function () {
   //   opts.onPage(offset, size): fetch a page from the server; without it, pages through data.rows
   //   opts.onPageSize(size): the reader picked a page size (the editor writes it to the cell)
   //   opts.offset: first row of data.rows (server paging)
-  //   opts.profile, opts.formats {col: fmt}, opts.bars [col], opts.heat [col]
+  //   opts.formats {col: fmt}, opts.bars [col], opts.heat [col]
   NB.table = function (container, data, opts) {
     opts = opts || {};
     container.innerHTML = '';
@@ -264,13 +221,8 @@ var NB = (function () {
     var wrap = NB.el('div', { 'class': 'nb-grid-wrap' });
     var table = NB.el('table', { 'class': 'nb-grid' });
     var thead = '<thead><tr><th class="nb-rownum"></th>' + cols.map(function (c) {
-      return '<th><div class="nb-colname">' + NB.esc(c.name) + '</div><div class="nb-coltype">' + NB.esc(c.type) + '</div></th>';
+      return '<th><div class="nb-colname">' + NB.esc(c.name) + '</div></th>';
     }).join('') + '</tr>';
-    if (opts.profile !== false && all.length > 1) {
-      thead += '<tr class="nb-profile"><th></th>' + cols.map(function (c, k) {
-        return '<th>' + profileCell(profile(all, k, c.type)) + '</th>';
-      }).join('') + '</tr>';
-    }
     var ranges = {};
     (opts.bars || []).concat(opts.heat || []).forEach(function (name) {
       var k = cols.findIndex(function (c) { return c.name === name; });

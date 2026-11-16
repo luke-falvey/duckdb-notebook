@@ -146,14 +146,11 @@ table.nb-grid { border-collapse: separate; border-spacing: 0; font-size: 16px; w
 table.nb-grid th, table.nb-grid td { padding: 2px 14px 2px 4px; text-align: left; white-space: nowrap; max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
 table.nb-grid thead th { position: sticky; top: 0; background: var(--nb-bg); z-index: 1; vertical-align: top; font-weight: normal; }
 table.nb-grid thead tr:first-child th { padding-bottom: 6px; }
-table.nb-grid tr.nb-profile th { top: 44px; font-size: 13px; color: var(--nb-muted); padding-top: 6px; }
 table.nb-grid tbody tr:hover td { background: rgba(255, 236, 153, .45); }
 .nb-colname { font-size: 17px; } .nb-coltype { color: var(--nb-faint); font-size: 12px; font-family: var(--nb-mono); }
 td.nb-num { text-align: right; font-variant-numeric: tabular-nums; }
 td.nb-null { color: var(--nb-faint); }
 .nb-rownum { color: var(--nb-faint); text-align: right !important; font-size: 13px; width: 1%; }
-.nb-spark rect { fill: #74c0fc; }
-.nb-prof-null { color: var(--nb-warn); }
 .nb-grid-footer { display: flex; gap: 8px; align-items: center; color: var(--nb-muted); font-size: 14px; padding: 6px 2px 0; flex-wrap: wrap; }
 .nb-grid-footer .nb-spacer { flex: 1; }
 .nb-grid-footer button { padding: 0 9px 1px; font-size: 15px; }

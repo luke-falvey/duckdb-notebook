@@ -76,12 +76,12 @@
     Object.keys(spec.format || {}).forEach(function (k) { formats[k] = spec.format[k]; });
     if (spec.bar) bars = [].concat(spec.bar);
     if (spec.heat) heat = [].concat(spec.heat);
-    NB.table(c, chart.datasets[0], { formats: formats, bars: bars, heat: heat, profile: false });
+    NB.table(c, chart.datasets[0], { formats: formats, bars: bars, heat: heat });
   };
 
   T.pivot = function (c, render, data, opts, chart) {
     var spec = render.spec || {};
-    NB.table(c, chart.datasets[0], { profile: false, heat: spec.heat ? (chart.datasets[0].columns || []).slice((render.rows || []).length).map(function (col) { return col.name; }) : [] });
+    NB.table(c, chart.datasets[0], { heat: spec.heat ? (chart.datasets[0].columns || []).slice((render.rows || []).length).map(function (col) { return col.name; }) : [] });
   };
 
   // ---- Map: an equirectangular projection fitted to the data; no basemap (nothing is fetched).
@@ -379,7 +379,7 @@
   T.echarts = function (c, render, data, opts, chart) {
     var option = (render.spec && render.spec.spec) || {}, series = [].concat(option.series || [])[0] || {};
     var map = { line: 'line', bar: 'bar', scatter: 'point', pie: 'arc' }, mark = map[series.type], e = series.encode || {};
-    if (!mark || (!e.x && !e.value)) { NB.table(c, chart.datasets[0], { profile: false }); return; }
+    if (!mark || (!e.x && !e.value)) { NB.table(c, chart.datasets[0]); return; }
     var columns = (chart.datasets[0] || {}).columns || [];
     var typeOf = function (f) { var col = columns.find(function (cc) { return cc.name === f; }); return col && NB.isNumericType(col.type) ? 'quantitative' : col && NB.isTemporalType(col.type) ? 'temporal' : 'nominal'; };
     var layer = { mark: mark, data: 0, encoding: {} };

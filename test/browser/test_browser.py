@@ -96,6 +96,8 @@ def test_server(browser, work):
     # Page size: the picker under a table writes rows=N to the cell, so it is saved with the notebook.
     filtered = page.locator(".nb-cell[data-idx='6']")
     check(filtered.locator("table.nb-grid tbody tr").count() == 25, "tables show 25 rows per page by default")
+    check(filtered.locator("table.nb-grid thead tr").count() == 1 and filtered.locator(".nb-coltype, svg.nb-spark").count() == 0,
+          "table headers show column names only, no types or profile")
     filtered.locator("select.nb-page-size").select_option("10")
     page.wait_for_function("document.querySelectorAll(\".nb-cell[data-idx='6'] table.nb-grid tbody tr\").length === 10", timeout=15000)
     check("rows=10" in filtered.locator("input.nb-head").input_value(), "choosing 10 per page writes rows=10 to the cell")

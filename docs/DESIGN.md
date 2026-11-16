@@ -234,9 +234,10 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 - An editor per cell with Ctrl+Space completion from the live catalog, cell names and variables, and
   Shift+Enter to run. The design called for CodeMirror 6; bundling it needs a JavaScript build step in
   the extension build, which was left for later (§11).
-- Result grid, paged from the server, with a per-column profile (type, null share, histogram or top
-  values), the feature people single out in the official UI. A page-size picker under each table
-  writes `rows=N` to the cell, so the choice is saved with the notebook and applies to exports.
+- Result grid, paged from the server, headed by plain column names. An earlier per-column profile
+  (type, null share, histogram or top values) was removed to keep tables quiet; the catalog sidebar
+  still lists column types. A page-size picker under each table writes `rows=N` to the cell, so the
+  choice is saved with the notebook and applies to exports.
 - Code and output switches in every cell header write `hide=` to the cell. While editing, a hidden
   part collapses to a line that reveals it; reading view and exports leave it out.
 - Prose, chart, input and metadata cells show their result and keep their source behind an "edit"
