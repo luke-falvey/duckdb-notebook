@@ -160,6 +160,10 @@ create, because all test files share one database.
 
 ## Things that are easy to get wrong
 
+- Agents: never start detached background shells (servers, previews, watchers). Use attached async
+  shells and stop everything you started before finishing a turn; stop servers by PID. Leftover
+  detached shells piled up and got in the way of approval prompts.
+
 - A SQL cell's `body` is its full text, chart comments included; what runs is `Cell::sql`, and its charts
   are `Cell::charts`. Use `sql` for anything that executes or analyses SQL, and `ChartFrom` for the
   relation a cell's charts read. The editor edits `sql` and the specs separately and rebuilds `body`.

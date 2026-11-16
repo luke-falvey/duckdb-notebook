@@ -23,8 +23,8 @@ CALL notebook_stop();
 The server lives inside that DuckDB process: it stops when the shell exits or the database closes.
 `duckdb -notebook <file>` is not a CLI flag; use `-cmd`.
 
-From an agent or a script, keep the shell alive with a pipe that never closes, and run it as a
-long-lived (detached) background process:
+From an agent or a script, keep the shell alive with a pipe that never closes, and run it as an
+**attached** background process (async, not detached):
 
 ```sh
 (sleep infinity | ./build/release/duckdb -init /dev/null -no-agent -csv \
@@ -40,6 +40,11 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
 - After rebuilding, **restart the server**: the frontend is compiled into the binary, so a running
   server keeps the old look. Stop it by killing that shell's PID, not by name.
 - To reuse a port, stop the old server first.
+- **Never detach preview servers, and stop every server you started before finishing.** Detached
+  shells outlive the turn, pile up across a session (one per restart), and got in the way of
+  approval prompts. If the user needs a server to keep running, say so and let them start it in
+  their own DuckDB shell with `CALL notebook_start('<file>')`. Before stopping a server, make sure its notebook is
+  saved: a session can hold edits that exist nowhere else (`GET /api/notebook` returns the text).
 
 ## Using the editor
 
