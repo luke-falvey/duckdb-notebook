@@ -89,7 +89,7 @@ code, pre, textarea.nb-code { font-family: var(--nb-mono); font-size: 13.5px; }
 /* Margins: a cell keeps only the left edge of its hand-drawn box, a bracket that darkens under the
    pointer and turns violet while the cell has the caret. */
 .nb-cell > svg.sk-outline { color: #ced4da; clip-path: inset(-6px calc(100% - 12px) -6px -6px); transition: color .15s; }
-.nb-cell:hover > svg.sk-outline { color: #868e96; }
+.nb-cell:hover > svg.sk-outline, .nb-cell.pointed > svg.sk-outline { color: #868e96; }
 .nb-cell.focused > svg.sk-outline { color: var(--nb-accent); }
 .nb-margin { position: absolute; right: calc(100% + 16px); top: 10px; width: 140px; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .nb-kind { color: var(--nb-faint); font-size: 18px; line-height: 1.2; cursor: pointer; font-family: var(--nb-hand), 'Segoe UI Symbol', 'DejaVu Sans', sans-serif; }
@@ -99,18 +99,23 @@ code, pre, textarea.nb-code { font-family: var(--nb-mono); font-size: 13.5px; }
 .nb-margin.editing .nb-name { visibility: hidden; }
 .nb-margin.editing input.nb-head { display: block; position: absolute; top: 26px; left: 0; width: 540px; z-index: 6; padding: 3px 8px; font: 12.5px var(--nb-mono);
   color: var(--nb-fg); background: var(--nb-card); border: 1.4px solid var(--nb-ink); border-radius: var(--nb-wobbly); box-shadow: 2px 3px 0 rgba(30, 30, 30, .12); outline: none; }
-.nb-cell-head { position: absolute; left: calc(100% + 12px); top: 8px; width: 36px; display: flex; flex-direction: column; align-items: center; gap: 5px;
-  font-size: 15px; color: var(--nb-muted); }
-.nb-cell-head .nb-badge { font-size: 0; gap: 0; margin: 3px 0; }
-.nb-cell-head button { opacity: 0; transition: opacity .15s; }
-.nb-cell:hover .nb-cell-head button, .nb-cell:focus-within .nb-cell-head button { opacity: 1; }
+.nb-cell-head { position: absolute; left: calc(100% + 12px); top: 12px; width: 36px; display: flex; justify-content: center; color: var(--nb-muted); }
+.nb-cell-head .nb-badge { font-size: 0; gap: 0; }
+/* Buttons: a strip on the cell's top edge, right-aligned. Their middles are inside the cell, so the
+   pointer that clicked one is still on the cell after it redraws and the strip stays. */
+.nb-tools { position: absolute; right: 12px; top: -9px; z-index: 4; display: flex; gap: 4px; padding: 0 4px; background: var(--nb-bg);
+  border-radius: var(--nb-wobbly); opacity: 0; pointer-events: none; transition: opacity .15s; }
+.nb-cell:hover .nb-tools, .nb-cell.pointed .nb-tools, .nb-cell:focus-within .nb-tools { opacity: 1; pointer-events: auto; }
+.nb-tools button { padding: 0 7px 1px; font-size: 14px; line-height: 1.35; border-width: 1.2px; background: var(--nb-bg); }
+.nb-tools button.on { background: var(--nb-accent-fill); }
+.nb-tools .nb-run { color: var(--nb-ok); border-color: var(--nb-ok); }
 /* Narrow windows have no room for margins: the two sit in a row at the top of the cell instead. */
 @media (max-width: 900px) {
   .nb-app:not(.reading) .nb-main { padding-left: 16px; padding-right: 16px; }
   .nb-margin, .nb-cell-head { position: static; width: auto; flex-direction: row; align-items: center; gap: 8px; }
   .nb-margin { float: left; margin: 0 10px 4px 0; }
   .nb-cell-head { justify-content: flex-end; margin-bottom: 4px; }
-  .nb-cell-head button { opacity: 1; }
+  .nb-tools { opacity: 1; pointer-events: auto; }
 }
 .nb-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 15px; color: var(--nb-muted); white-space: nowrap; }
 .nb-badge i { width: 11px; height: 11px; border-radius: 50% 45% 55% 50%; border: 1.4px solid; display: inline-block; }
@@ -119,9 +124,6 @@ code, pre, textarea.nb-code { font-family: var(--nb-mono); font-size: 13.5px; }
 .nb-badge.running i { border-color: var(--nb-accent); background: var(--nb-accent-fill); animation: nb-pulse 1s infinite; }
 .nb-badge.failed i { border-color: var(--nb-error); background: #ffc9c9; }
 @keyframes nb-pulse { 50% { opacity: .3; } }
-.nb-cell-head button { padding: 0 7px 1px; font-size: 14px; border-width: 1.2px; background: transparent; }
-.nb-cell-head button.on { background: var(--nb-accent-fill); }
-.nb-cell-head .nb-run { color: var(--nb-ok); border-color: var(--nb-ok); }
 .nb-toggle { opacity: .55; }
 .nb-toggle.on { opacity: 1; }
 textarea.nb-code { width: 100%; border: 0; resize: vertical; padding: 4px 2px; background: transparent; min-height: 2.5em; tab-size: 4; display: block; color: #343a40; line-height: 1.55; outline: none; }
@@ -154,7 +156,7 @@ button.nb-pick-chart { display: block; margin-top: 4px; }
 .nb-add button { font-size: 14px; padding: 0 10px 1px; }
 
 /* Reading view: no chrome, cells laid out on the 12-column grid. */
-.reading .nb-cell-head, .reading .nb-margin, .reading .nb-add, .reading .nb-meta, .reading .nb-hide-reading, .reading .nb-stub { display: none !important; }
+.reading .nb-cell-head, .reading .nb-margin, .reading .nb-tools, .reading .nb-add, .reading .nb-meta, .reading .nb-hide-reading, .reading .nb-stub { display: none !important; }
 .reading .nb-cell > svg.sk-outline { display: none; }
 .reading .nb-cell.hide-output:not([data-kind="input"]) { display: none; }
 /* Effect cells have nothing to show when reading. */
@@ -261,7 +263,7 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
 
 @media print {
   @page { size: A4; margin: 14mm; }
-  .nb-toolbar, .nb-sidebar, .nb-add, .nb-cell-head, .nb-margin, .nb-menu, .nb-grid-footer button, .nb-page-size, .nb-banner, .nb-stub { display: none !important; }
+  .nb-toolbar, .nb-sidebar, .nb-add, .nb-cell-head, .nb-margin, .nb-tools, .nb-menu, .nb-grid-footer button, .nb-page-size, .nb-banner, .nb-stub { display: none !important; }
   .nb-app { display: block; height: auto; }
   .nb-main { overflow: visible; padding: 0; }
   .nb-cell { break-inside: avoid; }

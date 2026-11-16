@@ -466,8 +466,19 @@ var App = (function () {
     return NB.el('div', { 'class': 'nb-stub nb-hide-reading', text: text, onclick: onclick });
   }
 
+  // The browser recomputes :hover only when the mouse moves, so after a redraw (a button click, a run)
+  // the cell under a still pointer would lose its buttons. Remember where the pointer is and mark that
+  // cell until the pointer leaves it.
+  // The class goes on while the cell is built, so nothing fades out and back in.
+  var pointer = null;
+  document.addEventListener('mousemove', function (e) { pointer = [e.clientX, e.clientY]; }, { passive: true });
+  function pointedIndex() {
+    var under = pointer && document.elementFromPoint(pointer[0], pointer[1]), cell = under && under.closest && under.closest('.nb-cell');
+    return cell ? +cell.getAttribute('data-idx') : -1;
+  }
+
   A.render = function () {
-    var root = $('cells');
+    var root = $('cells'), pointed = pointedIndex();
     // Rebuilding the cells empties the page for a moment; keep the reader where they were.
     var main = $('main'), scrollTop = main.scrollTop;
     var focused = document.activeElement, focusIndex = -1, caret = 0;
@@ -485,10 +496,14 @@ var App = (function () {
       // Reading view shows results, not code; markdown and inputs have no code to show there.
       if (A.reading) hideCode = true;
       var box = NB.el('div', { 'class': 'nb-cell' + (hideCode ? ' hide-code' : '') + (hideOutput ? ' hide-output' : ''), 'data-kind': cell.kind, 'data-idx': i, 'data-seed': 'cell' + i + (cell.name || '') });
+      if (i === pointed) {
+        box.classList.add('pointed');
+        box.addEventListener('mouseleave', function () { box.classList.remove('pointed'); }, { once: true });
+      }
       var span = cell.options && cell.options.span;
       if (span && A.reading) box.style.gridColumn = 'span ' + Math.max(1, Math.min(12, +span));
       // Left margin: the cell's kind and name. Clicking either opens its -- %% line (name and options)
-      // for editing. Right margin: its state, and its buttons while the pointer or caret is in it.
+      // for editing. Right margin: its state. Its buttons show while the pointer or caret is in it.
       var head = NB.el('input', { 'class': 'nb-head', value: cell.head || '', placeholder: 'name and options', title: 'The -- %% marker line' });
       head.addEventListener('change', function () { cell.head = head.value.trim(); A.edited(cell); });
       head.addEventListener('keydown', function (e) {
@@ -510,7 +525,9 @@ var App = (function () {
         NB.el('span', { 'class': 'nb-name', text: cell.name || '', title: (cell.head || '') + ' (click to edit the name and options)', onclick: editHead }),
         head
       ]));
-      box.appendChild(NB.el('div', { 'class': 'nb-cell-head' }, [badge(cell.state)].concat(headButtons(cell, i))));
+      box.appendChild(NB.el('div', { 'class': 'nb-cell-head' }, [badge(cell.state)]));
+      // The buttons sit on the cell's top edge, so a one-line cell is as easy to use as a tall one.
+      box.appendChild(NB.el('div', { 'class': 'nb-tools' }, headButtons(cell, i)));
       var body = NB.el('div', { 'class': 'nb-cell-body' });
       if (cell.kind === 'input') body.appendChild(inputCell(cell));
       // Prose, charts, inputs and metadata show their result; their source opens on demand.

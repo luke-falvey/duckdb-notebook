@@ -79,9 +79,10 @@ both anyway.
 
 Cells use the "margins" treatment: `Sketch.outline` draws the full box, and CSS clips it to its left
 edge (`clip-path` on `.nb-cell > svg.sk-outline`). `.nb-margin` (kind symbol, name, the `-- %%` input
-when editing) is positioned to the left of the cell and `.nb-cell-head` (state dot, buttons) to the
-right, in padding that `.nb-main` reserves; below 900px both fall back to a row inside the cell. Keep
-new per-cell controls in one of the two margins rather than inside the cell.
+when editing) is positioned to the left of the cell and `.nb-cell-head` (state dot) to the right, in
+padding that `.nb-main` reserves; `.nb-tools` (buttons) is a row on the cell's top edge, shown on
+hover, focus, or `.pointed` (set by `render()` on the cell under a still pointer). Below 900px the
+margins fall back to a row inside the cell. Put new per-cell buttons in `.nb-tools`.
 
 ## Things readers notice first
 

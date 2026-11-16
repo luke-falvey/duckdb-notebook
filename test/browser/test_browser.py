@@ -99,6 +99,15 @@ def test_server(browser, work):
     check(mb["x"] + mb["width"] <= cb["x"] and hb["x"] >= cb["x"] + cb["width"] and cell6.locator(".nb-name").text_content() == "filtered",
           "a cell's kind and name sit in its left margin, its state and buttons in its right")
     check(cell6.locator("svg.sk-outline").evaluate("e => getComputedStyle(e).clipPath") != "none", "a cell's frame is drawn as a bracket on its left")
+    # Buttons: a horizontal strip on the top edge, shown on hover, reachable however short the cell.
+    tools = page.locator(".nb-cell[data-idx='3'] .nb-tools")
+    check(tools.evaluate("e => getComputedStyle(e).opacity") == "0", "a cell's buttons are hidden until the pointer is on it")
+    page.locator(".nb-cell[data-idx='3']").hover()
+    page.wait_for_timeout(300)
+    rb, tb3 = page.locator(".nb-cell[data-idx='3']").bounding_box(), tools.bounding_box()
+    check(tools.evaluate("e => getComputedStyle(e).opacity") == "1" and tb3["height"] < 40 and tb3["width"] > 150
+          and tb3["y"] < rb["y"] and tb3["x"] + tb3["width"] <= rb["x"] + rb["width"],
+          "hovering shows them as one row on the cell's top edge")
     cell6.locator(".nb-name").click()
     head_input = cell6.locator("input.nb-head")
     check(head_input.is_visible() and head_input.evaluate("e => e === document.activeElement"), "clicking a cell's name opens its -- %% line")
@@ -196,13 +205,20 @@ def test_server(browser, work):
 
     # Hide code / output: toggles in the cell header write hide= to the cell.
     regions = page.locator(".nb-cell[data-idx='3']")
+    regions.hover()
     regions.locator("button.nb-hide-code").click()
     check("hide=code" in regions.locator("input.nb-head").input_value(), "the code toggle writes hide=code")
+    page.wait_for_timeout(700)
+    check(regions.locator(".nb-tools").evaluate("e => getComputedStyle(e).opacity") == "1",
+          "after a click the buttons stay, though the cell redrew and got shorter")
     check(not regions.locator("textarea.nb-code").is_visible() and regions.locator(".nb-stub").first.is_visible(),
           "hidden code collapses to a line that can show it")
+    regions.hover()
     regions.locator("button.nb-hide-output").click()
     check("hide=all" in regions.locator("input.nb-head").input_value(), "hiding code and output writes hide=all")
+    regions.hover()
     regions.locator("button.nb-hide-output").click()
+    regions.hover()
     regions.locator("button.nb-hide-code").click()
     check("hide=" not in regions.locator("input.nb-head").input_value(), "showing both again removes hide=")
 

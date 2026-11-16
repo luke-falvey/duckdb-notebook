@@ -248,8 +248,11 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 - Margins: a cell keeps only the left edge of its hand-drawn box, a bracket that darkens under the
   pointer and turns violet with the caret. Its kind symbol (☰ settings, ¶ text, ◉ input, ▦ query, ✎ SQL
   that changes the database, ∿ chart) and name sit in the left margin; clicking either opens its
-  `-- %%` line to edit the name and options. Its state dot sits in the right margin, with a strip of
-  buttons (run, hide code, hide output, move, delete) while the pointer or caret is in the cell. Narrow
+  `-- %%` line to edit the name and options. Its state dot sits in the right margin. Its buttons (run,
+  hide code, hide output, move, delete) form one row on its top edge, right-aligned, while the pointer
+  or caret is in the cell: a column of them in the margin was out of reach on one-line cells. The
+  buttons' middles are inside the cell, and a redraw keeps them for the cell under a still pointer
+  (browsers recompute `:hover` only when the mouse moves), so clicking one does not hide the rest. Narrow
   windows put both margins in a row at the top of the cell. Chosen from mockups of four quieter
   treatments (faint frames, no frames, margins, frames only on hover).
 - Quiet by default: the buttons that add a cell appear
