@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <map>
 
 namespace notebook {
@@ -119,6 +120,25 @@ void ParseHead(const std::string &head, Cell &cell) {
 			continue;
 		}
 		cell.options.emplace_back(tokens[i].substr(0, eq), tokens[i].substr(eq + 1));
+	}
+}
+
+//! Options whose values the notebook depends on are checked here; the rest are free-form.
+void CheckOptions(Cell &cell) {
+	for (auto &option : cell.options) {
+		auto &key = option.first;
+		auto &value = option.second;
+		if (key == "hide" && value != "code" && value != "output" && value != "all" && value != "none") {
+			cell.errors.push_back("hide=" + value + " is not valid; use hide=code, hide=output or hide=all");
+		} else if (key == "rows") {
+			bool digits = !value.empty() && value.size() <= 5;
+			for (char c : value) {
+				digits = digits && std::isdigit(static_cast<unsigned char>(c));
+			}
+			if (!digits || std::atoi(value.c_str()) < 1 || std::atoi(value.c_str()) > 10000) {
+				cell.errors.push_back("rows=" + value + " is not valid; rows is a page size from 1 to 10000");
+			}
+		}
 	}
 }
 
@@ -296,6 +316,7 @@ Notebook ParseNotebook(const std::string &text) {
 		size_t body_end = m + 1 < markers.size() ? markers[m + 1].line_start : text.size();
 		cell.body = TrimBlankLines(text.substr(body_start, body_end - body_start));
 		CheckBody(cell);
+		CheckOptions(cell);
 
 		if (cell.kind == CellKind::NOTEBOOK && m != 0) {
 			cell.errors.push_back("[notebook] must be the first cell");

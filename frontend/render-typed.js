@@ -4,6 +4,18 @@
 (function (NB) {
   'use strict';
   var s = NB.svg, T = {};
+
+  // A hand-drawn box in a palette colour with its pastel hachure (solid when asked).
+  function box(parent, x, y, w, h, stroke, solid) {
+    return Sketch.rect(parent, x, y, w, h, { stroke: stroke, fill: solid ? stroke : NB.pastel(stroke), fillStyle: solid ? 'solid' : 'hachure', width: 1.3, gap: Math.max(4, Math.min(7, Math.min(w, h) / 3)) });
+  }
+  // A hand-drawn version of a filled SVG path given as attributes ({d: ...}).
+  function shape(parent, stroke, attrs) {
+    // Charts are drawn before they are attached, so getBBox is unavailable: hatch the whole chart
+    // area and let the shape's clip path cut it out.
+    var root = parent.ownerSVGElement || parent, vb = (root.getAttribute('viewBox') || '0 0 640 360').split(' ').map(Number);
+    return Sketch.shape(parent, attrs.d, { x: vb[0], y: vb[1], w: vb[2], h: vb[3] }, { stroke: stroke, fill: NB.pastel(stroke), width: 1.3, gap: 6 });
+  }
   NB.typed = T;
 
   function svgBox(container, w, h) {
@@ -32,7 +44,7 @@
       var xs = rows.map(function (r) { return NB.scales.numeric(r.x, enc.sparkline && enc.sparkline.x.type); }), ys = rows.map(function (r) { return Number(r.y); });
       var x = NB.scales.linear([Math.min.apply(null, xs), Math.max.apply(null, xs)], [2, w - 2]), y = NB.scales.linear([Math.min.apply(null, ys), Math.max.apply(null, ys)], [h - 2, 2]);
       var svg = s('svg', { viewBox: '0 0 ' + w + ' ' + h, width: w, height: h, 'class': 'nb-sparkline' }, box);
-      s('path', { d: 'M' + xs.map(function (v, i) { return x(v).toFixed(1) + ',' + y(ys[i]).toFixed(1); }).join('L'), fill: 'none', stroke: NB.palette[0], 'stroke-width': 2 }, svg);
+      Sketch.polyline(svg, xs.map(function (v, i) { return [x(v), y(ys[i])]; }), { stroke: NB.palette[0], width: 2 });
     }
   };
 
@@ -43,7 +55,7 @@
     var at = function (t) { var a = Math.PI * (1 - t); return [cx + R * Math.cos(a), cy - R * Math.sin(a)]; };
     var arc = function (t0, t1, color, width) {
       var p0 = at(t0), p1 = at(t1);
-      s('path', { d: 'M' + p0[0] + ',' + p0[1] + 'A' + R + ',' + R + ' 0 0 1 ' + p1[0] + ',' + p1[1], fill: 'none', stroke: color, 'stroke-width': width }, svg);
+      Sketch.shape(svg, 'M' + p0[0] + ',' + p0[1] + 'A' + R + ',' + R + ' 0 0 1 ' + p1[0] + ',' + p1[1], { x: 0, y: 0, w: w, h: h }, { stroke: color, width: width, fill: null });
     };
     arc(0, 1, 'var(--nb-muted-bg)', 18);
     (spec.bands || []).forEach(function (b, i) {
@@ -144,7 +156,7 @@
       var y = gap, x = layers.length > 1 ? 10 + li * (w - 20 - nodeW - 90) / (layers.length - 1) : w / 2;
       col.forEach(function (n) {
         n.x = x; n.y = y; n.h = Math.max(1, Math.max(n.inV, n.outV) * k); n.outY = y; n.inY = y; y += n.h + gap;
-        title(s('rect', { x: x, y: n.y, width: nodeW, height: n.h, fill: color(n.name) }, svg), n.name + ': ' + NB.formatNumber(Math.max(n.inV, n.outV)));
+        title(box(svg, x, n.y, nodeW, n.h, color(n.name)), n.name + ': ' + NB.formatNumber(Math.max(n.inV, n.outV)));
         var t = s('text', { x: x + nodeW + 4, y: n.y + n.h / 2 + 4, 'class': 'nb-node-label' }, svg); t.textContent = n.name;
       });
     });
@@ -167,7 +179,7 @@
       var span = totals[n] / sum * (2 * Math.PI - pad * names.length);
       arcs[n] = { a0: angle, a1: angle + span, cur: angle };
       var p0 = at(R, angle), p1 = at(R, angle + span), q1 = at(R + 10, angle + span), q0 = at(R + 10, angle);
-      title(s('path', { d: 'M' + p0 + 'A' + R + ',' + R + ' 0 ' + (span > Math.PI ? 1 : 0) + ' 1 ' + p1 + 'L' + q1 + 'A' + (R + 10) + ',' + (R + 10) + ' 0 ' + (span > Math.PI ? 1 : 0) + ' 0 ' + q0 + 'Z', fill: color(n) }, svg), n);
+      title(shape(svg, color(n), { d: 'M' + p0 + 'A' + R + ',' + R + ' 0 ' + (span > Math.PI ? 1 : 0) + ' 1 ' + p1 + 'L' + q1 + 'A' + (R + 10) + ',' + (R + 10) + ' 0 ' + (span > Math.PI ? 1 : 0) + ' 0 ' + q0 + 'Z', fill: color(n) }, svg), n);
       var lp = at(R + 24, angle + span / 2), t = s('text', { x: lp[0], y: lp[1], 'text-anchor': 'middle', 'class': 'nb-node-label' }, svg); t.textContent = n;
       angle += span + pad;
     });
@@ -208,7 +220,7 @@
         off += share;
         var top2 = top || k;
         if (!k.kids.length) {
-          title(s('rect', { x: kx + 0.5, y: ky + 0.5, width: Math.max(0, kw - 1), height: Math.max(0, kh - 1), fill: color(top2.name), 'fill-opacity': 0.55 + 0.45 / k.depth }, svg), pathOf(k) + ': ' + NB.formatNumber(k.value));
+          title(box(svg, kx + 1.5, ky + 1.5, Math.max(0, kw - 3), Math.max(0, kh - 3), color(top2.name)), pathOf(k) + ': ' + NB.formatNumber(k.value));
           if (kw > 40 && kh > 14) { var t = s('text', { x: kx + 4, y: ky + 13, 'class': 'nb-node-label nb-on-color' }, svg); t.textContent = k.name; }
         } else layout(k, kx, ky, kw, kh, top2);
       });
@@ -222,7 +234,7 @@
       var off = x;
       node.kids.forEach(function (k) {
         var kw = k.value / (node.value || 1) * ww, top2 = top || k;
-        title(s('rect', { x: off + 0.5, y: (k.depth - 1) * rowH + 0.5, width: Math.max(0, kw - 1), height: rowH - 1, fill: color(top2.name), 'fill-opacity': 1 - 0.15 * (k.depth - 1) }, svg), pathOf(k) + ': ' + NB.formatNumber(k.value));
+        title(box(svg, off + 1.5, (k.depth - 1) * rowH + 1.5, Math.max(0, kw - 3), rowH - 3, color(top2.name)), pathOf(k) + ': ' + NB.formatNumber(k.value));
         if (kw > 40) { var t = s('text', { x: off + 4, y: (k.depth - 1) * rowH + 20, 'class': 'nb-node-label nb-on-color' }, svg); t.textContent = k.name; }
         layout(k, off, kw, top2);
         off += kw;
@@ -238,7 +250,7 @@
       var a = a0;
       node.kids.forEach(function (k) {
         var span = k.value / (node.value || 1) * (a1 - a0), r0 = ring * (k.depth - 0.5), r1 = r0 + ring, top2 = top || k, large = span > Math.PI ? 1 : 0;
-        title(s('path', { d: 'M' + at(r0, a) + 'L' + at(r1, a) + 'A' + r1 + ',' + r1 + ' 0 ' + large + ' 1 ' + at(r1, a + span) + 'L' + at(r0, a + span) + 'A' + r0 + ',' + r0 + ' 0 ' + large + ' 0 ' + at(r0, a) + 'Z', fill: color(top2.name), 'fill-opacity': 1 - 0.15 * (k.depth - 1), stroke: 'var(--nb-bg)' }, svg), pathOf(k) + ': ' + NB.formatNumber(k.value));
+        title(shape(svg, color(top2.name), { d: 'M' + at(r0, a) + 'L' + at(r1, a) + 'A' + r1 + ',' + r1 + ' 0 ' + large + ' 1 ' + at(r1, a + span) + 'L' + at(r0, a + span) + 'A' + r0 + ',' + r0 + ' 0 ' + large + ' 0 ' + at(r0, a) + 'Z', fill: color(top2.name), 'fill-opacity': 1 - 0.15 * (k.depth - 1), stroke: 'var(--nb-bg)' }, svg), pathOf(k) + ': ' + NB.formatNumber(k.value));
         layout(k, a, a + span, top2);
         a += span;
       });
@@ -264,10 +276,10 @@
       nodes.forEach(function (n) { n.vx += (w / 2 - n.x) * 0.01; n.vy += (h / 2 - n.y) * 0.01; n.x += Math.max(-10, Math.min(10, n.vx)) * cool; n.y += Math.max(-10, Math.min(10, n.vy)) * cool; n.vx *= 0.5; n.vy *= 0.5; n.x = Math.max(8, Math.min(w - 8, n.x)); n.y = Math.max(8, Math.min(h - 8, n.y)); });
     }
     var vmax = Math.max.apply(null, edges.map(function (e) { return e.v; }).concat([1]));
-    edges.forEach(function (e) { title(s('line', { x1: e.a.x, y1: e.a.y, x2: e.b.x, y2: e.b.y, stroke: 'var(--nb-muted)', 'stroke-opacity': 0.5, 'stroke-width': 0.5 + 2.5 * e.v / vmax }, svg), e.a.name + ' — ' + e.b.name + ': ' + NB.formatNumber(e.v)); });
+    edges.forEach(function (e) { title(edges.length > 400 ? s('line', { x1: e.a.x, y1: e.a.y, x2: e.b.x, y2: e.b.y, stroke: '#adb5bd', 'stroke-width': 0.5 + 2.5 * e.v / vmax }, svg) : Sketch.line(svg, e.a.x, e.a.y, e.b.x, e.b.y, { stroke: '#adb5bd', width: 0.5 + 2.5 * e.v / vmax, double: false }), e.a.name + ' — ' + e.b.name + ': ' + NB.formatNumber(e.v)); });
     var dmax = Math.max.apply(null, nodes.map(function (n) { return n.deg; }).concat([1]));
     nodes.forEach(function (n) {
-      title(s('circle', { cx: n.x, cy: n.y, r: 3 + 6 * Math.sqrt(n.deg / dmax), fill: NB.palette[0] }, svg), n.name + ' (' + n.deg + ' links)');
+      title(nodes.length > 300 ? s('circle', { cx: n.x, cy: n.y, r: 3 + 6 * Math.sqrt(n.deg / dmax), fill: NB.palette[0] }, svg) : Sketch.ellipse(svg, n.x, n.y, 3 + 6 * Math.sqrt(n.deg / dmax), 3 + 6 * Math.sqrt(n.deg / dmax), { stroke: NB.palette[0], fill: NB.pastels[0], fillStyle: 'solid', width: 1.2 }), n.name + ' (' + n.deg + ' links)');
       if (nodes.length <= 60) { var t = s('text', { x: n.x + 8, y: n.y + 4, 'class': 'nb-node-label' }, svg); t.textContent = n.name; }
     });
   };
@@ -277,7 +289,7 @@
     var max = Math.max.apply(null, rows.map(function (r) { return +r.value; }).concat([1]));
     rows.forEach(function (r, i) {
       var bw = r.value / max * (w - 200), next = rows[i + 1] ? rows[i + 1].value / max * (w - 200) : bw, x = 120 + (w - 200 - bw) / 2, y = i * rowH;
-      title(s('path', { d: 'M' + x + ',' + y + 'L' + (x + bw) + ',' + y + 'L' + (120 + (w - 200 + next) / 2) + ',' + (y + rowH - 2) + 'L' + (120 + (w - 200 - next) / 2) + ',' + (y + rowH - 2) + 'Z', fill: NB.palette[0], 'fill-opacity': 1 - i * 0.6 / rows.length }, svg), r.stage + ': ' + NB.formatNumber(r.value));
+      title(shape(svg, NB.palette[0], { d: 'M' + x + ',' + y + 'L' + (x + bw) + ',' + y + 'L' + (120 + (w - 200 + next) / 2) + ',' + (y + rowH - 2) + 'L' + (120 + (w - 200 - next) / 2) + ',' + (y + rowH - 2) + 'Z', fill: NB.palette[0], 'fill-opacity': 1 - i * 0.6 / rows.length }, svg), r.stage + ': ' + NB.formatNumber(r.value));
       var t = s('text', { x: 112, y: y + rowH / 2 + 4, 'text-anchor': 'end', 'class': 'nb-node-label' }, svg); t.textContent = r.stage;
       var v = s('text', { x: w - 72, y: y + rowH / 2 + 4, 'class': 'nb-node-label' }, svg);
       v.textContent = NB.formatNumber(r.value) + (i ? ' (' + NB.formatNumber(r.value / rows[0].value, '.0%') + ')' : '');
@@ -305,8 +317,8 @@
     var bw = Math.max(1, a.w / rows.length * 0.6);
     rows.forEach(function (r) {
       var x = a.x(+NB.toDate(r.x)), up = +r.close >= +r.open, col = up ? '#009E73' : '#D55E00';
-      s('line', { x1: x, x2: x, y1: a.y(+r.high), y2: a.y(+r.low), stroke: col }, a.g);
-      title(s('rect', { x: x - bw / 2, y: a.y(Math.max(+r.open, +r.close)), width: bw, height: Math.max(1, Math.abs(a.y(+r.open) - a.y(+r.close))), fill: col }, a.g),
+      Sketch.line(a.g, x, a.y(+r.high), x, a.y(+r.low), { stroke: col, width: 1.1, double: false });
+      title(box(a.g, x - bw / 2, a.y(Math.max(+r.open, +r.close)), bw, Math.max(1, Math.abs(a.y(+r.open) - a.y(+r.close))), col, true),
         NB.formatDate(r.x) + '\nopen ' + r.open + '\nhigh ' + r.high + '\nlow ' + r.low + '\nclose ' + r.close);
     });
   };
@@ -320,7 +332,7 @@
     var color = colorFor(rows.map(function (r) { return r.color != null ? r.color : r.task; }));
     rows.forEach(function (r, i) {
       var x0 = a.x(+NB.toDate(r.start)), x1 = a.x(ends[i]);
-      title(s('rect', { x: x0, y: a.y(r.task), width: Math.max(1, x1 - x0), height: a.y.bandwidth, rx: 3, fill: color(r.color != null ? r.color : r.task) }, a.g), r.task + '\n' + NB.formatDate(r.start) + ' → ' + NB.formatDate(r.end));
+      title(box(a.g, x0, a.y(r.task), Math.max(1, x1 - x0), a.y.bandwidth, color(r.color != null ? r.color : r.task)), r.task + '\n' + NB.formatDate(r.start) + ' → ' + NB.formatDate(r.end));
     });
   };
 

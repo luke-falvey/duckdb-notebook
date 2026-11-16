@@ -11,26 +11,51 @@
   <div class="nb-toolbar">
     <span class="nb-title" id="title">Notebook</span>
     <span class="nb-source" id="source"></span>
-    <select id="open" title="Open another notebook"></select>
     <span class="spacer"></span>
-    <button id="run-all" class="primary" title="Run every cell in order">Run all</button>
-    <button id="interrupt" disabled title="Interrupt the running query">Stop</button>
-    <label title="Re-run query, markdown and chart cells when something they read changes"><input type="checkbox" id="autorun" checked> Auto-run</label>
-    <button id="save" title="Save (Ctrl+S)">Save</button>
-    <button id="view-reading" title="Reading view: hide code">Reading</button>
-    <button id="view-graph" title="Show the dependency graph">Graph</button>
-    <button id="view-sidebar" title="Show or hide the catalog">Catalog</button>
-    <select id="export" title="Export">
-      <option value="">Export…</option>
-      <option value="html">HTML</option>
-      <option value="html-precomputed">HTML, inputs precomputed</option>
-      <option value="pdf">PDF (print)</option>
-      <option value="md">Markdown</option>
-      <option value="sql">SQL script</option>
-    </select>
-    <button id="theme" title="Light or dark theme">◐</button>
     <span class="nb-status" id="status"></span>
+    <button id="run-all" class="primary" title="Run every cell in order (Ctrl+Shift+Enter)">▶ Run all</button>
+    <button id="interrupt" hidden title="Interrupt the running query">■ Stop</button>
+    <button id="gear" class="nb-gear" title="Options" aria-haspopup="true" aria-expanded="false">⚙</button>
+
+    <div class="nb-menu" id="menu" role="menu">
+      <h4>notebook</h4>
+      <div class="row"><select id="open" class="grow" title="Open another notebook"></select></div>
+      <div class="row">
+        <button id="save" title="Save (Ctrl+S)">Save</button>
+        <label title="Re-run query, markdown and chart cells when something they read changes"><input type="checkbox" id="autorun" checked> auto-run</label>
+      </div>
+
+      <h4>view</h4>
+      <div class="row">
+        <button id="view-reading" title="Reading view: hide code and chrome">Reading</button>
+        <button id="view-graph" title="Show the dependency graph">Graph</button>
+        <button id="view-sidebar" title="Show or hide the catalog">Catalog</button>
+        <button id="theme" title="Light or dark">◐</button>
+      </div>
+      <div class="row">rows per page
+        <select id="page-size" title="Default page size for tables without rows= set"></select>
+      </div>
+
+      <h4>export</h4>
+      <div class="row">
+        <select id="export-format" class="grow" title="Export format">
+          <option value="html">HTML page</option>
+          <option value="html-precomputed">HTML, inputs precomputed</option>
+          <option value="pdf">PDF (print)</option>
+          <option value="md">Markdown</option>
+          <option value="sql">SQL script</option>
+        </select>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="export-code" checked> code</label>
+        <label><input type="checkbox" id="export-output" checked> output</label>
+        <span class="grow"></span>
+        <button id="export">Export</button>
+      </div>
+      <div class="row hint">Cells marked hide= stay hidden either way.</div>
+    </div>
   </div>
+  <div class="nb-toolbar-rule" id="toolbar-rule"></div>
   <div class="nb-sidebar" id="sidebar"></div>
   <div class="nb-main" id="main">
     <div id="banner"></div>
@@ -38,6 +63,7 @@
     <div class="nb-cells" id="cells"></div>
   </div>
 </div>
+<script src="/assets/render-sketch.js"></script>
 <script src="/assets/render-core.js"></script>
 <script src="/assets/render-chart.js"></script>
 <script src="/assets/render-typed.js"></script>

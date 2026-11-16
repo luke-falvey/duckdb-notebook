@@ -15,6 +15,14 @@ namespace duckdb {
 
 using notebook::Json;
 
+const char *const VALUE_OPEN = "\xEE\x80\x80";
+const char *const VALUE_CLOSE = "\xEE\x80\x81";
+
+idx_t CellRows(const notebook::Cell &cell) {
+	auto rows = cell.Option("rows");
+	return rows.empty() ? 0 : NumericCast<idx_t>(std::atoi(rows.c_str()));
+}
+
 Json ValueToJson(const Value &value) {
 	if (value.IsNull()) {
 		return Json::Null();
@@ -321,7 +329,8 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 			auto chunk = result->Fetch();
 			auto value = chunk && chunk->size() > 0 ? chunk->GetValue(0, 0) : Value();
 			rendered += cell.content.substr(copied, expression.begin - copied);
-			rendered += value.IsNull() ? "NULL" : value.ToString();
+			auto text = value.IsNull() ? string("NULL") : value.ToString();
+			rendered += options.mark_values ? VALUE_OPEN + text + VALUE_CLOSE : text;
 			copied = expression.end;
 		}
 		outcome.output = rendered + cell.content.substr(copied);
@@ -353,6 +362,11 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 		return outcome;
 	}
 
+	auto cell_rows = CellRows(cell);
+	idx_t page_rows = options.page_rows;
+	if (cell_rows > 0) {
+		page_rows = options.rows_at_least ? MaxValue(page_rows, cell_rows) : cell_rows;
+	}
 	auto sql = notebook::CellSql(cell);
 	if (sql.empty()) {
 		return outcome;
@@ -363,9 +377,9 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	bool is_query = cell.kind == notebook::CellKind::SQL && cell.is_query;
 	if (!failed && is_query && cell.name.empty()) {
 		int64_t total;
-		auto page = ResultToJson(*result, options.page_rows, total);
+		auto page = ResultToJson(*result, page_rows, total);
 		outcome.row_count = total;
-		if (data && options.page_rows > 0) {
+		if (data && page_rows > 0) {
 			*data = std::move(page);
 		}
 	}
@@ -381,9 +395,9 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 			outcome.row_count = chunk->GetValue(0, 0).GetValue<int64_t>();
 		}
 		count.reset();
-		if (!failed && data && options.page_rows > 0) {
+		if (!failed && data && page_rows > 0) {
 			string error;
-			*data = Page(DisplaySql(cell), options.page_rows, error);
+			*data = Page(DisplaySql(cell), page_rows, error);
 		}
 	}
 	outcome.status = failed ? "error" : "ok";

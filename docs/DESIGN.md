@@ -224,13 +224,23 @@ connection, execute the script `notebook_sql` returns.
 
 ### Frontend
 
-A single-page app in plain JavaScript with no dependencies (`frontend/`):
+A single-page app in plain JavaScript with no dependencies (`frontend/`). It looks like a sketchbook
+drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes, lines and charts.
+
+- A quiet toolbar: the notebook's title, its status, **Run all**, and a gear. Everything else (open,
+  save, auto-run, reading and graph views, catalog, theme, default page size, export) is in the gear's
+  menu.
 
 - An editor per cell with Ctrl+Space completion from the live catalog, cell names and variables, and
   Shift+Enter to run. The design called for CodeMirror 6; bundling it needs a JavaScript build step in
   the extension build, which was left for later (§11).
 - Result grid, paged from the server, with a per-column profile (type, null share, histogram or top
-  values), the feature people single out in the official UI.
+  values), the feature people single out in the official UI. A page-size picker under each table
+  writes `rows=N` to the cell, so the choice is saved with the notebook and applies to exports.
+- Code and output switches in every cell header write `hide=` to the cell. While editing, a hidden
+  part collapses to a line that reveals it; reading view and exports leave it out.
+- Prose, chart, input and metadata cells show their result and keep their source behind an "edit"
+  line (or a double-click on prose); SQL cells show their code.
 - Catalog browser for attached databases, with click and drag to insert.
 - Chart switcher under every named result: pick a mark and columns, or take the suggested chart, and
   it is written into the file as a chart cell.
@@ -337,9 +347,13 @@ The spec is ours; the renderers behind it are replaceable. The design planned on
 | KPI tiles, sparklines, gauge | Own SVG | Own SVG |
 | Raw escape hatch | Vega-Lite, ECharts | Specs whose marks map onto the built-in renderer are drawn; others show as a table |
 
-The first implementation draws everything itself, in about 1,300 lines of dependency-free
-JavaScript, for the reason in §11 ("The frontend has no build step"). All charts are SVG, so PDFs stay
-vector. A basemap needs tiles, which are not available offline, so maps draw the data alone. The
+The first implementation draws everything itself, in about 1,500 lines of dependency-free
+JavaScript, for the reason in §11 ("The frontend has no build step"), and draws it by hand:
+`frontend/render-sketch.js` is a small rough.js-style library (wobbly double strokes, overshooting
+corners, hachure fills) that every renderer uses. Above 600 marks in a layer it falls back to plain
+shapes in the same colours, because the wobble costs time and adds nothing at that density. Drawing
+is seeded per chart, so a chart looks the same in the editor, an export and a PDF. All charts are SVG,
+so PDFs stay vector. A basemap needs tiles, which are not available offline, so maps draw the data alone. The
 libraries remain the upgrade path for richer interaction (zoom, GPU-scale networks, tiled maps).
 
 ### Building charts
@@ -355,8 +369,11 @@ libraries remain the upgrade path for richer interaction (zoom, GPU-scale networ
 
 ### Themes
 
-One light and one dark theme (following the system setting, switchable in the UI) with the Okabe-Ito
-categorical palette, which is safe for colour-vision deficiency, applied across every renderer.
+The notebook looks like a sketchbook drawn in Excalidraw ("Option A" of the design mockups): warm
+paper with a faint grain, cells in hand-drawn rounded boxes, Excalifont for text and Cascadia Code for
+SQL (both SIL OFL, compiled into the extension; `third_party/fonts/LICENSE.md`), values computed in
+prose highlighted with a marker, and charts in Excalidraw's palette: a stroke colour with its pastel
+as a hachure fill. Dark mode is Excalidraw's own: the page is inverted and its hues turned back.
 
 ## 7. Export
 
@@ -380,8 +397,14 @@ The extension assembles one `.html` file from parts it already has:
 
 The page decompresses with the browser's built-in `DecompressionStream` and draws the charts when
 opened. It works from a `file://` path, as an email attachment or on any static host; nothing needs a
-server. Measured: the viewer and renderers are about 30 KB gzip-compressed; the revenue example
-exports to 109 KB and the 27-chart gallery to 282 KB.
+server. The fonts travel inside the page as data URIs, so it looks the same offline. Measured: the
+viewer and renderers are about 35 KB gzip-compressed and the two fonts 90 KB; the revenue example
+exports to 252 KB and the 27-chart gallery to 425 KB.
+
+`hide := 'code'`, `'output'` or `'all'` leaves that part of every cell out of any export, on top of
+each cell's own `hide=`; prose and inputs always stay. The gear menu offers the same as two
+checkboxes. Tables in an export page through the rows it includes (`page_rows`, default 100, raised
+to a cell's `rows=` when larger).
 
 ### Interactivity without DuckDB
 
@@ -638,3 +661,22 @@ Arrow hands decimals over unscaled, and bundlers rename Arrow's classes, so the 
   spec should fail CI like a broken query.
 - The PDF export finds Chrome, Chromium, Edge or Playwright's `chrome-headless-shell`; the headless
   shell needs far fewer system libraries than full Chrome.
+
+## 13. What the sketchbook look taught us
+
+- **Hand-drawn is a renderer concern, not a format one.** Nothing in the file changed for it. A
+  single primitives library (`render-sketch.js`) sits under the chart renderers, the cell outlines and
+  the export viewer, so the look is consistent and could be swapped back to plain SVG in one place.
+- **Seeded wobble.** Random wobble that changed on every redraw looked like flicker. Each chart and
+  each cell outline seeds its own generator from stable inputs (title, data shape, cell position).
+- **Outlines follow their content.** A cell's outline is an SVG drawn behind it at its measured size; a
+  `ResizeObserver` redraws it when a result, a chart or a font load changes the size.
+- **View settings that matter belong in the file.** Page size and hiding code or output change what
+  readers of an export see, so the UI writes them as cell options (`rows=`, `hide=`) rather than
+  keeping them in the browser. Only the default page size, a personal preference, stays in the
+  browser (`localStorage`).
+- **Value markers.** To highlight `{{ }}` results in prose, the runner wraps each value in two
+  private-use characters (U+E000, U+E001) when asked; the markdown renderer turns them into `<mark>`,
+  and the Markdown export strips them. `notebook_run` output is unchanged.
+- **SVG attributes do not resolve CSS variables.** Hand-drawn ink is `currentColor`, with the colour
+  set in CSS, so themes reach it.

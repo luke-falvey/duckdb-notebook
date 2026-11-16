@@ -83,6 +83,15 @@ SELECT name, warnings FROM notebook_cells('test/notebooks/graph_errors.sql') WHE
 ----
 loose	['variable \'nobody_sets_this\' is not set by any cell, so it reads as NULL']
 
+# hide= and rows= are checked; other options are free-form
+query II
+SELECT name, errors FROM notebook_cells('test/notebooks/options.sql') ORDER BY idx
+----
+shown	[]
+secret	[]
+bad_hide	['hide=everything is not valid; use hide=code, hide=output or hide=all']
+bad_rows	['rows=0 is not valid; rows is a page size from 1 to 10000']
+
 # Format errors are data, one list per cell, so a UI can show them all
 query II
 SELECT idx, errors[1] FROM notebook_cells('test/notebooks/errors.sql') ORDER BY idx

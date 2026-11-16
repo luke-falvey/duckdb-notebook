@@ -23,9 +23,16 @@ var NB = (function () {
     return e;
   };
 
-  // Colour-vision-deficiency-safe categorical palette (Okabe-Ito, then extended).
-  NB.palette = ['#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9', '#F0E442', '#000000',
-    '#999999', '#8C564B', '#17BECF', '#BCBD22'];
+  // Excalidraw's palette: strokes, and the pastel fill that goes with each.
+  NB.palette = ['#1971c2', '#e8590c', '#2f9e44', '#e03131', '#9c36b5', '#0c8599', '#f08c00', '#6741d9',
+    '#868e96', '#c2255c', '#5c940d', '#1864ab'];
+  NB.pastels = ['#a5d8ff', '#ffd8a8', '#b2f2bb', '#ffc9c9', '#eebefa', '#99e9f2', '#ffec99', '#d0bfff',
+    '#dee2e6', '#fcc2d7', '#d8f5a2', '#74c0fc'];
+  // The pastel fill for a stroke colour from the palette; other colours fill with themselves.
+  NB.pastel = function (stroke) {
+    var i = NB.palette.indexOf(stroke);
+    return i < 0 ? stroke : NB.pastels[i];
+  };
   // Sequential ramps from light to dark.
   NB.schemes = {
     blues: ['#f7fbff', '#08306b'], greens: ['#f7fcf5', '#00441b'], reds: ['#fff5f0', '#67000d'],
@@ -73,7 +80,7 @@ var NB = (function () {
     else if (type === 'd') { out = Math.round(n).toLocaleString('en-US', { useGrouping: !!comma }); }
     else {
       var p = prec != null ? prec : (Number.isInteger(n) ? 0 : Math.min(6, Math.max(0, 3 - Math.floor(Math.log10(Math.abs(n) || 1)))));
-      out = n.toLocaleString('en-US', { minimumFractionDigits: trim ? 0 : p, maximumFractionDigits: p, useGrouping: !!comma || !spec });
+      out = n.toLocaleString('en-US', { minimumFractionDigits: trim || !spec ? 0 : p, maximumFractionDigits: p, useGrouping: !!comma || !spec });
     }
     return (currency ? (n < 0 ? '-$' + out.replace('-', '') : '$' + out) : out);
   };
@@ -121,6 +128,7 @@ var NB = (function () {
     text = text.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>').replace(/(^|\W)_([^_\s][^_]*)_(?=\W|$)/g, '$1<em>$2</em>');
     text = text.replace(/~~([^~]+)~~/g, '<del>$1</del>');
     text = text.replace(/\$([^$\s][^$]*)\$/g, '<span class="nb-math">$1</span>');
+    text = text.replace(/\uE000([^\uE001]*)\uE001/g, '<mark class="nb-val">$1</mark>');
     return text.replace(/\u0000(\d+)\u0000/g, function (_, i) { return '<code>' + NB.esc(codes[+i]) + '</code>'; });
   }
 
@@ -231,31 +239,46 @@ var NB = (function () {
     return html;
   }
 
-  // opts: {pageSize, offset, onPage(offset), profile, formats: {col: fmt}, bars: [col], heat: [col]}
+  NB.pageSizes = [10, 25, 50, 100, 250, 1000];
+
+  // A result grid with a page-size picker.
+  //   data: {columns, rows, total}
+  //   opts.pageSize: rows per page (default 25)
+  //   opts.onPage(offset, size): fetch a page from the server; without it, pages through data.rows
+  //   opts.onPageSize(size): the reader picked a page size (the editor writes it to the cell)
+  //   opts.offset: first row of data.rows (server paging)
+  //   opts.profile, opts.formats {col: fmt}, opts.bars [col], opts.heat [col]
   NB.table = function (container, data, opts) {
     opts = opts || {};
     container.innerHTML = '';
     if (!data || !data.columns) return;
-    var rows = data.rows || [], cols = data.columns;
+    var size = opts.pageSize || 25;
+    var serverPaging = !!opts.onPage;
+    var all = data.rows || [], cols = data.columns;
+    var offset = serverPaging ? (opts.offset || 0) : (container.__nbOffset || 0);
+    if (!serverPaging && offset >= all.length) offset = 0;
+    var rows = serverPaging ? all.slice(0, size) : all.slice(offset, offset + size);
+    var total = data.total != null ? data.total : all.length;
+    var available = serverPaging ? total : all.length;
+
     var wrap = NB.el('div', { 'class': 'nb-grid-wrap' });
     var table = NB.el('table', { 'class': 'nb-grid' });
     var thead = '<thead><tr><th class="nb-rownum"></th>' + cols.map(function (c) {
       return '<th><div class="nb-colname">' + NB.esc(c.name) + '</div><div class="nb-coltype">' + NB.esc(c.type) + '</div></th>';
     }).join('') + '</tr>';
-    if (opts.profile !== false && rows.length > 1) {
+    if (opts.profile !== false && all.length > 1) {
       thead += '<tr class="nb-profile"><th></th>' + cols.map(function (c, k) {
-        return '<th>' + profileCell(profile(rows, k, c.type)) + '</th>';
+        return '<th>' + profileCell(profile(all, k, c.type)) + '</th>';
       }).join('') + '</tr>';
     }
     var ranges = {};
     (opts.bars || []).concat(opts.heat || []).forEach(function (name) {
       var k = cols.findIndex(function (c) { return c.name === name; });
       if (k < 0) return;
-      var nums = rows.map(function (r) { return Number(r[k]); }).filter(isFinite);
+      var nums = all.map(function (r) { return Number(r[k]); }).filter(isFinite);
       ranges[name] = [Math.min.apply(null, nums.concat([0])), Math.max.apply(null, nums)];
     });
     var heat = NB.ramp('blues');
-    var offset = opts.offset || 0;
     var body = '<tbody>' + rows.map(function (r, i) {
       return '<tr><td class="nb-rownum">' + (offset + i + 1) + '</td>' + r.map(function (v, k) {
         var col = cols[k], numeric = typeof v === 'number', style = '', text = NB.formatValue(v, col.type, (opts.formats || {})[col.name]);
@@ -270,16 +293,41 @@ var NB = (function () {
     table.innerHTML = thead + '</thead>' + body;
     wrap.appendChild(table);
     container.appendChild(wrap);
-    var total = data.total != null ? data.total : rows.length, size = opts.pageSize || rows.length;
+    // The header rule is a hand-drawn line under the column names.
+    if (window.Sketch) requestAnimationFrame(function () {
+      var head = table.querySelector('thead tr');
+      if (!head || !table.offsetWidth) return;
+      var svg = Sketch.el('svg', { 'class': 'nb-head-rule', width: table.offsetWidth, height: 6 });
+      svg.style.top = (head.offsetTop + head.offsetHeight - 3) + 'px';
+      Sketch.reseed(cols.length * 31 + table.offsetWidth);
+      Sketch.line(svg, 2, 3, table.offsetWidth - 2, 3, { width: 1.3 });
+      wrap.appendChild(svg);
+    });
+
+    var go = function (next) {
+      if (serverPaging) opts.onPage(next, size);
+      else { container.__nbOffset = next; NB.table(container, data, opts); }
+    };
     var footer = NB.el('div', { 'class': 'nb-grid-footer' });
     footer.appendChild(NB.el('span', { text: total === 1 ? '1 row' : NB.formatNumber(total, ',') + ' rows' }));
-    if (opts.onPage && total > size) {
-      footer.appendChild(NB.el('button', { text: '‹', disabled: offset <= 0 ? 'disabled' : null, onclick: function () { opts.onPage(Math.max(0, offset - size)); } }));
-      footer.appendChild(NB.el('span', { text: (offset + 1) + '–' + Math.min(total, offset + rows.length) }));
-      footer.appendChild(NB.el('button', { text: '›', disabled: offset + size >= total ? 'disabled' : null, onclick: function () { opts.onPage(offset + size); } }));
-    } else if (data.truncated) {
-      footer.appendChild(NB.el('span', { text: ' (first ' + rows.length + ' shown)' }));
+    if (available > size || offset > 0) {
+      footer.appendChild(NB.el('button', { 'class': 'nb-page', text: '‹', title: 'Previous page', disabled: offset <= 0 ? 'disabled' : null, onclick: function () { go(Math.max(0, offset - size)); } }));
+      footer.appendChild(NB.el('span', { 'class': 'nb-page-range', text: (offset + 1) + '–' + Math.min(available, offset + rows.length) }));
+      footer.appendChild(NB.el('button', { 'class': 'nb-page', text: '›', title: 'Next page', disabled: offset + size >= available ? 'disabled' : null, onclick: function () { go(offset + size); } }));
     }
+    if (!serverPaging && total > all.length) {
+      footer.appendChild(NB.el('span', { text: '(' + NB.formatNumber(all.length, ',') + ' included)' }));
+    }
+    var picker = NB.el('select', { 'class': 'nb-page-size', title: 'Rows per page' });
+    var sizes = NB.pageSizes.indexOf(size) < 0 ? NB.pageSizes.concat([size]).sort(function (a, b) { return a - b; }) : NB.pageSizes;
+    sizes.forEach(function (n) { picker.appendChild(NB.el('option', { value: n, text: n + ' per page', selected: n === size ? 'selected' : null })); });
+    picker.onchange = function () {
+      var next = +picker.value;
+      if (opts.onPageSize) opts.onPageSize(next);
+      else { opts.pageSize = next; container.__nbOffset = 0; NB.table(container, data, opts); }
+    };
+    footer.appendChild(NB.el('span', { 'class': 'nb-spacer' }));
+    footer.appendChild(picker);
     container.appendChild(footer);
   };
 

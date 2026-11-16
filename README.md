@@ -42,6 +42,8 @@ y: revenue
   large tables.
 - **Notebooks can live in the database.** The same text is stored with version history in a table.
 - **Share without DuckDB.** Export to a single self-contained HTML file, or to PDF.
+- **Looks like a sketchbook.** Paper, handwriting and hand-drawn charts, after Excalidraw, in the
+  editor and in every export.
 
 ## What works today
 
@@ -59,6 +61,7 @@ SELECT name, status, row_count, error FROM notebook_run('examples/revenue.sql', 
 
 -- Exports: a single HTML file that needs no DuckDB, and the other formats
 FROM notebook_export('examples/revenue.sql', file := 'revenue.html');
+FROM notebook_export('examples/revenue.sql', file := 'results.html', hide := 'code');  -- results only
 FROM notebook_export('examples/revenue.sql', file := 'revenue.html', interactive := 'precomputed');
 FROM notebook_export('examples/revenue.sql', format := 'pdf');      -- needs Chrome or Chromium
 FROM notebook_export('examples/revenue.sql', format := 'md');

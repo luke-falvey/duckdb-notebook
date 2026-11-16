@@ -193,7 +193,7 @@
     return NB.formatNumber(v, scale.enc.format || (Math.abs(v) >= 1e5 ? '~s' : ''));
   }
 
-  function axis(g, scale, orient, w, h, title) {
+  function axis(g, scale, orient, w, h, title, left) {
     if (!scale) return;
     var ticks = scale.ticks(orient === 'bottom' ? Math.max(2, Math.floor(w / 90)) : Math.max(2, Math.floor(h / 40)));
     if (scale.kind === 'band' && ticks.length > (orient === 'bottom' ? w / 14 : h / 12)) {
@@ -206,7 +206,7 @@
       if (!isFinite(p)) return;
       if (orient === 'bottom') {
         if (scale.kind !== 'band') s('line', { x1: p, x2: p, y1: 0, y2: h, 'class': 'nb-grid-line' }, a);
-        s('line', { x1: p, x2: p, y1: h, y2: h + 4 }, a);
+        Sketch.line(a, p, h - 2, p, h + 4, { width: 1.2, rough: 0.4, double: false, stroke: 'currentColor' });
         var tx = s('text', { x: p, y: h + 16, 'text-anchor': 'middle' }, a);
         var label = tickLabel(scale, t);
         tx.textContent = label.length > 16 ? label.slice(0, 15) + '…' : label;
@@ -214,14 +214,15 @@
         if (scale.kind !== 'band') s('line', { x1: 0, x2: w, y1: p, y2: p, 'class': 'nb-grid-line' }, a);
         var ty = s('text', { x: -6, y: p + 4, 'text-anchor': 'end' }, a);
         var l2 = tickLabel(scale, t);
-        ty.textContent = l2.length > 10 ? l2.slice(0, 9) + '…' : l2;
+        ty.textContent = l2.length > 20 ? l2.slice(0, 19) + '…' : l2;
       }
     });
-    if (orient === 'bottom') s('line', { x1: 0, x2: w, y1: h, y2: h, 'class': 'nb-domain' }, a);
-    else s('line', { x1: 0, x2: 0, y1: 0, y2: h, 'class': 'nb-domain' }, a);
+    // Excalidraw-style axes: a wobbly stroke with an arrowhead at the open end.
+    if (orient === 'bottom') Sketch.arrow(a, 0, h, w + 8, h, { bend: 0, width: 1.4, stroke: 'currentColor' }).setAttribute('class', 'nb-domain');
+    else Sketch.arrow(a, 0, h, 0, -8, { bend: 0, width: 1.4, stroke: 'currentColor' }).setAttribute('class', 'nb-domain');
     if (title) {
       var tt = orient === 'bottom' ? s('text', { x: w / 2, y: h + 34, 'text-anchor': 'middle', 'class': 'nb-axis-title' }, a)
-        : s('text', { transform: 'translate(' + (-M.left + 12) + ',' + h / 2 + ') rotate(-90)', 'text-anchor': 'middle', 'class': 'nb-axis-title' }, a);
+        : s('text', { transform: 'translate(' + (-(left || M.left) + 12) + ',' + h / 2 + ') rotate(-90)', 'text-anchor': 'middle', 'class': 'nb-axis-title' }, a);
       tt.textContent = title;
     }
   }
@@ -231,7 +232,8 @@
     var box = NB.el('div', { 'class': 'nb-legend' });
     if (color.domain) {
       color.domain.slice(0, 20).forEach(function (d) {
-        box.appendChild(NB.el('span', { 'class': 'nb-legend-item' }, [NB.el('i', { style: 'background:' + color(d) }), d === null ? 'NULL' : String(d)]));
+        var c = color(d);
+        box.appendChild(NB.el('span', { 'class': 'nb-legend-item' }, [NB.el('i', { style: 'background:' + NB.pastel(c) + ';border-color:' + c }), d === null ? 'NULL' : String(d)]));
       });
     } else if (color.continuous) {
       var stops = [0, 0.25, 0.5, 0.75, 1].map(function (t) { return color.ramp(0.15 + 0.85 * t) + ' ' + t * 100 + '%'; }).join(',');
@@ -264,101 +266,119 @@
 
   function pos(scale, v, type) { return scale.kind === 'band' ? scale(v) : scale(numeric(v, type)); }
 
+  // Marks are hand-drawn (see render-sketch.js). Above a few hundred marks the wobble stops paying
+  // for itself, so dense layers fall back to plain shapes in the same colours.
+  var SKETCH_LIMIT = 600;
+
+  function mark(el, layer, r) {
+    el.setAttribute('class', 'nb-mark');
+    el.__row = r;
+    tooltip(el, layer, r);
+    return el;
+  }
+
   function drawLayer(g, layer, x, y, color, w, h, size) {
     var enc = layer.encoding, ex = enc.x, ey = enc.y, ec = enc.color, rows = layer.rows;
     var colorOf = function (r) { return ec && ec.column ? color(r[ec.column]) : (ec && ec.value) || NB.palette[0]; };
+    var fillOf = function (c) { return color.continuous ? c : NB.pastel(c); };
     var opacity = layer.mark_opacity != null ? layer.mark_opacity : null;
-    var mark = layer.mark;
-    if (mark === 'line' || mark === 'area') {
+    var kind = layer.mark, plain = rows.length > SKETCH_LIMIT;
+    if (kind === 'line' || kind === 'area') {
       groupBy(rows, ec && ec.column).forEach(function (group) {
         var pts = group.map(function (r) {
           var px = x.kind === 'band' ? x.center(r[ex.column]) : x(numeric(r[ex.column], ex.type));
           return [px, y(numeric(r[ey.column], ey.type)), r];
         }).filter(function (p) { return isFinite(p[0]) && isFinite(p[1]); }).sort(function (a, b) { return a[0] - b[0]; });
         if (!pts.length) return;
-        var d = 'M' + pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join('L');
         var c = colorOf(group[0]);
-        if (mark === 'area') {
+        if (kind === 'area') {
           var base = y(Math.max(y.domain ? y.domain[0] : 0, 0));
-          s('path', { d: d + 'L' + pts[pts.length - 1][0].toFixed(1) + ',' + base + 'L' + pts[0][0].toFixed(1) + ',' + base + 'Z', fill: c, 'fill-opacity': opacity != null ? opacity : 0.35, stroke: 'none' }, g);
+          var area = Sketch.smooth(pts) + 'L' + pts[pts.length - 1][0].toFixed(1) + ',' + base + 'L' + pts[0][0].toFixed(1) + ',' + base + 'Z';
+          Sketch.fill(g, area, { x: 0, y: 0, w: w, h: h }, { fill: NB.pastel(c), gap: 7, fillOpacity: opacity != null ? Math.min(1, opacity * 2.5) : null });
         }
-        s('path', { d: d, fill: 'none', stroke: c, 'stroke-width': layer.mark_strokeWidth || 2, 'class': 'nb-line' }, g);
-        if (pts.length <= 60 || layer.mark_point) pts.forEach(function (p) { tooltip(s('circle', { cx: p[0], cy: p[1], r: 3, fill: c, 'class': 'nb-pt' }, g), layer, p[2]); });
+        // Thousands of points are already downsampled (M4); a sketch line through them stays legible.
+        var line = Sketch.polyline(g, pts, { stroke: c, width: layer.mark_strokeWidth || 2, double: pts.length < 400 });
+        line.setAttribute('class', 'nb-line');
+        if (pts.length <= 60 || layer.mark_point) pts.forEach(function (p) { mark(s('circle', { cx: p[0], cy: p[1], r: 3, fill: c, 'class': 'nb-pt' }, g), layer, p[2]); });
       });
-    } else if (mark === 'bar') {
+    } else if (kind === 'bar') {
       var horizontal = y.kind === 'band' && x.kind !== 'band';
       var stack = {};
       rows.forEach(function (r) {
-        var c = colorOf(r), el;
+        var c = colorOf(r), bx, by, bw, bh;
         if (horizontal) {
-          var yb = y(r[ey.column]), v = numeric(r[ex.column], ex.type), k = key(r[ey.column]);
-          var start = stack[k] || 0; stack[k] = start + v;
+          var v = numeric(r[ex.column], ex.type), k = key(r[ey.column]), start = stack[k] || 0;
+          stack[k] = start + v;
           var x0 = x(start), x1 = x(start + v);
-          el = s('rect', { x: Math.min(x0, x1), y: yb, width: Math.abs(x1 - x0), height: y.bandwidth, fill: c, 'class': 'nb-mark' }, g);
+          bx = Math.min(x0, x1); by = y(r[ey.column]); bw = Math.abs(x1 - x0); bh = y.bandwidth;
         } else if (x.kind === 'band') {
-          var xb = x(r[ex.column]), vy = numeric(r[ey.column], ey.type), kx = key(r[ex.column]);
-          var st = stack[kx] || 0; stack[kx] = st + vy;
+          var vy = numeric(r[ey.column], ey.type), kx = key(r[ex.column]), st = stack[kx] || 0;
+          stack[kx] = st + vy;
           var y0 = y(st), y1 = y(st + vy);
-          el = s('rect', { x: xb, y: Math.min(y0, y1), width: x.bandwidth, height: Math.abs(y1 - y0), fill: c, 'class': 'nb-mark' }, g);
+          bx = x(r[ex.column]); by = Math.min(y0, y1); bw = x.bandwidth; bh = Math.abs(y1 - y0);
         } else {
           var a = x(numeric(r[ex.column], ex.type)), b = ex.end ? x(numeric(r[ex.end], ex.type)) : a + 4;
           var yy = y(numeric(r[ey.column], ey.type)), zero = y(0);
-          el = s('rect', { x: Math.min(a, b) + 0.5, y: Math.min(yy, zero), width: Math.max(1, Math.abs(b - a) - 1), height: Math.abs(zero - yy), fill: c, 'class': 'nb-mark' }, g);
+          bx = Math.min(a, b) + 0.5; by = Math.min(yy, zero); bw = Math.max(1, Math.abs(b - a) - 1); bh = Math.abs(zero - yy);
         }
-        if (layer.mark_cornerRadius) el.setAttribute('rx', layer.mark_cornerRadius);
-        el.__row = r;
-        tooltip(el, layer, r);
+        if (!isFinite(bx) || !isFinite(by)) return;
+        var el = plain ? s('rect', { x: bx, y: by, width: bw, height: bh, fill: fillOf(c), stroke: c }, g)
+          : Sketch.rect(g, bx, by, bw, bh, { stroke: c, fill: fillOf(c), width: 1.3, gap: Math.max(4, Math.min(7, bw / 4)) });
+        mark(el, layer, r);
       });
-    } else if (mark === 'point' || mark === 'tick' || mark === 'text') {
+    } else if (kind === 'point' || kind === 'tick' || kind === 'text') {
       var maxCount = 1;
       if (layer.binned) rows.forEach(function (r) { maxCount = Math.max(maxCount, r.count); });
       rows.forEach(function (r) {
         var px = x.kind === 'band' ? x.center(r[ex.column]) : x(numeric(r[ex.column], ex.type));
         var py = y ? (y.kind === 'band' ? y.center(r[ey.column]) : y(numeric(r[ey.column], ey.type))) : h / 2;
         if (!isFinite(px) || !isFinite(py)) return;
-        var el;
-        if (mark === 'text') {
-          el = s('text', { x: px, y: py, 'text-anchor': 'middle', 'class': 'nb-mark-text', fill: colorOf(r) }, g);
+        var el, c = colorOf(r);
+        if (kind === 'text') {
+          el = s('text', { x: px, y: py, 'text-anchor': 'middle', 'class': 'nb-mark-text', fill: c }, g);
           el.textContent = NB.formatValue(r[enc.text && enc.text.column], '', enc.text && enc.text.format);
-        } else if (mark === 'tick') {
-          el = s('line', { x1: px - 6, x2: px + 6, y1: py, y2: py, stroke: colorOf(r), 'stroke-width': 2, 'class': 'nb-mark' }, g);
+        } else if (kind === 'tick') {
+          el = Sketch.line(g, px - 6, py, px + 6, py, { stroke: c, width: 2, rough: 0.5, double: !plain });
         } else {
           var radius = layer.binned ? 1.5 + 4 * Math.sqrt(r.count / maxCount) : enc.size && enc.size.column ? size(r[enc.size.column]) : 3.5;
-          var fill = layer.binned && !(ec && ec.column) ? NB.ramp('blues')(0.3 + 0.7 * Math.sqrt(r.count / maxCount)) : colorOf(r);
-          el = s('circle', { cx: px, cy: py, r: radius, fill: fill, 'fill-opacity': opacity != null ? opacity : 0.75, 'class': 'nb-mark' }, g);
+          var fill = layer.binned && !(ec && ec.column) ? NB.ramp('blues')(0.3 + 0.7 * Math.sqrt(r.count / maxCount)) : fillOf(c);
+          el = plain || radius < 3 ? s('circle', { cx: px, cy: py, r: radius, fill: layer.binned ? fill : c, 'fill-opacity': opacity != null ? opacity : 0.75 }, g)
+            : Sketch.ellipse(g, px, py, radius, radius, { stroke: c, fill: fill, fillStyle: 'solid', width: 1.1, rough: 0.6, double: false });
         }
-        el.__row = r;
-        tooltip(el, layer, r);
+        mark(el, layer, r);
       });
-    } else if (mark === 'rect') {
+    } else if (kind === 'rect') {
       rows.forEach(function (r) {
         var x0 = pos(x, r[ex.column], ex.type), y0 = pos(y, r[ey.column], ey.type);
         var wd = x.kind === 'band' ? x.bandwidth : Math.abs(x(numeric(r[ex.end || ex.column], ex.type)) - x0) || 4;
         var ht = y.kind === 'band' ? y.bandwidth : Math.abs(y(numeric(r[ey.end || ey.column], ey.type)) - y0) || 4;
-        var el = s('rect', { x: x0, y: y.kind === 'band' ? y0 : y0 - ht, width: wd, height: ht, fill: colorOf(r), 'class': 'nb-mark' }, g);
-        el.__row = r;
-        tooltip(el, layer, r);
+        var top = y.kind === 'band' ? y0 : y0 - ht, c = colorOf(r);
+        // Heatmap cells keep a solid colour (hachures would hide the gradient) inside a hand-drawn edge.
+        var el = plain ? s('rect', { x: x0, y: top, width: wd, height: ht, fill: c }, g)
+          : Sketch.rect(g, x0 + 1, top + 1, wd - 2, ht - 2, { stroke: 'currentColor', width: 0.9, fill: color.continuous ? c : fillOf(c), fillStyle: 'solid', rough: 0.6, double: false });
+        mark(el, layer, r);
       });
-    } else if (mark === 'rule') {
+    } else if (kind === 'rule') {
       rows.forEach(function (r) {
         var c = colorOf(r), el;
-        if (ex && ex.column && !(ey && ey.column)) { var px = pos(x, r[ex.column], ex.type); el = s('line', { x1: px, x2: px, y1: 0, y2: h, stroke: c, 'stroke-width': 1.5 }, g); }
-        else if (ey && ey.column && !(ex && ex.column)) { var py = pos(y, r[ey.column], ey.type); el = s('line', { x1: 0, x2: w, y1: py, y2: py, stroke: c, 'stroke-width': 1.5, 'stroke-dasharray': '4 3' }, g); }
+        if (ex && ex.column && !(ey && ey.column)) { var px = pos(x, r[ex.column], ex.type); el = Sketch.line(g, px, 0, px, h, { stroke: c, width: 1.5, dash: '7 6' }); }
+        else if (ey && ey.column && !(ex && ex.column)) { var py = pos(y, r[ey.column], ey.type); el = Sketch.line(g, 0, py, w, py, { stroke: c, width: 1.5, dash: '7 6' }); }
         else if (ex && ey) {
           var e2 = enc.x2 || enc.y2;
           var X1 = pos(x, r[ex.column], ex.type), Y1 = pos(y, r[ey.column], ey.type);
           var X2 = enc.x2 && enc.x2.column ? pos(x, r[enc.x2.column], ex.type) : X1, Y2 = enc.y2 && enc.y2.column ? pos(y, r[enc.y2.column], ey.type) : Y1;
-          if (e2) el = s('line', { x1: X1, x2: X2, y1: Y1, y2: Y2, stroke: c, 'stroke-width': 1.5 }, g);
+          if (e2) el = Sketch.line(g, X1, Y1, X2, Y2, { stroke: c, width: 1.5 });
         }
         if (el) tooltip(el, layer, r);
       });
-    } else if (mark === 'boxplot') {
+    } else if (kind === 'boxplot') {
       rows.forEach(function (r) {
         var cx = x ? x.center(r.x) : w / 2, bw = x ? Math.min(40, x.bandwidth) : 40, c = NB.palette[0];
         var q1 = y(r.y_q1), q3 = y(r.y_q3), md = y(r.y_median), lo = y(r.y_min), hi = y(r.y_max);
-        s('line', { x1: cx, x2: cx, y1: lo, y2: hi, stroke: c }, g);
-        var box = s('rect', { x: cx - bw / 2, y: Math.min(q1, q3), width: bw, height: Math.abs(q1 - q3), fill: c, 'fill-opacity': 0.3, stroke: c }, g);
-        s('line', { x1: cx - bw / 2, x2: cx + bw / 2, y1: md, y2: md, stroke: c, 'stroke-width': 2 }, g);
+        var box = s('g', {}, g);
+        Sketch.line(box, cx, lo, cx, hi, { stroke: c, width: 1.2 });
+        Sketch.rect(box, cx - bw / 2, Math.min(q1, q3), bw, Math.abs(q1 - q3), { stroke: c, fill: NB.pastel(c), width: 1.3 });
+        Sketch.line(box, cx - bw / 2, md, cx + bw / 2, md, { stroke: c, width: 2.2, rough: 0.5 });
         s('title', {}, box).textContent = 'min ' + NB.formatNumber(r.y_min) + '\nq1 ' + NB.formatNumber(r.y_q1) + '\nmedian ' + NB.formatNumber(r.y_median) + '\nq3 ' + NB.formatNumber(r.y_q3) + '\nmax ' + NB.formatNumber(r.y_max);
       });
     }
@@ -373,9 +393,8 @@
       var large = a2 - angle > Math.PI ? 1 : 0;
       var p = function (rad, a) { return (cx + rad * Math.cos(a)).toFixed(1) + ',' + (cy + rad * Math.sin(a)).toFixed(1); };
       var d = 'M' + p(R, angle) + 'A' + R + ',' + R + ' 0 ' + large + ' 1 ' + p(R, a2) + (inner ? 'L' + p(inner, a2) + 'A' + inner + ',' + inner + ' 0 ' + large + ' 0 ' + p(inner, angle) : 'L' + cx + ',' + cy) + 'Z';
-      var el = s('path', { d: d, fill: enc.color && enc.color.column ? color(r[enc.color.column]) : NB.palette[0], stroke: 'var(--nb-bg)', 'class': 'nb-mark' }, svgEl);
-      el.__row = r;
-      tooltip(el, layer, r);
+      var c = enc.color && enc.color.column ? color(r[enc.color.column]) : NB.palette[0];
+      mark(Sketch.shape(svgEl, d, { x: cx - R, y: cy - R, w: 2 * R, h: 2 * R }, { stroke: c, fill: NB.pastel(c), width: 1.4, gap: 7 }), layer, r);
       angle = a2;
     });
   }
@@ -470,7 +489,14 @@
     }
     var totalW = render.width || 640, totalH = render.height || 320;
     var panelW = Math.max(120, Math.floor(totalW / facetCols.length)), panelH = Math.max(100, Math.floor(totalH / facetRows.length));
-    var w = panelW - M.left - M.right, h = panelH - M.top - M.bottom;
+    // Category labels on the y axis are handwritten and wide: make room for the longest one.
+    var left = M.left;
+    allLayers.forEach(function (l) {
+      var e = l.encoding.y;
+      if (!e || !e.column || (e.type !== 'nominal' && e.type !== 'ordinal')) return;
+      l.rows.forEach(function (r) { var v = r[e.column]; left = Math.max(left, Math.min(170, 26 + 7.2 * String(v == null ? 'NULL' : v).slice(0, 20).length)); });
+    });
+    var w = panelW - left - M.right, h = panelH - M.top - M.bottom;
     var horizontalBars = allLayers.some(function (l) { return l.mark === 'bar' && l.encoding.y && (l.encoding.y.type === 'nominal' || l.encoding.y.type === 'ordinal'); });
     var hasBars = allLayers.some(function (l) { return l.mark === 'bar' || l.mark === 'area'; });
     var stackTotals = function (channel, by) {
@@ -509,9 +535,9 @@
         if (render.facet) panel.appendChild(NB.el('div', { 'class': 'nb-facet-title', text: [fr, fc].filter(function (v) { return v !== null; }).join(' · ') }));
         var svgEl = s('svg', { viewBox: '0 0 ' + panelW + ' ' + panelH, width: panelW, 'class': 'nb-chart-svg', preserveAspectRatio: 'xMidYMid meet' });
         panel.appendChild(svgEl);
-        var g = s('g', { transform: 'translate(' + M.left + ',' + M.top + ')' }, svgEl);
+        var g = s('g', { transform: 'translate(' + left + ',' + M.top + ')' }, svgEl);
         axis(g, x, 'bottom', w, h, x.enc && x.enc.title);
-        axis(g, y, 'left', w, h, y && y.enc && y.enc.title);
+        axis(g, y, 'left', w, h, y && y.enc && y.enc.title, left);
         var plot = s('g', { 'class': 'nb-plot' }, g);
         allLayers.forEach(function (l) {
           var rows = l.rows.filter(function (r) {
@@ -534,6 +560,8 @@
     if (!chart) return;
     if (chart.error) { container.appendChild(NB.el('div', { 'class': 'nb-error', text: chart.error })); return; }
     var render = chart.render || {}, datasets = (chart.datasets || []).map(NB.objects);
+    // A stable wobble per chart: the same chart is drawn the same way every time.
+    Sketch.reseed((opts && opts.seed) || ((render.title || '') + JSON.stringify(render.layers || render.kind).length + '/' + datasets.map(function (d) { return d.length; }).join(',')));
     if (render.title) container.appendChild(NB.el('div', { 'class': 'nb-chart-title', text: render.title }));
     var body = NB.el('div', { 'class': 'nb-chart-body' });
     container.appendChild(body);

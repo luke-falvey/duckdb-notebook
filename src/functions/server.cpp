@@ -175,6 +175,9 @@ string ContentType(const string &name) {
 	if (StringUtil::EndsWith(name, ".html")) {
 		return "text/html; charset=utf-8";
 	}
+	if (StringUtil::EndsWith(name, ".woff2")) {
+		return "font/woff2";
+	}
 	return "application/octet-stream";
 }
 
@@ -310,6 +313,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    runner.InitializeVariables(notebook, {});
 		    RunnerOptions options;
 		    options.charts = true;
+		    options.mark_values = true;
 		    options.page_rows = body.Get("page_rows") ? static_cast<idx_t>(body.Get("page_rows")->Num()) : 100;
 		    std::set<int> wanted;
 		    auto cells = body.Get("cells");
@@ -516,6 +520,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    ExportOptions options;
 		    options.format = Param(req, "format").empty() ? "html" : Param(req, "format");
 		    options.interactive = Param(req, "interactive");
+		    options.hide = Param(req, "hide") == "none" ? string() : Param(req, "hide");
 		    string note;
 		    auto document = ExportDocument(*db, text, session->source, options, note);
 		    auto stem = session->source.substr(session->source.find_last_of("/:") + 1);

@@ -93,33 +93,46 @@
     var grid = NB.el('div', { 'class': 'nb-cells' });
     var pre = {};
     if (payload.precomputed && !wasm) payload.precomputed.inputs.forEach(function (i) { pre[i.name] = i.values; });
+    var global = payload.hide || '';
+    var hides = function (h, what) { return h === 'all' || h === what; };
     current.forEach(function (cell) {
       if (cell.kind === 'notebook') return;
-      var hide = option(cell, 'hide', '');
-      var box = NB.el('div', { 'class': 'nb-cell', 'data-hide': hide, 'data-idx': cell.idx, style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
-      var out = NB.el('div', { 'class': 'nb-output' });
-      if (cell.kind === 'markdown') {
-        if (cell.error) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
-        else out.appendChild(NB.el('div', { 'class': 'nb-md', html: NB.markdown(cell.output != null ? cell.output : cell.content) }));
-      } else if (cell.kind === 'sql') {
-        if (hide !== 'code' && hide !== 'all') {
-          var det = NB.el('details', { 'class': 'nb-code-toggle' }, [NB.el('summary', { text: (cell.name ? cell.name + ' · ' : '') + 'SQL' }), NB.el('pre', { 'class': 'nb-source', text: cell.body })]);
-          box.appendChild(det);
-        }
-        if (cell.error) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
-        else if (cell.table) NB.table(out, cell.table, { pageSize: (cell.table.rows || []).length });
-        else if (!cell.is_query) box.style.display = 'none';
-      } else if (cell.kind === 'input') {
-        var enabled = !!wasm || !!pre[cell.name];
-        box.appendChild(inputWidget(cell, onInput, enabled, wasm ? null : pre[cell.name]));
-      } else if (cell.kind === 'chart') {
-        if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
-        else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null });
+      var own = option(cell, 'hide', '');
+      // The export's hide= applies to code and results; prose and inputs are what a reader came for.
+      var showCode = !hides(own, 'code') && !hides(global, 'code');
+      var showOutput = !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
+      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
+      var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
+      if (cell.kind === 'sql' && showCode && cell.body) {
+        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
+        box.appendChild(NB.el('pre', { 'class': 'nb-source', text: cell.body }));
+        shown++;
       }
+      if (showOutput) {
+        if (cell.kind === 'markdown') {
+          if (cell.error) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
+          else out.appendChild(NB.el('div', { 'class': 'nb-md', html: NB.markdown(cell.output != null ? cell.output : cell.content) }));
+          shown++;
+        } else if (cell.kind === 'sql') {
+          if (cell.error) { out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error })); shown++; }
+          else if (cell.table) { NB.table(out, cell.table, { pageSize: +option(cell, 'rows', 25) }); shown++; }
+        } else if (cell.kind === 'input') {
+          var enabled = !!wasm || !!pre[cell.name];
+          box.appendChild(inputWidget(cell, onInput, enabled, wasm ? null : pre[cell.name]));
+          shown++;
+        } else if (cell.kind === 'chart') {
+          if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
+          else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null, seed: 'chart' + cell.idx });
+          shown++;
+        }
+      }
+      if (!shown) return;
       box.appendChild(out);
       grid.appendChild(box);
     });
     root.appendChild(grid);
+    // Outlines are drawn once the cells are laid out, and follow their size from then on.
+    Array.prototype.forEach.call(grid.children, function (box) { Sketch.outline(box, { width: 1.5 }); });
     window.__NB_READY = true;
   }
 
@@ -160,14 +173,14 @@
   function refresh() {
     var jobs = current.map(function (cell) {
       if (cell.kind === 'sql' && cell.display_sql) {
-        return wasm.query('SELECT * FROM (' + cell.display_sql + ') LIMIT 100').then(function (t) { cell.table = t; cell.error = null; }, function (e) { cell.error = String(e.message || e); });
+        return wasm.query('SELECT * FROM (' + cell.display_sql + ') LIMIT ' + Math.max(100, +option(cell, 'rows', 0))).then(function (t) { cell.table = t; cell.error = null; }, function (e) { cell.error = String(e.message || e); });
       }
       if (cell.kind === 'markdown' && cell.expressions && cell.expressions.length) {
         return Promise.all(cell.expressions.map(function (x) { return wasm.query('SELECT (' + x.sql + ')'); })).then(function (results) {
           var text = '', at = 0;
           cell.expressions.forEach(function (x, i) {
             var v = results[i].rows[0] ? results[i].rows[0][0] : null;
-            text += cell.content.slice(at, x.begin) + (v === null ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+            text += cell.content.slice(at, x.begin) + '\uE000' + (v === null ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v)) + '\uE001';
             at = x.end;
           });
           cell.output = text + cell.content.slice(at);

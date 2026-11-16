@@ -34,8 +34,12 @@ struct CellOutcome {
 };
 
 struct RunnerOptions {
-	//! Rows of each query cell's result to keep in CellResult::table, 0 for none.
+	//! Rows of each query cell's result to keep, 0 for none. A cell's rows= option replaces it, or
+	//! with rows_at_least (exports, which page on the client) raises it.
 	idx_t page_rows = 0;
+	bool rows_at_least = false;
+	//! Wrap each markdown {{ }} value in U+E000 ... U+E001 so a renderer can highlight it.
+	bool mark_values = false;
 	//! Compile and fetch chart data.
 	bool charts = false;
 	//! Parameters by variable name (notebook_run / export params).
@@ -96,6 +100,9 @@ struct ExportOptions {
 	string chrome;
 	//! data: parquet or csv.
 	string data_format = "parquet";
+	//! What to hide in every cell, on top of each cell's own hide= option: code, output, all, or
+	//! empty for nothing.
+	string hide;
 };
 
 //! Runs a notebook and returns everything a reader needs to see it: cells, rendered markdown,
@@ -124,6 +131,13 @@ const string &GetAsset(const string &name);
 //! unknown (the literal's own type is used).
 string VariableSqlType(Connection &connection, const notebook::Notebook &notebook, const notebook::Cell &cell,
                        const string &name);
+
+//! Markers around rendered {{ }} values when RunnerOptions::mark_values is set.
+extern const char *const VALUE_OPEN;
+extern const char *const VALUE_CLOSE;
+
+//! The page size a cell asks for with rows=, or 0.
+idx_t CellRows(const notebook::Cell &cell);
 
 //! A Value as JSON: numbers stay numbers (unless too large for a double), temporal values are
 //! ISO-like strings, lists and structs nest.

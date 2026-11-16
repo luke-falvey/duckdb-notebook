@@ -361,6 +361,15 @@ static void TestChartCompiler() {
 	CHECK(TypeClass("TIMESTAMP WITH TIME ZONE") == "temporal" && TypeClass("DECIMAL(9,2)") == "quantitative");
 }
 
+static void TestCellOptions() {
+	auto nb = ParseNotebook("-- %% a hide=code rows=25\nSELECT 1;\n-- %% b hide=everything\nSELECT 2;\n"
+	                        "-- %% c rows=0\nSELECT 3;\n-- %% d rows=lots\nSELECT 4;\n-- %% e hide=all\nSELECT 5;\n");
+	CHECK(nb.cells[0].errors.empty() && nb.cells[0].Option("rows") == "25");
+	CHECK(nb.cells[1].errors.size() == 1 && nb.cells[1].errors[0].find("hide=everything") != std::string::npos);
+	CHECK(nb.cells[2].errors.size() == 1 && nb.cells[3].errors.size() == 1);
+	CHECK(nb.cells[4].errors.empty());
+}
+
 int main() {
 	TestSplitStatements();
 	TestIsQueryStatement();
@@ -377,6 +386,7 @@ int main() {
 	TestJson();
 	TestLiterals();
 	TestChartCompiler();
+	TestCellOptions();
 	if (failures) {
 		std::cerr << failures << " check(s) failed" << std::endl;
 		return 1;

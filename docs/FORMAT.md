@@ -52,8 +52,13 @@ After the kind comes an optional name and then `key=value` options. Quote values
 
 | Option | Values | Meaning |
 |---|---|---|
-| `hide` | `code`, `output`, `all` | What to hide in reading view and exports |
+| `hide` | `code`, `output`, `all`, `none` | What to hide in reading view and exports. The editor collapses the hidden part to a line that shows it on click |
 | `span` | `1`–`12` | Width on a 12-column grid in reading view and exports; consecutive cells whose spans fit share a row. Default `12` |
+| `rows` | `1`–`10000` | Rows per page of the cell's result table, in the editor and in exports. Default: the reader's own setting, 25 unless changed |
+
+`hide` and `rows` are checked: any other value is an error on the cell. In the editor, the
+code and output switches in a cell's header and the page-size picker under a table write these
+options into the marker line, so the choice is saved with the notebook and reviewed like any edit.
 
 ## 2. SQL cells
 
@@ -377,6 +382,9 @@ Three levels, from least to most capable:
    selection. A variable set by an SQL cell cannot be a parameter, because the cell would overwrite it.
 4. **Exported.** `notebook_export('revenue.sql', file := 'revenue.html')` writes a page that needs
    neither DuckDB nor a server; see [DESIGN.md §7](DESIGN.md#7-export) for the formats.
+   `hide := 'code'` (or `'output'`, `'all'`) hides that part of every cell on top of each cell's own
+   `hide=`; prose and inputs are always kept. An exported table pages through the rows the export
+   includes (`page_rows`, at least each cell's `rows=`).
 
 ## 8. Sidecar cache
 

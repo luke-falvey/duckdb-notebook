@@ -62,6 +62,12 @@ def test_server(browser, work):
     check(page.locator(".nb-cell").count() == 13, "one editor cell per notebook cell")
     check(page.locator(".nb-badge.fresh").count() == 0, "opening a notebook does not run it")
 
+    check(not page.locator("#menu").is_visible(), "options live behind the gear, closed by default")
+    page.click("#gear")
+    check(page.locator("#menu").is_visible() and page.locator("#view-graph").is_visible(), "the gear opens the options menu")
+    page.keyboard.press("Escape")
+    check(not page.locator("#menu").is_visible(), "Escape closes the options menu")
+
     page.click("#run-all")
     page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
     check(page.locator(".nb-badge.failed").count() == 0, "Run all: no cell fails")
@@ -87,6 +93,28 @@ def test_server(browser, work):
     check(len(months) > 0 and all(m[5:7] in ("03", "04") for m in months),
           f"brushing the trend chart filters top_orders ({sorted(set(m[:7] for m in months))})")
 
+    # Page size: the picker under a table writes rows=N to the cell, so it is saved with the notebook.
+    filtered = page.locator(".nb-cell[data-idx='6']")
+    check(filtered.locator("table.nb-grid tbody tr").count() == 25, "tables show 25 rows per page by default")
+    filtered.locator("select.nb-page-size").select_option("10")
+    page.wait_for_function("document.querySelectorAll(\".nb-cell[data-idx='6'] table.nb-grid tbody tr\").length === 10", timeout=15000)
+    check("rows=10" in filtered.locator("input.nb-head").input_value(), "choosing 10 per page writes rows=10 to the cell")
+    filtered.locator("button.nb-page", has_text="›").click()
+    page.wait_for_function("(document.querySelector(\".nb-cell[data-idx='6'] .nb-page-range\") || {}).textContent === '11–20'", timeout=15000)
+    check(True, "paging moves through the result 10 rows at a time")
+
+    # Hide code / output: toggles in the cell header write hide= to the cell.
+    regions = page.locator(".nb-cell[data-idx='3']")
+    regions.locator("button.nb-hide-code").click()
+    check("hide=code" in regions.locator("input.nb-head").input_value(), "the code toggle writes hide=code")
+    check(not regions.locator("textarea.nb-code").is_visible() and regions.locator(".nb-stub").first.is_visible(),
+          "hidden code collapses to a line that can show it")
+    regions.locator("button.nb-hide-output").click()
+    check("hide=all" in regions.locator("input.nb-head").input_value(), "hiding code and output writes hide=all")
+    regions.locator("button.nb-hide-output").click()
+    regions.locator("button.nb-hide-code").click()
+    check("hide=" not in regions.locator("input.nb-head").input_value(), "showing both again removes hide=")
+
     page.locator(".nb-add").last.locator("button", has_text="+ SQL").click()
     editor = page.locator(".nb-cell").last.locator("textarea")
     editor.fill("SELECT 41 + 1 AS answer;")
@@ -97,23 +125,29 @@ def test_server(browser, work):
           "a new cell runs with Shift+Enter")
     page.keyboard.press("Control+s")
     page.wait_for_function("document.getElementById('status').textContent.startsWith('Saved')", timeout=10000)
-    check("SELECT 41 + 1 AS answer;" in open(notebook).read(), "Ctrl+S writes the cell to the file")
+    saved = open(notebook).read()
+    check("SELECT 41 + 1 AS answer;" in saved, "Ctrl+S writes the cell to the file")
+    check("-- %% filtered rows=10" in saved, "the chosen page size is saved in the file")
 
     with open(notebook, "a") as f:
         f.write("\n-- %% from_disk\nSELECT 'edited elsewhere' AS note;\n")
     page.wait_for_function("document.querySelectorAll('.nb-cell').length === 15", timeout=15000)
     check(True, "an edit made to the file by another program appears in the editor")
 
+    page.click("#gear")
     page.click("#view-graph")
     check(page.locator(".nb-graph path.edge").count() >= 8, "the graph view draws the dependencies")
     page.click("#view-reading")
     check(page.locator("textarea.nb-code:visible").count() == 0, "reading view hides the code")
     page.click("#view-reading")
+    page.keyboard.press("Escape")
 
     token = re.search(r"token=([0-9a-f]+)", url).group(1)
     base = url.split("/?")[0]
     response = page.request.get(f"{base}/api/export?nb={notebook}&format=html&token={token}")
     check(response.ok and b"nb-data" in response.body(), "the editor's Export produces an HTML file")
+    response = page.request.get(f"{base}/api/export?nb={notebook}&format=md&hide=code&token={token}")
+    check(response.ok and b"```sql" not in response.body(), "the editor's Export can leave the code out")
     other = browser.new_page()
     check(other.request.get(f"{base}/api/catalog?nb={notebook}").status == 403,
           "the API refuses requests without the token")
@@ -144,6 +178,17 @@ def test_exports(browser, work, chromium):
     page.goto("file://" + html)
     page.wait_for_function("window.__NB_READY === true")
     check(page.locator("svg.nb-chart-svg").count() >= 3, "HTML export draws its charts offline")
+    check(page.locator("pre.nb-source").count() >= 3, "an export shows the SQL by default")
+    check(page.evaluate("document.fonts.check('20px Excalifont')"), "an export carries its handwriting font")
+    first = page.locator(".nb-cell[data-kind='sql'] table.nb-grid").nth(1)
+    check(first.locator("tbody tr").count() == 25, "exported tables page 25 rows at a time")
+
+    nocode = os.path.join(work, "revenue_nocode.html")
+    sql(db, f"FROM notebook_export('{notebook}', file := '{nocode}', hide := 'code')")
+    page.goto("file://" + nocode)
+    page.wait_for_function("window.__NB_READY === true")
+    check(page.locator("pre.nb-source").count() == 0 and page.locator("table.nb-grid").count() >= 3,
+          "hide := 'code' exports results without code")
     check(page.locator(".nb-input select:disabled").count() == 1, "a static export shows inputs but freezes them")
 
     page.goto("file://" + pre)

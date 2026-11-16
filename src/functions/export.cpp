@@ -192,6 +192,8 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 	runner.InitializeVariables(notebook, options.params);
 	RunnerOptions run;
 	run.page_rows = options.page_rows;
+	run.rows_at_least = true;
+	run.mark_values = true;
 	run.charts = true;
 	run.params = options.params;
 
@@ -236,7 +238,8 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 	return Json::Object()
 	    .Set("title", Json::String(NotebookTitle(notebook, source)))
 	    .Set("source", Json::String(source))
-	    .Set("cells", array);
+	    .Set("cells", array)
+	    .Set("hide", Json::String(options.hide));
 }
 
 namespace {
@@ -370,12 +373,18 @@ string Html(DatabaseInstance &db, const Json &payload, const string &title, cons
 		       ScriptSafe(ReadRuntimeFile(db, wasm_runtime, "runtime.js")) + "</script>\n";
 	}
 	html = ReplaceAll(html, "{{TITLE}}", HtmlEscape(title));
-	html = ReplaceAll(html, "{{STYLE}}", GetAsset("style.css"));
+	// The stylesheet loads fonts from the server; an export carries them inline.
+	auto style = GetAsset("style.css");
+	for (auto font : {"Excalifont.woff2", "CascadiaCode.woff2"}) {
+		style = ReplaceAll(style, string("url('/assets/") + font + "')",
+		                   "url(data:font/woff2;base64," + Base64(GetAsset(font)) + ")");
+	}
+	html = ReplaceAll(html, "{{STYLE}}", style);
 	html = ReplaceAll(html, "{{DATA}}", data);
 	html = ReplaceAll(html, "{{WASM}}", wasm);
-	html =
-	    ReplaceAll(html, "{{RENDER}}",
-	               ScriptSafe(GetAsset("render-core.js") + GetAsset("render-chart.js") + GetAsset("render-typed.js")));
+	html = ReplaceAll(html, "{{RENDER}}",
+	                  ScriptSafe(GetAsset("render-sketch.js") + GetAsset("render-core.js") +
+	                             GetAsset("render-chart.js") + GetAsset("render-typed.js")));
 	html = ReplaceAll(html, "{{VIEWER}}", ScriptSafe(GetAsset("viewer.js")));
 	return html;
 }
@@ -419,14 +428,19 @@ string MarkdownTable(const Json &table, idx_t max_rows) {
 	return out;
 }
 
+bool Hides(const string &hide, const char *what) {
+	return hide == "all" || hide == what;
+}
+
 string Markdown(const Json &payload) {
+	auto global_hide = payload.Get("hide") ? payload.Get("hide")->Str() : string();
 	string out;
 	for (auto &cell : payload.Get("cells")->Items()) {
 		auto kind = cell.Get("kind")->Str();
 		auto options = cell.Get("options");
 		auto hide = options && options->Get("hide") ? options->Get("hide")->Str() : string();
-		bool show_code = hide != "code" && hide != "all";
-		bool show_output = hide != "output" && hide != "all";
+		bool show_code = !Hides(hide, "code") && !Hides(global_hide, "code");
+		bool show_output = !Hides(hide, "output") && !Hides(global_hide, "output");
 		if (kind == "markdown") {
 			if (auto output = cell.Get("output")) {
 				out += output->Str() + "\n\n";
@@ -482,7 +496,9 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 	auto payload = BuildPayload(db, text, source, options);
 	auto title = payload.Get("title")->Str();
 	if (format == "md") {
-		return "<!-- Exported from " + source + " by notebook_export. -->\n\n" + Markdown(payload);
+		auto markdown = Markdown(payload);
+		markdown = ReplaceAll(ReplaceAll(markdown, VALUE_OPEN, ""), VALUE_CLOSE, "");
+		return "<!-- Exported from " + source + " by notebook_export. -->\n\n" + markdown;
 	}
 	if (format != "html" && format != "html-wasm") {
 		throw InvalidInputException("Unknown export format '%s'; expected html, html-wasm, md, sql, data or pdf",
@@ -662,6 +678,13 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 			result->options.wasm_runtime = value.GetValue<string>();
 		} else if (key == "chrome") {
 			result->options.chrome = value.GetValue<string>();
+		} else if (key == "hide") {
+			auto hide = value.GetValue<string>();
+			if (hide != "code" && hide != "output" && hide != "all" && hide != "none") {
+				throw InvalidInputException("notebook_export: hide must be 'code', 'output', 'all' or 'none', not '%s'",
+				                            hide);
+			}
+			result->options.hide = hide == "none" ? string() : hide;
 		} else if (key == "data_format") {
 			result->options.data_format = value.GetValue<string>();
 		} else if (key == "params") {
@@ -803,7 +826,8 @@ void RegisterNotebookExport(ExtensionLoader &loader) {
 		    .Add("page_rows", LogicalType::UBIGINT)
 		    .Add("wasm_runtime", LogicalType::VARCHAR)
 		    .Add("chrome", LogicalType::VARCHAR)
-		    .Add("data_format", LogicalType::VARCHAR);
+		    .Add("data_format", LogicalType::VARCHAR)
+		    .Add("hide", LogicalType::VARCHAR);
 	});
 	loader.RegisterFunction(function);
 }

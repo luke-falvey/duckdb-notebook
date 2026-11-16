@@ -26,7 +26,8 @@ run order). `ReadNotebook` runs both, so every function sees an analysed noteboo
 
 Running cells goes through one place, `Runner` in `src/functions/session.cpp`, used by `notebook_run`,
 the exports and the server. The chart compiler is `src/core/chart.cpp`; the browser draws its output
-with `frontend/render-*.js`.
+with `frontend/render-*.js`, all of it hand-drawn through the primitives in
+`frontend/render-sketch.js` (the "sketchbook" look, DESIGN §6 Themes).
 
 Not built: the result cache (FORMAT §8), a CodeMirror editor, charting libraries (see DESIGN §6).
 
@@ -36,7 +37,7 @@ Not built: the result cache (FORMAT §8), a CodeMirror editor, charting librarie
 src/core/          Plain C++17, no DuckDB headers. Lexer, format parser, script generation, graph,
                    YAML and JSON, chart compiler.
 src/functions/     The SQL surface (one file per function), the runner, the server. DuckDB C++ API.
-frontend/          The browser UI, export viewer and chart renderers: plain JS and CSS, no build
+frontend/          The browser UI, export viewer, chart renderers and fonts: plain JS, CSS and woff2, no build
                    step. CMake compiles every file here into the extension (GetAsset).
 wasm/              The DuckDB-WASM runtime for html-wasm exports, built separately with Node.
 src/include/       Headers: notebook/*.hpp for core, notebook/functions.hpp for the SQL surface.
@@ -47,6 +48,7 @@ test/notebooks/    Notebook files the SQL tests read.
 examples/          Notebooks for people to read. Tests check they stay valid and runnable.
 duckdb/            Submodule, pinned to the DuckDB release we build against (v2.0.0).
 extension-ci-tools/ Submodule: DuckDB's shared build and CI scripts.
+third_party/       Licences of bundled assets (fonts).
 spikes/            Throwaway experiments kept as evidence. Not built or tested by CI.
 ```
 
@@ -123,7 +125,11 @@ notebook call `ThrowIfInvalid`, which reports the first error and points at `not
 `notebook_sql.cpp` as the smallest example.
 
 **The frontend has no build step.** Plain browser JavaScript (no modules, no npm), so the extension
-build needs nothing but CMake. Shared rendering lives in `frontend/render-*.js` and is used by both
+build needs nothing but CMake. Draw lines, boxes and fills with `Sketch` (`render-sketch.js`), not
+raw SVG, so everything keeps the hand-drawn look; seed it (`Sketch.reseed`) so a drawing is stable.
+Use `currentColor` for ink in SVG: attributes do not resolve CSS variables. Fonts in `frontend/` are
+SIL OFL; their licence is in `third_party/fonts/LICENSE.md`.
+Shared rendering lives in `frontend/render-*.js` and is used by both
 the editor (`app.js`, `app-extra.js`) and exports (`viewer.js`). Results travel as JSON.
 
 **Never keep a `Connection` alive past a query.** A stored `Connection` owns the database instance.
