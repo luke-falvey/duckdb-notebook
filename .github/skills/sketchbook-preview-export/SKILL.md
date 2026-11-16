@@ -53,7 +53,7 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
 - Buttons to add a cell appear when the pointer is between two cells. A cell's kind symbol (☰ settings,
   ¶ text, ◉ input, ▦ query, ✎ SQL that changes data, ∿ chart) and name are in its left margin; click
   either to edit the `-- %%` line (Enter keeps, Escape cancels). Its state dot is in the right margin;
-  its buttons appear in a row on its top edge on hover. Its rows, what it defines and its run time are in the bottom right;
+  its buttons appear on hover in a row at its top right, in line with the dot. Its rows, what it defines and its run time are in the bottom right;
   the gear's "timing" switch writes `timing: false` into the `[notebook]` cell.
 - Pointing at a chart shows the values under the pointer (the nearest point on lines).
 

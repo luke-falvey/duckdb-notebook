@@ -105,9 +105,11 @@ def test_server(browser, work):
     page.locator(".nb-cell[data-idx='3']").hover()
     page.wait_for_timeout(300)
     rb, tb3 = page.locator(".nb-cell[data-idx='3']").bounding_box(), tools.bounding_box()
+    dot = page.locator(".nb-cell[data-idx='3'] .nb-badge i").bounding_box()
     check(tools.evaluate("e => getComputedStyle(e).opacity") == "1" and tb3["height"] < 40 and tb3["width"] > 150
-          and tb3["y"] < rb["y"] and tb3["x"] + tb3["width"] <= rb["x"] + rb["width"],
-          "hovering shows them as one row on the cell's top edge")
+          and tb3["x"] + tb3["width"] <= rb["x"] + rb["width"]
+          and abs((tb3["y"] + tb3["height"] / 2) - (dot["y"] + dot["height"] / 2)) < 2,
+          "hovering shows them as one row at the top right, in line with the state dot")
     cell6.locator(".nb-name").click()
     head_input = cell6.locator("input.nb-head")
     check(head_input.is_visible() and head_input.evaluate("e => e === document.activeElement"), "clicking a cell's name opens its -- %% line")

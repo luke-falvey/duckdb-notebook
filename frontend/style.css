@@ -101,9 +101,10 @@ code, pre, textarea.nb-code { font-family: var(--nb-mono); font-size: 13.5px; }
   color: var(--nb-fg); background: var(--nb-card); border: 1.4px solid var(--nb-ink); border-radius: var(--nb-wobbly); box-shadow: 2px 3px 0 rgba(30, 30, 30, .12); outline: none; }
 .nb-cell-head { position: absolute; left: calc(100% + 12px); top: 12px; width: 36px; display: flex; justify-content: center; color: var(--nb-muted); }
 .nb-cell-head .nb-badge { font-size: 0; gap: 0; }
-/* Buttons: a strip on the cell's top edge, right-aligned. Their middles are inside the cell, so the
-   pointer that clicked one is still on the cell after it redraws and the strip stays. */
-.nb-tools { position: absolute; right: 12px; top: -9px; z-index: 4; display: flex; gap: 4px; padding: 0 4px; background: var(--nb-bg);
+/* Buttons: a row at the top right of the cell, centred on the same line as the state dot in the
+   right margin. Being inside the cell, the pointer that clicked one is still on the cell after it
+   redraws, so the row stays. */
+.nb-tools { position: absolute; right: 12px; top: 7px; z-index: 4; display: flex; gap: 4px; padding: 0 4px; background: var(--nb-bg);
   border-radius: var(--nb-wobbly); opacity: 0; pointer-events: none; transition: opacity .15s; }
 .nb-cell:hover .nb-tools, .nb-cell.pointed .nb-tools, .nb-cell:focus-within .nb-tools { opacity: 1; pointer-events: auto; }
 .nb-tools button { padding: 0 7px 1px; font-size: 14px; line-height: 1.35; border-width: 1.2px; background: var(--nb-bg); }
