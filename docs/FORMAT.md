@@ -291,7 +291,7 @@ and `facet` (`{row: …, col: …}`) for small multiples. A channel is a column 
 | `timeunit` | Truncates: `year`, `quarter`, `month`, `week`, `date`, `hour`, `minute`, `second`. Extracts a cyclic part: `monthofyear`, `dayofmonth`, `dayofweek` (or `day`, 0 = Sunday), `hours` (or `hourofday`), `minutes` |
 | `sort` | `asc`, `desc`, or a channel with optional `-` (`-x`) |
 | `type` | `quantitative`, `temporal`, `ordinal`, `nominal`. Inferred from the column type if omitted |
-| `scale` | `{type: log}`, `{domain: [0, 100]}`, `{zero: false}` |
+| `scale` | `{type: log}`, `{domain: [0, 100]}`, `{zero: true}` (include zero; bars and areas always do unless `{zero: false}`) |
 | `scheme` | Named colour scheme |
 | `format`, `title` | d3-format string; axis or legend title |
 

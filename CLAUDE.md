@@ -46,6 +46,8 @@ test/sql/          sqllogictest files: end-to-end tests through SQL.
 test/browser/      Playwright tests of the server, UI and exports in Chromium.
 test/notebooks/    Notebook files the SQL tests read.
 examples/          Notebooks for people to read. Tests check they stay valid and runnable.
+.github/skills/    Agent skills for writing sketchbooks (notebooks) and making them look good: authoring
+                   (with a template and check.sh), charts, design, preview/export, and the look itself.
 duckdb/            Submodule, pinned to the DuckDB release we build against (v2.0.0).
 extension-ci-tools/ Submodule: DuckDB's shared build and CI scripts.
 third_party/       Licences of bundled assets (fonts).

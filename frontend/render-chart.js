@@ -147,7 +147,8 @@
     var lo = nums.length ? Math.min.apply(null, nums) : 0, hi = nums.length ? Math.max.apply(null, nums) : 1;
     var scaleOpt = enc.scale || {};
     if (scaleOpt.domain && scaleOpt.domain.length === 2) { lo = numeric(scaleOpt.domain[0], enc.type); hi = numeric(scaleOpt.domain[1], enc.type); }
-    else if (zero && scaleOpt.zero !== false && enc.type !== 'temporal') { lo = Math.min(0, lo); hi = Math.max(0, hi); }
+    // Bars and areas start at zero unless zero: false; other marks only with zero: true.
+    else if ((zero || scaleOpt.zero === true) && scaleOpt.zero !== false && enc.type !== 'temporal') { lo = Math.min(0, lo); hi = Math.max(0, hi); }
     var f;
     if (enc.type === 'temporal') f = time([lo, hi], range);
     else if (scaleOpt.type === 'log' && lo > 0) {
