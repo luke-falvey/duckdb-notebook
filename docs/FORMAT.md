@@ -410,10 +410,13 @@ attach:
   - {path: warehouse.duckdb, as: wh, read_only: true}
 extensions: [spatial]
 theme: light
+timing: false
 */
 ```
 
-`format` is the version of this specification. `attach` and `extensions` are applied before the first
+`format` is the version of this specification. `timing` (`true` by default) shows how long each cell
+took to run, in the bottom right corner of its box in the editor; `timing: false` hides it. Any other
+value is an error. The editor's gear menu has a switch that writes this line. `attach` and `extensions` are applied before the first
 cell runs (`LOAD` for each extension, `ATTACH IF NOT EXISTS` for each database). Paths are relative to
 the notebook file.
 

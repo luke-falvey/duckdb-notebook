@@ -143,6 +143,7 @@ var AppExtra = (function () {
     box.appendChild(NB.el('span', { text: 'Chart:' }));
     [mark, x, y, color].forEach(function (s) { box.appendChild(s); });
     box.appendChild(NB.el('button', { 'class': 'nb-add-chart', text: 'Add chart', onclick: function () { App.addChart(cell, spec()); } }));
+    box.appendChild(NB.el('button', { 'class': 'nb-switcher-close', text: '✕', title: 'Close', onclick: function () { cell.picking = false; App.render(); } }));
     return box;
   };
 

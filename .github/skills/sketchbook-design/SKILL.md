@@ -97,6 +97,12 @@ query hide=code rows=10                          (detail table)
 - Static HTML exports freeze inputs (shown, disabled). Use `interactive := 'precomputed'` or
   `html-wasm` when readers must change them (sketchbook-preview-export).
 
+## Timing
+
+Run times show in the bottom right of each cell in the editor. For a notebook you present or record,
+set `timing: false` in the `[notebook]` cell (or untick "timing" in the gear menu) to hide them.
+Exports never show them.
+
 ## Dark mode
 
 The ◐ button in the gear menu inverts the page and turns hues back, as Excalidraw does. Fixed colours in

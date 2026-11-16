@@ -421,6 +421,13 @@ static void TestQueryCharts() {
 	CHECK(nb.cells[1].charts.size() == 1 && nb.cells[1].charts[0] == "mark: bar" && ChartFrom(nb.cells[1]) == "a");
 }
 
+static void TestTimingSetting() {
+	auto nb = ParseNotebook("-- %% [notebook]\n/*\ntitle: T\ntiming: false\n*/\n");
+	CHECK(nb.cells[0].errors.empty());
+	nb = ParseNotebook("-- %% [notebook]\n/*\ntiming: sometimes\n*/\n");
+	CHECK(HasMessage(nb.cells[0].errors, "timing: sometimes is not valid"));
+}
+
 int main() {
 	TestSplitStatements();
 	TestIsQueryStatement();
@@ -439,6 +446,7 @@ int main() {
 	TestChartCompiler();
 	TestCellOptions();
 	TestQueryCharts();
+	TestTimingSetting();
 	if (failures) {
 		std::cerr << failures << " check(s) failed" << std::endl;
 		return 1;

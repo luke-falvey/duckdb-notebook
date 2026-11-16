@@ -1,6 +1,7 @@
 #include "notebook/format.hpp"
 
 #include "notebook/sql_lexer.hpp"
+#include "notebook/yaml.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -243,6 +244,14 @@ void CheckBody(Cell &cell) {
 		}
 		if (cell.kind == CellKind::CHART) {
 			cell.charts.push_back(cell.content);
+		}
+		if (cell.kind == CellKind::NOTEBOOK && cell.errors.empty()) {
+			std::string error;
+			auto meta = ParseYaml(cell.content, error);
+			auto timing = meta.Get("timing");
+			if (timing && (!timing->IsScalar() || (timing->scalar != "true" && timing->scalar != "false"))) {
+				cell.errors.push_back("timing: " + timing->scalar + " is not valid; use timing: true or timing: false");
+			}
 		}
 		break;
 	case CellKind::INPUT: {

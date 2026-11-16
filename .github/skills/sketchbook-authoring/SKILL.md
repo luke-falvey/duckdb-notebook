@@ -35,7 +35,7 @@ Related skills: **sketchbook-charts** (chart specs), **sketchbook-design** (maki
 ## The cells
 
 ```sql
--- %% [notebook]                    metadata, first cell only: title, format, attach, extensions
+-- %% [notebook]                    metadata, first cell only: title, format, attach, extensions, timing
 -- %% [markdown]                    prose in one /* ... */ block, with {{ expr }} values
 -- %% input <name> <widget> opts    one SET VARIABLE <name> = <default>;
 -- %% <name> opts                   SQL; a named query becomes a temp view called <name>

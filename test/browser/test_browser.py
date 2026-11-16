@@ -73,6 +73,20 @@ def test_server(browser, work):
     check(page.locator(".nb-badge.failed").count() == 0, "Run all: no cell fails")
     check(page.locator("svg.nb-chart-svg").count() >= 2, "Run all draws the charts")
     check("EU" in page.locator(".nb-md").first.text_content(), "markdown shows {{ $region }}")
+    check(page.locator(".nb-cell[data-idx='6'] .nb-time").count() == 1 and " ms" not in page.locator(".nb-cell[data-idx='6'] .nb-meta").text_content(),
+          "a cell's run time sits at the bottom of its box, not in its summary line")
+    add_bar = page.locator(".nb-add").nth(3)
+    check(add_bar.evaluate("e => getComputedStyle(e).opacity") == "0", "the add-cell buttons between cells are hidden")
+    add_bar.hover()
+    page.wait_for_timeout(300)
+    check(add_bar.evaluate("e => getComputedStyle(e).opacity") == "1", "hovering between cells shows the add-cell buttons")
+    regions = page.locator(".nb-cell[data-idx='3']")
+    check(regions.locator(".nb-switcher").count() == 0 and regions.locator("button.nb-pick-chart").count() == 1,
+          "a table's chart picker is hidden behind '+ chart'")
+    regions.locator("button.nb-pick-chart").click()
+    check(regions.locator(".nb-switcher").count() == 1, "'+ chart' opens the chart picker")
+    regions.locator("button.nb-switcher-close").click()
+    check(regions.locator(".nb-switcher").count() == 0, "the chart picker closes again")
 
     page.locator(".nb-input select").first.select_option(label="US")
     page.wait_for_function("document.querySelector('.nb-md').textContent.includes('US')", timeout=30000)
@@ -82,6 +96,7 @@ def test_server(browser, work):
     overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
     overlay.scroll_into_view_if_needed()
     box = overlay.bounding_box()
+    scrolled = page.evaluate("document.getElementById('main').scrollTop")
     page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + 20)
     page.mouse.down()
     page.mouse.move(box["x"] + box["width"] * 0.3, box["y"] + 40, steps=5)
@@ -92,6 +107,8 @@ def test_server(browser, work):
     months = page.locator(".nb-cell[data-idx='10'] table.nb-grid tbody tr td:nth-child(3)").all_text_contents()
     check(len(months) > 0 and all(m[5:7] in ("03", "04") for m in months),
           f"brushing the trend chart filters top_orders ({sorted(set(m[:7] for m in months))})")
+    check(abs(page.evaluate("document.getElementById('main').scrollTop") - scrolled) < 5 and scrolled > 100,
+          f"brushing keeps the page where it was (scrollTop {scrolled})")
 
     # A query's charts are tabs over its result, with the table last.
     monthly = page.locator(".nb-cell[data-idx='7']")
@@ -143,6 +160,7 @@ def test_server(browser, work):
     check("42" in page.locator(".nb-cell").last.locator("table.nb-grid").text_content(),
           "a new cell runs with Shift+Enter")
     answer = page.locator(".nb-cell").last
+    answer.locator("button.nb-pick-chart").click()
     answer.locator("button.nb-add-chart").click()
     page.wait_for_function("[...document.querySelectorAll('.nb-cell')].pop().querySelectorAll('.nb-tab').length === 3",
                            timeout=15000)
@@ -161,6 +179,22 @@ def test_server(browser, work):
         f.write("\n-- %% from_disk\nSELECT 'edited elsewhere' AS note;\n")
     page.wait_for_function("document.querySelectorAll('.nb-cell').length === 13", timeout=15000)
     check(True, "an edit made to the file by another program appears in the editor")
+
+    # Timing is a notebook setting: the gear's switch writes timing: false into the [notebook] cell.
+    page.click("#run-all")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+    check(page.locator(".nb-time").count() > 5, "run times show after Run all")
+    page.click("#gear")
+    page.uncheck("#show-timing")
+    check(page.locator(".nb-time").count() == 0, "switching timing off hides run times")
+    page.keyboard.press("Escape")
+    page.keyboard.press("Control+s")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('Saved')", timeout=10000)
+    check("timing: false\n*/" in open(notebook).read(), "the timing switch is saved in the [notebook] cell")
+    page.click("#gear")
+    page.check("#show-timing")
+    check(page.locator(".nb-time").count() > 0, "switching timing on shows run times again")
+    page.keyboard.press("Escape")
 
     page.click("#gear")
     page.click("#view-graph")

@@ -276,6 +276,34 @@ var App = (function () {
     A.render();
   };
 
+  // timing: false in the [notebook] cell hides how long cells took. It is a setting of the notebook,
+  // so it is saved with it; the gear menu's switch edits that line.
+  A.notebookCell = function () {
+    return A.cells.find(function (c) { return c.kind === 'notebook'; });
+  };
+  A.timing = function () {
+    var nb = A.notebookCell(), m = nb && /^timing:\s*(\S+)\s*$/m.exec(nb.content || '');
+    return !(m && m[1] === 'false');
+  };
+  A.setTiming = function (on) {
+    var nb = A.notebookCell();
+    if (!nb) {
+      if (on) return;
+      nb = { head: '[notebook]', body: '/*\n*/', kind: 'notebook', state: 'stale', options: {}, content: '' };
+      A.cells.unshift(nb);
+    }
+    var lines = (nb.content || '').split('\n').filter(function (l) { return !/^timing:/.test(l); });
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    if (!on) lines.push('timing: false');
+    nb.content = lines.join('\n');
+    nb.body = '/*\n' + nb.content + (nb.content ? '\n' : '') + '*/';
+    A.edited(nb);
+    A.render();
+  };
+  function elapsed(ms) {
+    return ms < 1000 ? Math.max(0, Math.round(ms)) + ' ms' : ms < 60000 ? (ms / 1000).toFixed(1) + ' s' : Math.floor(ms / 60000) + ' min ' + Math.round(ms % 60000 / 1000) + ' s';
+  }
+
   function messages(cell) {
     var box = NB.el('div', { 'class': 'nb-meta' });
     (cell.errors || []).forEach(function (m) { box.appendChild(NB.el('div', { 'class': 'nb-error', text: m })); });
@@ -284,7 +312,6 @@ var App = (function () {
     if (r && r.status !== 'skipped') {
       var parts = [];
       if (r.row_count != null) parts.push(NB.formatNumber(r.row_count, ',') + ' rows');
-      if (r.elapsed_ms != null) parts.push(Math.round(r.elapsed_ms) + ' ms');
       if (cell.defines && cell.defines.length) parts.push('defines ' + cell.defines.join(', '));
       if (parts.length) box.appendChild(NB.el('div', { text: parts.join(' · ') }));
     }
@@ -356,7 +383,12 @@ var App = (function () {
         // The page size is part of the notebook: it is written to the cell as rows=N.
         onPageSize: function (next) { A.setOption(cell, 'rows', next); fetchPage(0, next); }
       });
-      if (window.AppExtra && (!specs.length || cell.picking)) out.appendChild(AppExtra.switcher(cell, r.data.columns));
+      // The chart picker stays out of the way until asked for.
+      if (window.AppExtra && cell.picking) out.appendChild(AppExtra.switcher(cell, r.data.columns));
+      else if (window.AppExtra && !specs.length) {
+        out.appendChild(NB.el('button', { 'class': 'nb-tab nb-tab-add nb-pick-chart nb-hide-reading', text: '+ chart', title: 'Chart this result',
+          onclick: function () { cell.picking = true; A.render(); } }));
+      }
     }
   }
 
@@ -396,6 +428,8 @@ var App = (function () {
 
   A.render = function () {
     var root = $('cells');
+    // Rebuilding the cells empties the page for a moment; keep the reader where they were.
+    var main = $('main'), scrollTop = main.scrollTop;
     var focused = document.activeElement, focusIndex = -1, caret = 0;
     if (focused && focused.tagName === 'TEXTAREA' && focused.closest('.nb-cell')) {
       focusIndex = Array.prototype.indexOf.call(root.querySelectorAll('textarea'), focused);
@@ -437,6 +471,10 @@ var App = (function () {
         body.appendChild(stub(cell.peekOutput ? '▾ output (hidden when reading)' : '▸ output hidden', function () { cell.peekOutput = !cell.peekOutput; A.render(); }));
       }
       body.appendChild(output(cell));
+      var r = cell.result;
+      if (r && r.elapsed_ms != null && r.status !== 'skipped' && A.timing() && !A.reading) {
+        body.appendChild(NB.el('div', { 'class': 'nb-time', text: elapsed(r.elapsed_ms), title: 'Time this cell took to run' }));
+      }
       box.appendChild(body);
       root.appendChild(box);
       if (cell.kind === 'markdown') box.addEventListener('dblclick', function (e) { if (!cell.editing && !A.reading && e.target.closest('.nb-output')) { cell.editing = true; A.render(); } });
@@ -447,9 +485,12 @@ var App = (function () {
     if (!A.reading) root.appendChild(addBar(A.cells.length));
     if (focusIndex >= 0) {
       var t = root.querySelectorAll('textarea')[focusIndex];
-      if (t) { t.focus(); t.selectionStart = t.selectionEnd = caret; }
+      if (t) { t.focus({ preventScroll: true }); t.selectionStart = t.selectionEnd = caret; }
     }
     if (window.AppExtra) AppExtra.graph();
+    main.scrollTop = scrollTop;
+    var timing = $('show-timing');
+    if (timing) timing.checked = A.timing();
   };
 
   // Input widgets, shared with the exported viewer's look.
@@ -543,6 +584,7 @@ var App = (function () {
       document.documentElement.setAttribute('data-theme', next);
       localStorage.setItem('nb.theme', next);
     };
+    $('show-timing').onchange = function (e) { A.setTiming(e.target.checked); };
     NB.pageSizes.forEach(function (n) { $('page-size').appendChild(NB.el('option', { value: n, text: n, selected: n === A.pageSize ? 'selected' : null })); });
     $('page-size').onchange = function (e) {
       A.pageSize = +e.target.value;
