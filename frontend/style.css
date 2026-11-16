@@ -101,6 +101,16 @@ code, pre, textarea.nb-code { font-family: var(--nb-mono); font-size: 13.5px; }
 .nb-toggle { opacity: .55; }
 .nb-toggle.on { opacity: 1; }
 textarea.nb-code { width: 100%; border: 0; resize: vertical; padding: 4px 2px; background: transparent; min-height: 2.5em; tab-size: 4; display: block; color: #343a40; line-height: 1.55; outline: none; }
+/* SQL highlighting: a coloured copy of the text behind a transparent textarea. Both must share every
+   metric (font, size, line height, padding, wrapping, tab size) or the caret drifts from the text. */
+.nb-code-wrap { position: relative; }
+.nb-code-hl, textarea.nb-code-over { font-family: var(--nb-mono); font-size: 13.5px; line-height: 1.55; padding: 4px 2px; margin: 0; border: 0; tab-size: 4;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; letter-spacing: normal; }
+.nb-code-hl { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: #343a40; }
+textarea.nb-code-over { position: relative; color: transparent; caret-color: var(--nb-ink); resize: none; overflow: hidden; }
+textarea.nb-code-over::selection { color: transparent; background: rgba(103, 65, 217, .2); }
+.tk-kw { color: #6741d9; } .tk-fn { color: #1971c2; } .tk-type { color: #0c8599; } .tk-str { color: #2f9e44; }
+.tk-num { color: #e8590c; } .tk-var, .tk-name { color: #c2255c; } .tk-comment { color: #adb5bd; }
 .nb-stub { display: block; width: max-content; color: var(--nb-faint); font-size: 14px; cursor: pointer; margin: 2px 0; }
 .nb-stub:hover { color: var(--nb-accent); }
 .nb-output { position: relative; padding-top: 6px; overflow: auto; }

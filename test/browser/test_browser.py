@@ -63,6 +63,19 @@ def test_server(browser, work):
     check(page.locator(".nb-badge.fresh").count() == 0, "opening a notebook does not run it")
 
     check(not page.locator("#menu").is_visible(), "options live behind the gear, closed by default")
+
+    # SQL highlighting: a coloured copy behind each SQL text area, with DuckDB's own keywords.
+    filtered_code = page.locator(".nb-cell[data-idx='6']")
+    hl, ta = filtered_code.locator(".nb-code-hl"), filtered_code.locator("textarea")
+    check(hl.locator(".tk-kw").first.text_content() == "SELECT" and hl.locator(".tk-var").first.text_content() == "$region"
+          and hl.locator(".tk-name").first.text_content() == "orders", "SQL is highlighted: keywords, $variables and cell names")
+    check(hl.evaluate("e => e.textContent") == ta.input_value() + "\n" and abs(hl.bounding_box()["height"] - ta.bounding_box()["height"]) < 1
+          and ta.evaluate("e => getComputedStyle(e).color") == "rgba(0, 0, 0, 0)", "the highlighted copy matches the text area exactly, behind transparent text")
+    tokens = page.evaluate("""() => NB.tokenizeSql("SELECT $$a -- b$$ /* x /* y */ z */ 'it''s' $v collate day sum(n) t.select AS orders FROM orders",
+      {names: {orders: true}}).filter(t => t.type !== 'ws').map(t => t.type)""")
+    check(tokens == ["kw", "str", "comment", "str", "var", "kw", "ident", "fn", "op", "ident", "op", "ident", "op", "ident",
+                     "kw", "ident", "kw", "name"],
+          f"the tokenizer follows DuckDB's lexer and keyword list ({tokens})")
     page.click("#gear")
     check(page.locator("#menu").is_visible() and page.locator("#view-graph").is_visible(), "the gear opens the options menu")
     page.keyboard.press("Escape")
@@ -184,6 +197,7 @@ def test_server(browser, work):
     page.locator(".nb-add").last.locator("button", has_text="+ SQL").click()
     editor = page.locator(".nb-cell").last.locator("textarea")
     editor.fill("SELECT 41 + 1 AS answer;")
+    check(page.locator(".nb-cell").last.locator(".nb-code-hl .tk-num").first.text_content() == "41", "highlighting follows typing")
     editor.press("Shift+Enter")
     page.wait_for_function("[...document.querySelectorAll('.nb-cell')].pop().querySelector('table.nb-grid')",
                            timeout=30000)
@@ -271,6 +285,7 @@ def test_exports(browser, work, chromium):
     page.wait_for_function("window.__NB_READY === true")
     check(page.locator("svg.nb-chart-svg").count() >= 2, "HTML export draws its charts offline")
     check(page.locator("pre.nb-source").count() >= 3, "an export shows the SQL by default")
+    check(page.locator("pre.nb-source .tk-kw").count() > 5 and page.locator("pre.nb-source .tk-var").count() > 0, "exported SQL is highlighted")
     monthly = page.locator(".nb-cell[data-idx='7']")
     check(monthly.locator(".nb-tab").count() == 3 and "/* chart" not in monthly.locator("pre.nb-source").text_content(),
           "an export shows a query's charts as tabs and its SQL without them")

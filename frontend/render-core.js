@@ -143,7 +143,8 @@ var NB = (function () {
         var body = []; i++;
         while (i < lines.length && lines[i].trim().indexOf(fence[1]) !== 0) body.push(lines[i++]);
         i++;
-        out.push('<pre class="nb-code' + (fence[2] ? ' lang-' + NB.esc(fence[2]) : '') + '"><code>' + NB.esc(body.join('\n')) + '</code></pre>');
+        var sql = /^(sql|duckdb)$/i.test(fence[2]) && NB.highlightSql;
+        out.push('<pre class="nb-code' + (fence[2] ? ' lang-' + NB.esc(fence[2]) : '') + '"><code>' + (sql ? NB.highlightSql(body.join('\n')) : NB.esc(body.join('\n'))) + '</code></pre>');
         continue;
       }
       if (/^\s*$/.test(line)) { i++; continue; }

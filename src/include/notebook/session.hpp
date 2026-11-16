@@ -125,6 +125,10 @@ string NotebookTitle(const notebook::Notebook &notebook, const string &source);
 //! The values a select input offers: its options= list or the distinct values of its from= column.
 vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, idx_t limit);
 
+//! The words SQL highlighting colours, from this DuckDB: `{keywords, types}`. Keywords are the
+//! reserved, column-name and type/function ones; unreserved keywords are also common column names.
+notebook::Json SqlWords(Connection &connection);
+
 //! A cell's parse and graph results as JSON, as the browser sees them.
 notebook::Json CellJson(const notebook::Cell &cell);
 

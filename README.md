@@ -89,8 +89,8 @@ FROM notebook_export('examples/revenue.sql', format := 'html-wasm', wasm_runtime
 
 [examples/charts.sql](examples/charts.sql) shows every chart type.
 
-Not yet built: the result cache, a CodeMirror editor (the editor is a plain text area with
-completion), and charting libraries for zoomable maps and GPU-scale networks (the built-in SVG
+Not yet built: the result cache, a CodeMirror editor (the editor is a text area with SQL
+highlighting and completion), and charting libraries for zoomable maps and GPU-scale networks (the built-in SVG
 renderers draw every chart type, simply). [docs/DESIGN.md](docs/DESIGN.md) §9 and §12 have the
 details.
 

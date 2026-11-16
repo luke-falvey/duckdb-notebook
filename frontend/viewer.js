@@ -121,7 +121,7 @@
       var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
       if (cell.kind === 'sql' && showCode && cell.sql) {
         box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
-        box.appendChild(NB.el('pre', { 'class': 'nb-source', text: cell.sql }));
+        box.appendChild(NB.el('pre', { 'class': 'nb-source', html: NB.highlightSql(cell.sql) }));
         shown++;
       }
       if (showOutput) {
@@ -243,6 +243,7 @@
 
   gunzip(bytes('nb-data')).then(function (raw) {
     payload = JSON.parse(new TextDecoder().decode(raw));
+    NB.setSqlWords(payload.sql_words);
     window.__NB_PAYLOAD = payload;
     current = payload.cells;
     document.title = payload.title || document.title;

@@ -234,6 +234,13 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 - An editor per cell with Ctrl+Space completion from the live catalog, cell names and variables, and
   Shift+Enter to run. The design called for CodeMirror 6; bundling it needs a JavaScript build step in
   the extension build, which was left for later (§11).
+- SQL highlighting without an editor library (`render-sql.js`): a tokenizer that follows
+  `sql_lexer.cpp` (nested comments, `''` escapes, `$tag$` strings versus `$name` variables) colours a
+  `<pre>` laid exactly behind a transparent textarea, which grows to fit its text so neither scrolls.
+  Keywords come from the running DuckDB's `duckdb_keywords()` (reserved, column-name and type/function
+  ones; unreserved keywords include common column names such as `day`, so only statement words are
+  taken from them) and types from `duckdb_types()`. Query cell names are coloured where SQL reads
+  them. Exports and ```` ```sql ```` fences in prose use the same highlighter (about 5 KB).
 - Result grid, paged from the server, headed by plain column names. An earlier per-column profile
   (type, null share, histogram or top values) was removed to keep tables quiet; the catalog sidebar
   still lists column types. A page-size picker under each table writes `rows=N` to the cell, so the

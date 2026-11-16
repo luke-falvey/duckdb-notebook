@@ -45,6 +45,7 @@ var App = (function () {
   };
 
   A.load = function (data) {
+    NB.setSqlWords(data.sql_words);
     A.preamble = data.preamble || '';
     A.cells = [];
     A.merge(data.cells);
@@ -227,11 +228,19 @@ var App = (function () {
 
   // A text area over part of a cell. The default edits the body; a query cell's SQL and its chart
   // specs pass their own get/set, and run with their own action.
+  // Names of query cells, coloured where SQL refers to them.
+  A.cellNames = function () {
+    var names = {};
+    A.cells.forEach(function (c) { if (c.kind === 'sql' && c.name) names[c.name] = true; });
+    return names;
+  };
+
   function codeArea(cell, part) {
     part = part || {
       get: function () { return cell.kind === 'sql' ? cell.sql : cell.body; },
       set: function (v) { if (cell.kind === 'sql') { cell.sql = v; A.compose(cell); } else cell.body = v; A.edited(cell); },
-      run: function () { A.runCell(cell); }
+      run: function () { A.runCell(cell); },
+      sql: cell.kind === 'sql' || cell.kind === 'input'
     };
     var text = part.get() || '';
     var ta = NB.el('textarea', { 'class': 'nb-code' + (part.className ? ' ' + part.className : ''), spellcheck: 'false', rows: Math.min(24, Math.max(2, text.split('\n').length + 1)) });
@@ -243,10 +252,24 @@ var App = (function () {
         e.preventDefault();
         var s0 = ta.selectionStart;
         ta.setRangeText('    ', s0, ta.selectionEnd, 'end');
-        part.set(ta.value);
+        ta.dispatchEvent(new Event('input'));
       } else if (e.ctrlKey && e.key === ' ' && window.AppExtra) { e.preventDefault(); AppExtra.complete(ta, cell); }
     });
-    return ta;
+    if (!part.sql) return ta;
+    // Highlighting: the coloured text is a <pre> behind a transparent textarea with the same metrics.
+    // The textarea grows to fit its text, so neither ever scrolls and the two stay aligned.
+    var hl = NB.el('pre', { 'class': 'nb-code-hl', 'aria-hidden': 'true' });
+    ta.classList.add('nb-code-over');
+    var fit = function () {
+      if (!ta.offsetParent) return;  // hidden (hide=code): sized when shown
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
+    };
+    var paint = function () { hl.innerHTML = NB.highlightSql(ta.value, { names: A.cellNames() }) + '\n'; fit(); };
+    ta.addEventListener('input', paint);
+    paint();
+    requestAnimationFrame(fit);
+    return NB.el('div', { 'class': 'nb-code-wrap' }, [hl, ta]);
   }
 
   // A chart spec of a query cell was edited: only that cell's charts need drawing again.

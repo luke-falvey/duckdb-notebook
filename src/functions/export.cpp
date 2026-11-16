@@ -158,6 +158,21 @@ vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, i
 	                                   " WHERE " + column + " IS NOT NULL ORDER BY 1 LIMIT " + std::to_string(limit));
 }
 
+Json SqlWords(Connection &connection) {
+	auto words = [&](const string &sql) {
+		auto list = Json::Array();
+		for (auto &value : QueryValues(connection, sql)) {
+			list.Push(Json::String(value.ToString()));
+		}
+		return list;
+	};
+	return Json::Object()
+	    .Set("keywords", words("SELECT keyword_name FROM duckdb_keywords() WHERE keyword_category <> 'unreserved' "
+	                           "ORDER BY 1"))
+	    .Set("types", words("SELECT DISTINCT lower(type_name) FROM duckdb_types() WHERE type_name NOT LIKE '%(%' "
+	                        "AND type_name NOT LIKE '%\"%' ORDER BY 1"));
+}
+
 Json CellJson(const notebook::Cell &cell) {
 	auto json = Json::Object();
 	json.Set("idx", Json::Number(cell.index));
@@ -244,6 +259,7 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 	return Json::Object()
 	    .Set("title", Json::String(NotebookTitle(notebook, source)))
 	    .Set("source", Json::String(source))
+	    .Set("sql_words", SqlWords(runner.Conn()))
 	    .Set("cells", array)
 	    .Set("hide", Json::String(options.hide));
 }
@@ -416,7 +432,7 @@ string Html(DatabaseInstance &db, const Json &payload, const string &title, cons
 	html = ReplaceAll(html, "{{DATA}}", data);
 	html = ReplaceAll(html, "{{WASM}}", wasm);
 	html = ReplaceAll(html, "{{RENDER}}",
-	                  ScriptSafe(GetAsset("render-sketch.js") + GetAsset("render-core.js") +
+	                  ScriptSafe(GetAsset("render-sketch.js") + GetAsset("render-core.js") + GetAsset("render-sql.js") +
 	                             GetAsset("render-chart.js") + GetAsset("render-typed.js")));
 	html = ReplaceAll(html, "{{VIEWER}}", ScriptSafe(GetAsset("viewer.js")));
 	return html;

@@ -118,7 +118,11 @@ Json NotebookJson(DatabaseInstance &db, Session &session) {
 	    .Set("text", Json::String(session.text))
 	    .Set("preamble", Json::String(notebook.preamble))
 	    .Set("title", Json::String(NotebookTitle(notebook, session.source)))
-	    .Set("cells", CellsJson(notebook));
+	    .Set("cells", CellsJson(notebook))
+	    .Set("sql_words", [&]() {
+		    Connection connection(db);
+		    return SqlWords(connection);
+	    }());
 }
 
 shared_ptr<Session> GetSession(ServerState &state, const string &source) {
