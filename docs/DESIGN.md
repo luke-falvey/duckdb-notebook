@@ -245,8 +245,14 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
   (type, null share, histogram or top values) was removed to keep tables quiet; the catalog sidebar
   still lists column types. A page-size picker under each table writes `rows=N` to the cell, so the
   choice is saved with the notebook and applies to exports.
-- Quiet by default: a cell's kind is a symbol in its top left (☰ settings, ¶ text, ◉ input, ▦ query,
-  ✎ SQL that changes the database, ∿ chart; named in its tooltip); the buttons that add a cell appear
+- Margins: a cell keeps only the left edge of its hand-drawn box, a bracket that darkens under the
+  pointer and turns violet with the caret. Its kind symbol (☰ settings, ¶ text, ◉ input, ▦ query, ✎ SQL
+  that changes the database, ∿ chart) and name sit in the left margin; clicking either opens its
+  `-- %%` line to edit the name and options. Its state dot sits in the right margin, with a strip of
+  buttons (run, hide code, hide output, move, delete) while the pointer or caret is in the cell. Narrow
+  windows put both margins in a row at the top of the cell. Chosen from mockups of four quieter
+  treatments (faint frames, no frames, margins, frames only on hover).
+- Quiet by default: the buttons that add a cell appear
   only when the pointer is between cells; a cell's rows, what it defines and its run time sit in the
   bottom right corner of its box (`timing: false` in the `[notebook]` cell hides the time); and a
   table's chart picker stays behind a "+ chart" button until asked for.

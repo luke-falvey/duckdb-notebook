@@ -75,6 +75,14 @@ both anyway.
 - **Print**: `@media print` rules hide chrome; PDF export prints the reading view. Check a PDF after
   layout changes.
 
+## Cell chrome
+
+Cells use the "margins" treatment: `Sketch.outline` draws the full box, and CSS clips it to its left
+edge (`clip-path` on `.nb-cell > svg.sk-outline`). `.nb-margin` (kind symbol, name, the `-- %%` input
+when editing) is positioned to the left of the cell and `.nb-cell-head` (state dot, buttons) to the
+right, in padding that `.nb-main` reserves; below 900px both fall back to a row inside the cell. Keep
+new per-cell controls in one of the two margins rather than inside the cell.
+
 ## Things readers notice first
 
 The page title and `# ` heading underline, cell outlines, the highlighter on `{{ }}` values and active

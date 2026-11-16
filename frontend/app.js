@@ -487,12 +487,30 @@ var App = (function () {
       var box = NB.el('div', { 'class': 'nb-cell' + (hideCode ? ' hide-code' : '') + (hideOutput ? ' hide-output' : ''), 'data-kind': cell.kind, 'data-idx': i, 'data-seed': 'cell' + i + (cell.name || '') });
       var span = cell.options && cell.options.span;
       if (span && A.reading) box.style.gridColumn = 'span ' + Math.max(1, Math.min(12, +span));
+      // Left margin: the cell's kind and name. Clicking either opens its -- %% line (name and options)
+      // for editing. Right margin: its state, and its buttons while the pointer or caret is in it.
       var head = NB.el('input', { 'class': 'nb-head', value: cell.head || '', placeholder: 'name and options', title: 'The -- %% marker line' });
-      head.addEventListener('change', function () { cell.head = head.value.trim(); A.edited(cell); A.render(); });
-      box.appendChild(NB.el('div', { 'class': 'nb-cell-head' }, [
-        kindMark(cell),
-        head, badge(cell.state)
-      ].concat(headButtons(cell, i))));
+      head.addEventListener('change', function () { cell.head = head.value.trim(); A.edited(cell); });
+      head.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') head.blur();
+        else if (e.key === 'Escape') { head.value = cell.head || ''; head.blur(); }
+      });
+      // After the blur, so a click elsewhere has already moved the focus that render() restores.
+      head.addEventListener('blur', function () { setTimeout(function () { if (cell.editingHead) { cell.editingHead = false; A.render(); } }, 0); });
+      var editHead = function () {
+        cell.editingHead = true;
+        A.render();
+        var input = document.querySelector('.nb-cell[data-idx="' + i + '"] input.nb-head');
+        if (input) { input.focus({ preventScroll: true }); input.select(); }
+      };
+      var kind = kindMark(cell);
+      kind.addEventListener('click', editHead);
+      box.appendChild(NB.el('div', { 'class': 'nb-margin' + (cell.editingHead ? ' editing' : '') }, [
+        kind,
+        NB.el('span', { 'class': 'nb-name', text: cell.name || '', title: (cell.head || '') + ' (click to edit the name and options)', onclick: editHead }),
+        head
+      ]));
+      box.appendChild(NB.el('div', { 'class': 'nb-cell-head' }, [badge(cell.state)].concat(headButtons(cell, i))));
       var body = NB.el('div', { 'class': 'nb-cell-body' });
       if (cell.kind === 'input') body.appendChild(inputCell(cell));
       // Prose, charts, inputs and metadata show their result; their source opens on demand.

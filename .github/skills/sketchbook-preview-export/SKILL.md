@@ -47,13 +47,14 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
 - Ctrl+S or **Save** writes the `.sql` file. Edits made in another editor appear in the browser.
 - The ⚙ gear menu: open another notebook, save, auto-run, **Reading** view (code hidden, `span` grid),
   **Graph** (dependencies), **Catalog** (tables), ◐ dark mode, default rows per page, export.
-- In a cell header: `</>` and `◫` write `hide=code` / `hide=output`; under a table the page-size picker
+- In a cell's button strip: `</>` and `◫` write `hide=code` / `hide=output`; under a table the page-size picker
   writes `rows=N`, and "+ chart" opens the chart picker. Under a query's charts: tabs, "edit chart
   spec", "+ chart".
-- Buttons to add a cell appear when the pointer is between two cells. A cell's kind is the symbol in
-  its top left (☰ settings, ¶ text, ◉ input, ▦ query, ✎ SQL that changes data, ∿ chart). Its rows, what
-  it defines and its run time are in the bottom right; the gear's "timing" switch writes
-  `timing: false` into the `[notebook]` cell.
+- Buttons to add a cell appear when the pointer is between two cells. A cell's kind symbol (☰ settings,
+  ¶ text, ◉ input, ▦ query, ✎ SQL that changes data, ∿ chart) and name are in its left margin; click
+  either to edit the `-- %%` line (Enter keeps, Escape cancels). Its state dot and, on hover, its
+  buttons are in the right margin. Its rows, what it defines and its run time are in the bottom right;
+  the gear's "timing" switch writes `timing: false` into the `[notebook]` cell.
 - Pointing at a chart shows the values under the pointer (the nearest point on lines).
 
 ## Looking at it (agents)

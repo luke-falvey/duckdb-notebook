@@ -93,6 +93,18 @@ def test_server(browser, work):
     kinds = page.locator(".nb-kind").all()
     check([k.text_content() for k in kinds[:8]] == ["☰", "¶", "✎", "▦", "◉", "◉", "▦", "▦"] and "Query" in kinds[3].get_attribute("title"),
           "cell kinds are symbols, named in their tooltips")
+    # Margins: kind and name to the left of a cell, state and buttons to the right, frame as a bracket.
+    cell6 = page.locator(".nb-cell[data-idx='6']")
+    cb, mb, hb = cell6.bounding_box(), cell6.locator(".nb-margin").bounding_box(), cell6.locator(".nb-cell-head").bounding_box()
+    check(mb["x"] + mb["width"] <= cb["x"] and hb["x"] >= cb["x"] + cb["width"] and cell6.locator(".nb-name").text_content() == "filtered",
+          "a cell's kind and name sit in its left margin, its state and buttons in its right")
+    check(cell6.locator("svg.sk-outline").evaluate("e => getComputedStyle(e).clipPath") != "none", "a cell's frame is drawn as a bracket on its left")
+    cell6.locator(".nb-name").click()
+    head_input = cell6.locator("input.nb-head")
+    check(head_input.is_visible() and head_input.evaluate("e => e === document.activeElement"), "clicking a cell's name opens its -- %% line")
+    page.keyboard.press("Escape")
+    page.wait_for_function("!document.querySelector(\".nb-cell[data-idx='6'] input.nb-head\").offsetParent", timeout=5000)
+    check(head_input.input_value() == "filtered", "Escape closes it unchanged")
     trend = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
     trend.scroll_into_view_if_needed()
     tb = trend.bounding_box()
