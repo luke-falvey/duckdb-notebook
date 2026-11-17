@@ -663,6 +663,15 @@ INK_STATE = """() => ({
     jobs: Ink.stats.jobs })"""
 
 
+FRAME_STATS = """() => {
+  const f = Ink.stats.frames.filter(x => x[2] > 0), gaps = [];
+  for (let i = 1; i < f.length; i++) { const g = f[i][0] - f[i - 1][0]; if (g < 300) gaps.push(g); }
+  gaps.sort((a, b) => a - b);
+  const work = f.map(x => x[1]).sort((a, b) => a - b), q = (a, k) => a[Math.min(a.length - 1, Math.floor(a.length * k))];
+  return { frames: f.length, gap50: q(gaps, .5), gap95: q(gaps, .95), work50: q(work, .5), work95: q(work, .95), workMax: q(work, 1) };
+}"""
+
+
 def html_of(page, selector):
     """The page's markup, without the clip-path ids Sketch.fill picks at random."""
     return re.sub(r"skc[a-z0-9]+", "skc", page.locator(selector).evaluate("e => e.outerHTML"))
@@ -792,13 +801,7 @@ def test_ink(browser, work, chromium):
     for step in range(12):
         page.mouse.wheel(0, 800)
         page.wait_for_timeout(1500)
-    smooth = page.evaluate("""() => {
-      const f = Ink.stats.frames.filter(x => x[2] > 0), gaps = [];
-      for (let i = 1; i < f.length; i++) { const g = f[i][0] - f[i - 1][0]; if (g < 300) gaps.push(g); }
-      gaps.sort((a, b) => a - b);
-      const work = f.map(x => x[1]).sort((a, b) => a - b), q = (a, k) => a[Math.min(a.length - 1, Math.floor(a.length * k))];
-      return { frames: f.length, gap50: q(gaps, .5), gap95: q(gaps, .95), work50: q(work, .5), work95: q(work, .95), workMax: q(work, 1) };
-    }""")
+    smooth = page.evaluate(FRAME_STATS)
     print(f"     charts.sql: first screen in {took:.0f} ms; frames while writing: " + ", ".join(f"{k} {v:.1f}" for k, v in smooth.items()))
     check(took < 2500 * 1.25 and smooth["gap95"] < 34, f"charts.sql: the first screen is written within the budget, at a smooth frame rate ({took:.0f} ms)")
 
@@ -922,10 +925,219 @@ def test_ink_editor(browser, work):
         page.keyboard.press("Escape")
         check(page.evaluate("localStorage.getItem('nb.ink')") == "off" and not page.evaluate("Ink.enabled()"), "the gear menu switches the handwriting off")
         check(not errors, f"no browser errors in the written editor {errors[:3]}")
+
+        # Watching in the editor: the gear menu's "watch" writes the page again with one pen, and a run
+        # that finishes while the pen is on an early cell waits its turn in reading order.
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors = watch(page)
+        page.add_init_script("window.__INK_PAUSE = true; localStorage.removeItem('nb.ink')")
+        page.goto(url)
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.fonts.status === 'loaded'")
+        frames(page, 3)
+        page.evaluate("Ink.finishAll()")
+        page.click("#gear")
+        page.select_option("#ink", "watch")
+        page.click("#gear")
+        frames(page, 3)
+        page.evaluate("Ink.advance(4000)")
+        frames(page, 2)
+        st = page.evaluate(WATCH_STATE)
+        check(st["mode"] == "watch" and len(st["running"]) == 1 and st["waiting"] > 10 and page.evaluate("localStorage.getItem('nb.ink')") == "watch",
+              f"the gear menu's watch writes the page again, one piece at a time ({st})")
+        first = page.evaluate("Ink.plans.length")
+        page.click("#run-all")
+        page.wait_for_function("!App.running", timeout=30000)
+        page.wait_for_timeout(500)
+        page.evaluate("localStorage.setItem('nb.ink.speed', '8')")
+        page.keyboard.press("+")
+        for _ in range(300):
+            page.evaluate("Ink.advance(1000)")
+            frames(page, 1)
+            if page.evaluate("Ink.jobs().length") == 0:
+                break
+        ids = [int(re.match(r"cell(\d+)/", k).group(1)) for k in page.evaluate(f"Ink.plans.slice({first}).filter(p => p.watch).map(p => p.key)") if k.startswith("cell")]
+        drops = [i for i in range(1, len(ids)) if ids[i] < ids[i - 1]]
+        check(ids and len(drops) <= 1, f"after Run all the pen goes on in reading order, going back at most once for results above it ({ids})")
+        settle(page)
+        done = page.evaluate(INK_STATE)
+        check(page.evaluate("Ink.jobs().length") == 0 and done["canvases"] == 0 and done["styled"] == 0, f"the watched editor ends with no trace ({done})")
+        check(not errors, f"no browser errors watching the editor {errors[:3]}")
     finally:
         shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
         shell.stdin.flush()
         shell.communicate(timeout=30)
+
+
+# One pen at a time: the running piece, and how many of its atoms (not counting the second pass of a
+# doubled line, which a real hand draws with the first) are in motion now.
+WATCH_STATE = """() => {
+  const running = Ink.jobs().filter(j => j.state === 'running');
+  const rel = running.length ? Ink.penNow() - running[0].start : 0;
+  const moving = running.length ? running[0].atoms.filter(a => !a.with && !a.instant && a.t0 <= rel && rel < a.t1).length : 0;
+  return { running: running.map(j => j.key), moving, waiting: Ink.jobs().filter(j => j.state === 'parked').length,
+           mark: !!document.querySelector('.ink-watch'), nib: !!document.querySelector('.ink-nib'),
+           held: Ink.held(), speed: Ink.speed(), following: Ink.following(), pen: Ink.penNow(), mode: Ink.mode() };
+}"""
+
+
+def advance(page, ms, step=100):
+    for _ in range(int(ms / step)):
+        page.evaluate(f"Ink.advance({step})")
+        frames(page, 1)
+
+
+def test_ink_watch(browser, work):
+    """Watch mode (ink=watch): one pen writes the page in reading order, at a pace to watch."""
+    revenue = os.path.join(ROOT, "examples", "revenue.sql")
+    db = os.path.join(work, "watch.duckdb")
+    html = os.path.join(work, "watch_revenue.html")
+    sql(db, f"FROM notebook_export('{revenue}', file := '{html}')")
+    url = "file://" + html
+    viewport = {"width": 1300, "height": 950}
+
+    off = browser.new_page(viewport=viewport)
+    opened(off, still(url))
+    settle(off)
+    reference = html_of(off, "#nb-root")
+
+    # The URL flag opens straight into watch mode; one thing is in motion at a time.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.add_init_script("window.__INK_PAUSE = true")
+    opened(page, url + "?ink=watch")
+    states, keys = [], []
+    for _ in range(120):
+        page.evaluate("Ink.advance(50)")
+        frames(page, 1)
+        st = page.evaluate(WATCH_STATE)
+        states.append(st)
+        if st["running"] and (not keys or keys[-1] != st["running"][0]):
+            keys.append(st["running"][0])
+    check(states[-1]["mode"] == "watch" and all(len(st["running"]) <= 1 for st in states) and max(st["moving"] for st in states) == 1,
+          f"ink=watch: one piece at a time, and one stroke or letter of it at a time (pieces {keys})")
+    check(states[-1]["mark"] and states[-1]["nib"] and states[-1]["waiting"] > 10, f"the controls and the nib show while the pen has work ({states[-1]})")
+    plans = page.evaluate("Ink.plans.filter(p => p.watch).map(p => p.key)")
+    cells = [int(re.match(r"cell(\d+)/", k).group(1)) for k in plans if k.startswith("cell")]
+    check(plans and plans[0] == "header" and cells == sorted(cells), f"pieces are written in reading order ({plans})")
+    check(page.evaluate("document.querySelectorAll('.nb-cell canvas.ink-layer').length") <= 2, "only the piece being written has canvases over it")
+
+    # Pause and resume, on the pen's own clock.
+    page.keyboard.press("Space")
+    held = page.evaluate(WATCH_STATE)
+    page.evaluate("Ink.advance(3000)")
+    frames(page, 2)
+    still_held = page.evaluate(WATCH_STATE)
+    check(held["held"] and still_held["pen"] == held["pen"] and still_held["running"] == held["running"],
+          "space pauses the pen: time passes and nothing moves")
+    page.keyboard.press("Space")
+    page.evaluate("Ink.advance(200)")
+    frames(page, 2)
+    check(page.evaluate(WATCH_STATE)["pen"] > held["pen"], "space again goes on from where it was")
+
+    # Faster and slower.
+    speed = page.evaluate("Ink.speed()")
+    page.keyboard.press("+")
+    faster = page.evaluate("Ink.speed()")
+    page.keyboard.press("-")
+    page.keyboard.press("-")
+    slower = page.evaluate("Ink.speed()")
+    page.keyboard.press("+")
+    check(faster > speed > slower and page.evaluate("Ink.speed()") == speed, f"+ and - change the pen's speed ({slower} < {speed} < {faster})")
+
+    # Skip to the end of the piece being written: the next one starts.
+    before = page.evaluate(WATCH_STATE)["running"]
+    page.keyboard.press("n")
+    page.evaluate("Ink.advance(1200)")
+    frames(page, 2)
+    after = page.evaluate(WATCH_STATE)["running"]
+    done = page.evaluate("k => !Ink.jobs().some(j => j.key === k)", before[0]) if before else False
+    check(before and after and before != after and done, f"n finishes the piece being written and the pen moves on ({before} -> {after})")
+
+    # Follow the pen: the page has scrolled down with it. A reader's wheel stops that.
+    advance(page, 70000, 500)
+    scrolled = page.evaluate("scrollY")
+    check(scrolled > 200, f"the page scrolls to keep the pen in view ({scrolled} px)")
+    page.mouse.move(600, 400)
+    page.mouse.wheel(0, -2000)
+    page.wait_for_timeout(200)
+    mine = page.evaluate("scrollY")
+    page.evaluate("Ink.advance(300)")
+    frames(page, 3)
+    check(not page.evaluate("Ink.following()") and page.evaluate("scrollY") == mine, "scrolling away stops the page following the pen")
+    page.keyboard.press("f")
+    check(page.evaluate("Ink.following()"), "a key press follows the pen again")
+
+    # Everything at once: the page is exactly the page drawn without the animation.
+    page.keyboard.press("e")
+    settle(page)
+    state = page.evaluate(INK_STATE)
+    final = page.evaluate(WATCH_STATE)
+    check(state["canvases"] == 0 and state["hidden"] == 0 and state["styled"] == 0 and html_of(page, "#nb-root") == reference and not final["mark"] and not final["nib"],
+          f"e writes everything now, and the page is identical to one drawn without the animation, controls gone ({state})")
+
+    # A reader's own action updates at once, without the pen.
+    tab = page.locator(".nb-cell[data-idx='7'] .nb-tab", has_text="table")
+    tab.scroll_into_view_if_needed()
+    tab.click()
+    frames(page, 2)
+    st = page.evaluate(WATCH_STATE)
+    check(not st["running"] and st["waiting"] == 0 and page.evaluate(INK_STATE)["canvases"] == 0, f"switching a tab while watching shows it at once ({st})")
+    check(not errors, f"no browser errors while watching {errors[:3]}")
+
+    # The pen writes to the end by itself, and leaves no trace.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.add_init_script("window.__INK_PAUSE = true; localStorage.setItem('nb.ink.speed', '8')")
+    opened(page, url + "?ink=watch")
+    seen = []
+    for _ in range(2000):
+        page.evaluate("Ink.advance(250)")
+        frames(page, 1)
+        seen.append(page.evaluate(WATCH_STATE))
+        if page.evaluate("Ink.jobs().length") == 0:
+            break
+    plans = page.evaluate("Ink.plans.filter(p => p.watch).map(p => p.key)")
+    cells = [int(re.match(r"cell(\d+)/", k).group(1)) for k in plans if k.startswith("cell")]
+    check(plans[0] == "header" and cells == sorted(cells) and len(set(cells)) > 8, f"the whole page is written in reading order ({len(plans)} pieces)")
+    check(all(len(st["running"]) <= 1 and st["moving"] <= 1 for st in seen), "from start to end, one piece and one stroke or letter in motion at a time")
+    settle(page)
+    state = page.evaluate(INK_STATE)
+    check(page.evaluate("Ink.jobs().length") == 0 and state["canvases"] == 0 and state["styled"] == 0 and html_of(page, "#nb-root") == reference,
+          f"watched to the end, the page is identical to one drawn without the animation ({state})")
+    check(not errors, f"no browser errors watching to the end {errors[:3]}")
+
+    # The export's watch button writes the page again; Escape leaves the mode.
+    page = browser.new_page(viewport=viewport)
+    page.add_init_script("window.__INK_PAUSE = true")
+    opened(page, still(url).replace("ink=off", "ink=gentle"))
+    page.evaluate("Ink.finishAll()")
+    page.click("button.ink-watch-start")
+    frames(page, 3)
+    page.evaluate("Ink.advance(500)")
+    frames(page, 2)
+    st = page.evaluate(WATCH_STATE)
+    check(st["mode"] == "watch" and st["waiting"] > 10 and len(st["running"]) == 1, f"the export's watch button writes the page again by one pen ({st})")
+    page.keyboard.press("Escape")
+    frames(page, 2)
+    st = page.evaluate(WATCH_STATE)
+    check(st["mode"] == "gentle" and not st["running"] and st["waiting"] == 0 and not st["mark"], f"Escape leaves watch mode with the page complete ({st})")
+
+    # Reduced motion still means no animation, whatever the URL asks.
+    page = browser.new_page(viewport=viewport, reduced_motion="reduce")
+    opened(page, url + "?ink=watch")
+    settle(page)
+    check(page.evaluate(INK_STATE)["jobs"] == 0 and not page.locator("button.ink-watch-start").is_visible(),
+          "reduced motion switches watch mode off too")
+
+    # Frame times on a running clock: one pen is cheap.
+    page = browser.new_page(viewport=viewport)
+    page.add_init_script("localStorage.setItem('nb.ink.speed', '2')")
+    opened(page, url + "?ink=watch")
+    page.wait_for_timeout(15000)
+    smooth = page.evaluate(FRAME_STATS)
+    print("     watching revenue.sql: " + ", ".join(f"{k} {v:.1f}" for k, v in smooth.items()))
+    check(smooth["gap95"] < 34 and smooth["work95"] < 8, "watching keeps a smooth frame rate")
 
 
 def test_chart_marks(browser, work):
@@ -1046,6 +1258,7 @@ def main():
             test_chart_marks(browser, work)
             test_ink(browser, work, chromium)
             test_ink_editor(browser, work)
+            test_ink_watch(browser, work)
         finally:
             browser.close()
     shutil.rmtree(work, ignore_errors=True)

@@ -104,6 +104,10 @@
       NB.el('span', { text: payload.source || '' }),
       NB.el('span', { id: 'nb-mode', text: wasm ? 'Live: queries run in this page with DuckDB-WASM' : payload.precomputed ? 'Inputs switch between precomputed results' : 'Static export' })
     ]);
+    // Watch the page being written again, slowly, by one pen (render-ink.js, watch mode).
+    if (window.Ink) {
+      head.lastChild.appendChild(NB.el('button', { 'class': 'ink-watch-start', type: 'button', text: '✎ watch', title: 'Watch this page being written by hand (or open it with ?ink=watch)', onclick: function () { Ink.watch(); } }));
+    }
     root.appendChild(head);
     if (payload.frozen && payload.frozen.length) root.appendChild(NB.el('div', { 'class': 'nb-frozen', text: 'Fixed at their current value in this export: ' + payload.frozen.join(', ') }));
     var grid = NB.el('div', { 'class': 'nb-cells' });
@@ -152,7 +156,7 @@
     root.appendChild(grid);
     // Outlines are drawn once the cells are laid out, and follow their size from then on.
     Array.prototype.forEach.call(grid.children, function (box) { Sketch.outline(box, { width: 1.5 }); });
-    if (window.Ink) write(head, grid);
+    if (window.Ink) { Ink.onrewrite = render; write(head, grid); }
     window.__NB_READY = true;
   }
 
