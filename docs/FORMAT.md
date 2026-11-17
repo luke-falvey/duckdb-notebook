@@ -506,7 +506,6 @@ format: 1
 attach:
   - {path: warehouse.duckdb, as: wh, read_only: true}
 extensions: [spatial]
-theme: light
 timing: false
 cache: false
 */
