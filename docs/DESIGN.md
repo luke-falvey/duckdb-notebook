@@ -850,7 +850,7 @@ tested) and `src/functions/result_cache.cpp` (where entries live, and the sessio
 - **Not done:** entries are not shared between notebooks that compute the same thing, there is no
   total size limit across notebooks, and the html-wasm export does not start from cached data.
 
-## 19. Building for every platform
+## 20. Building for every platform
 
 The extension is built by DuckDB's shared pipeline (`extension-ci-tools`) for every native platform
 DuckDB distributes for: Linux amd64 and arm64 (glibc and musl), macOS amd64 and arm64, Windows amd64
