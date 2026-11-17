@@ -188,6 +188,7 @@ Details that matter:
   slider, brushing a chart, switching a tab, paging a table) is shown immediately or with a draw of
   at most 200 ms. Only first appearance and fresh run results get the full treatment.
 - **Settings.** Off, gentle (default) and slow, in the gear menu, remembered in `localStorage`.
+  (Built: "slow" became watch mode, below.)
   Consider a `[notebook]` key so an author can switch it off for a notebook; that is a format change
   and needs `docs/FORMAT.md` and the parser to move together.
 
@@ -399,3 +400,97 @@ In the editor, opening `revenue.sql` settles in 2.2 s and a Run all in 1.7 s.
   the notebook, and appear as before.
 - The few pixels by which a moving glyph's mask can reveal a moving neighbour (above).
 - Taking a very large chart apart still costs one long frame when it scrolls into view.
+
+## Watch mode
+
+![Watch mode: the opening of examples/revenue.sql](handwriting/watch-open.gif)
+
+The gentle pen gets out of the way: a screen in 2.5 seconds, many strokes at once, dense content swept
+or faded. Watch mode is the opposite, for watching: one pen writes the whole page in front of you, as a
+person drawing it would, and the page follows it down.
+
+**Where.** `ink=watch` in the URL (editor or export, so a link opens straight into it); "watch" in the
+editor's gear menu, remembered like the other settings; a quiet "✎ watch" in an HTML export's header,
+which writes the page again from the top. It replaces the old "slow" setting rather than joining it:
+"slow" was the gentle pen stretched by 1.8, still parallel and still faking dense parts, so it sat
+between two modes without serving either. A remembered "slow" now reads as gentle. Reduced motion,
+print, PDF export and `ink=off` still mean no animation, whatever the URL or setting says.
+
+**One pen.** It is a scheduling policy inside `Ink`, not a second animator: the same registry, keys,
+signatures, atoms, glyph writer and no-trace rule. What differs:
+
+- Every presented piece waits hidden (the below-the-fold `park`, paint only) until the pen comes to it.
+  When the pen is free it takes the first waiting piece in document order (`planWatch`), wherever it is
+  on the page.
+- Inside a piece the atoms run one after another (`timelineWatch`): one stroke or one letter in motion
+  at a time. The only overlap is a doubled line's second pass, which starts 18% into the first, as a
+  hand going back over a line does; the pen waits for it before moving on.
+- No budget, no caps and no degradation ladder: every letter of prose, code, labels and the first rows
+  of a table is written, every stroke drawn.
+- Times are on the pen's own clock (`penClock`), which follows the page clock at the reader's speed and
+  stops while they pause. Changing speed or pausing mid-stroke re-plans nothing, and `Ink.pause()` /
+  `Ink.advance(ms)` drive it in tests like everything else.
+
+**Pace** at 1×, chosen by watching captured frames of both examples (`W` in `render-ink.js`):
+
+| | |
+|---|---|
+| Letters | 0.4 px of the glyph's pen path per ms, at least 60 ms a letter: about 15 letters a second in 17 px handwriting, a little quicker in code |
+| Lifts | 15 ms between letters, 110 ms between words, 300 ms between lines and blocks of text |
+| Strokes | 0.8 px per ms along a line, 110 ms to 1 s each, 70 ms between strokes; 180 ms between writing and drawing |
+| Pieces | 420 ms between pieces of a cell, 800 ms between cells |
+| Fills | Solid shapes 150 ms, controls and backgrounds 260 ms; hatching about 34 ms a line, at most 0.9 s a shape and 6 s a chart |
+
+Speeds go from 0.25× to 8× and are remembered. At 1× `examples/revenue.sql` takes about 5½ minutes and
+`examples/charts.sql`, a gallery of about 30 charts, about 18; the title and opening prose of
+`revenue.sql` take under half a minute. Faster felt like a typewriter; slower became hard to sit through on
+code. A reader who wants the gist presses + a couple of times.
+
+**What is approximated, and why.** Where something is too large to write mark by mark, the pen does
+what a person drawing it would: draws a representative part properly, then fills the rest in quickly.
+
+- **Many marks.** The first 60 strokes or marks of a piece (paths, solid shapes, plain marks) are drawn
+  one by one at full pace. The rest share 5 seconds between them, still one at a time, so the pen is
+  seen to hurry through the remaining bars or points. Above `SKETCH_LIMIT` a chart's plain marks
+  appear one by one for the first 60 and then in six handfuls.
+- **Long tables.** The header and the first 6 rows are written cell by cell; each later row is swept in
+  whole, 220 ms a row, and rows beyond 5 seconds' worth share that time (a 1,000-row page is written in
+  its first rows and then dashed through).
+- **Hatching** is scribbled: each shape's hatching within 0.9 s, a chart's within 6 s.
+- **Controls** (selects, sliders) and backgrounds cannot be written and fade in, as in the gentle mode.
+- Long code and prose are not shortened: they are what people came to watch, and + speeds them up.
+
+**Following the pen.** Each frame the nib's position is the end of the stroke being drawn (a path's
+`getPointAtLength`, a glyph's stroke data, an element's box for fades). When it leaves the band from 15%
+to 66% of the scrolling element's height, the page eases towards putting it at 36%. The reader takes
+over by scrolling (wheel, touch, scroll keys, a press on the scrollbar); following resumes when they
+have left the pen in view for 1.5 s, or press any key, or press ↧ in the controls. Text measured after
+the page has scrolled is placed from the canvas's position at that moment.
+
+**Controls.** A small mark in the bottom-left corner, in the presenting mode's style, only while the pen
+has work, removed when it has none: ✎ ‖ − 1× + ⇥ ⇥⇥ ×. Keys: space or p pause and go on, + and −
+change speed, n finishes the piece being written, e writes everything now, Escape stops watching (the
+page completes and the mode goes back to gentle). While presenting, Space and Escape belong to the
+presentation; p and the other keys still work. Keys typed into a control are left alone, and Escape
+closes an open menu before it stops anything. A 6 px nib follows the stroke end. Both live on `<html>`
+outside the page, so the notebook's DOM is untouched, and both are hidden in print.
+
+**Live updates.** A reader's own action (a slider, a brush, a tab, paging a table) within the last
+second updates a piece at once, with no writing, if the pen has already written it, is writing it, or
+has passed where it is. A piece the pen has not reached yet keeps its place in the queue whatever
+changed it. A run's results are fresh, not an action: they are queued and written in reading order, so a
+result for a cell further down waits, and one for a cell above the pen is written before the pen goes
+on. The editor's status line (`update: 'now'`) is never queued.
+
+**Measured** in headless Chromium, software rendering, 1300 × 950, `examples/revenue.sql` export at 2×
+(`make browser_test`): frame interval 16.7 ms median and 16.8 ms at the 95th percentile; Ink's work per
+frame 0.3 ms median, 0.5 to 0.7 ms at the 95th percentile, 5 to 13 ms worst (taking a chart apart when
+the pen reaches it). With one pen there is rarely more than one path or glyph to update a frame.
+
+![Watch mode: a chart drawn after its query](handwriting/watch-chart.gif)
+
+**Not done, or not verified.**
+- Only Chromium was available, as for the gentle mode.
+- Presenting (#8) was not merged when this was built; watching it is expected to work through the same
+  keys (each screen's pieces are presented with new keys) but is not tested yet.
+- The mode is per page, not per notebook: no `[notebook]` setting.
