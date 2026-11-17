@@ -109,6 +109,9 @@ def test_server(browser, work):
     check(tokens == ["kw", "str", "comment", "str", "var", "kw", "ident", "fn", "op", "ident", "op", "ident", "op", "ident",
                      "kw", "ident", "kw", "name"],
           f"the tokenizer follows DuckDB's lexer and keyword list ({tokens})")
+    classes = page.evaluate("() => ['INTERVAL', 'INTEGER[]', 'POINT', 'INT', 'DECIMAL(9,2)', 'TIMESTAMP WITH TIME ZONE', 'VARCHAR'].map(NB.typeClass)")
+    check(classes == ["nominal", "nominal", "nominal", "quantitative", "quantitative", "temporal", "nominal"],
+          f"column types are classed by their whole name, as the chart compiler does ({classes})")
     page.click("#gear")
     check(page.locator("#menu").is_visible() and page.locator("#view-graph").is_visible(), "the gear opens the options menu")
     page.keyboard.press("Escape")

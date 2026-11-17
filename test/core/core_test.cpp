@@ -395,6 +395,9 @@ static void TestChartCompiler() {
 	CHECK(CompileChart("mark: bar\nfilter: unknown\n", "orders", context).error.find("not the selection") !=
 	      std::string::npos);
 	CHECK(TypeClass("TIMESTAMP WITH TIME ZONE") == "temporal" && TypeClass("DECIMAL(9,2)") == "quantitative");
+	// B2: a type is matched by its whole name, not a prefix: INTERVAL is not an integer, nor a list a number.
+	CHECK(TypeClass("INTERVAL") == "nominal" && TypeClass("INTEGER[]") == "nominal" && TypeClass("INT") == "quantitative");
+	CHECK(TypeClass("TIME WITH TIME ZONE") == "temporal" && TypeClass("TIMESTAMP_NS") == "temporal" && TypeClass("BIGINT") == "quantitative");
 }
 
 static void TestChartReferences() {

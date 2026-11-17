@@ -324,18 +324,19 @@ std::string SelectionField(const Yaml &spec, const std::string &channel) {
 
 std::string TypeClass(const std::string &duckdb_type) {
 	auto t = Lower(duckdb_type);
-	if (t.compare(0, 4, "date") == 0 || t.compare(0, 9, "timestamp") == 0 || t.compare(0, 4, "time") == 0) {
-		return "temporal";
+	if (t.find('[') != std::string::npos) {
+		return "nominal"; // a list or array of anything
 	}
-	static const char *const NUMERIC[] = {"tinyint",   "smallint", "integer", "bigint",   "hugeint", "utinyint",
-	                                      "usmallint", "uinteger", "ubigint", "uhugeint", "float",   "double",
-	                                      "decimal",   "real",     "int",     "numeric"};
-	for (auto n : NUMERIC) {
-		if (t.compare(0, std::char_traits<char>::length(n), n) == 0) {
-			return "quantitative";
-		}
+	if (t.compare(0, 4, "date") == 0 || t.compare(0, 4, "time") == 0) {
+		return "temporal"; // date, time, timestamp, timestamp_ns, ... with time zone
 	}
-	return "nominal";
+	// Numbers are matched by their whole name (DECIMAL's width and scale aside), so INTERVAL is not INT.
+	auto base = Trim(t.substr(0, t.find('(')));
+	static const std::set<std::string> NUMERIC = {"tinyint",   "smallint", "integer", "bigint",   "hugeint", "utinyint",
+	                                              "usmallint", "uinteger", "ubigint", "uhugeint", "float",   "double",
+	                                              "decimal",   "real",     "int",     "numeric",  "int1",    "int2",
+	                                              "int4",      "int8",     "float4",  "float8",   "varint",  "bignum"};
+	return NUMERIC.count(base) ? "quantitative" : "nominal";
 }
 
 std::string RelationSql(const std::string &from) {

@@ -106,8 +106,19 @@ var NB = (function () {
     return String(v);
   };
 
-  NB.isNumericType = function (t) { return /INT|FLOAT|DOUBLE|DECIMAL|REAL|NUMERIC/i.test(t || ''); };
-  NB.isTemporalType = function (t) { return /^(DATE|TIME|TIMESTAMP)/i.test(t || ''); };
+  // A DuckDB type's class, as TypeClass in src/core/chart.cpp decides it: numbers by their whole name
+  // (so INTERVAL and POINT are not numbers), date and time types by prefix, lists never.
+  var NUMERIC_TYPES = ['tinyint', 'smallint', 'integer', 'bigint', 'hugeint', 'utinyint', 'usmallint', 'uinteger', 'ubigint',
+    'uhugeint', 'float', 'double', 'decimal', 'real', 'int', 'numeric', 'int1', 'int2', 'int4', 'int8', 'float4', 'float8',
+    'varint', 'bignum'];
+  NB.typeClass = function (t) {
+    t = String(t || '').toLowerCase();
+    if (t.indexOf('[') >= 0) return 'nominal';
+    if (t.slice(0, 4) === 'date' || t.slice(0, 4) === 'time') return 'temporal';
+    return NUMERIC_TYPES.indexOf(t.split('(')[0].trim()) >= 0 ? 'quantitative' : 'nominal';
+  };
+  NB.isNumericType = function (t) { return NB.typeClass(t) === 'quantitative'; };
+  NB.isTemporalType = function (t) { return NB.typeClass(t) === 'temporal'; };
 
   // ---- Markdown -----------------------------------------------------------------------------
   // CommonMark-ish: headings, paragraphs, emphasis, code, links, lists, quotes, rules, tables and
