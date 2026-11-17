@@ -44,6 +44,20 @@ struct Session {
 	std::mutex lock;
 	std::mutex running_lock;
 	shared_ptr<ClientContext> running;
+	//! Trust (DESIGN section 3): true once the reader has run something. Until then, and again
+	//! after the text is replaced by the file on disk, nothing runs by itself: no peeks.
+	std::atomic<bool> ran {false};
+	//! Counts peeks as they arrive; one that is no longer the latest gives up. The peek that is
+	//! running (guarded by running_lock) is interrupted by a newer one and by a run.
+	std::atomic<uint64_t> peeks {0};
+	shared_ptr<ClientContext> peeking;
+
+	void InterruptPeek() {
+		std::lock_guard<std::mutex> guard(running_lock);
+		if (peeking) {
+			peeking->Interrupt();
+		}
+	}
 };
 
 struct ServerState {
@@ -278,6 +292,10 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            if (auto text = body.Get("text")) {
 			            session->text = text->Str();
 		            }
+		            if (body.Get("reload") && body.Get("reload")->Truthy()) {
+			            // The text now comes from the file, not from the reader: it is inert again.
+			            session->ran = false;
+		            }
 		            string note;
 		            if (body.Get("save") && body.Get("save")->Truthy()) {
 			            if (session->source.compare(0, 3, "db:") == 0) {
@@ -303,7 +321,11 @@ void Routes(shared_ptr<ServerState> &shared) {
 	    "/api/run", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		    auto body = Body(req);
 		    auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		    // A run does not wait for a peek.
+		    session->peeks++;
+		    session->InterruptPeek();
 		    std::lock_guard<std::mutex> guard(session->lock);
+		    session->ran = true;
 		    if (auto text = body.Get("text")) {
 			    if (text->GetType() == Json::Type::STRING) {
 				    session->text = text->Str();
@@ -420,6 +442,56 @@ void Routes(shared_ptr<ServerState> &shared) {
 			            throw InvalidInputException("%s", result->GetError());
 		            }
 		            SendJson(res, Json::Object().Set("ok", Json::Bool(true)).Set("sql", Json::String(sql)));
+	            }));
+
+	// Peek under the pen: the first rows of the CTE or sub-query under the caret (DESIGN section 16).
+	// `sql` is the text being edited, which may be newer than the session's; `cursor` is a byte offset
+	// into it. Answers `{reason}` instead of an error when there is nothing to show.
+	server.Post("/api/peek", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
+		            auto body = Body(req);
+		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto nothing = [&](const string &reason) {
+			            SendJson(res, Json::Object().Set("reason", Json::String(reason)));
+		            };
+		            if (!session->ran) {
+			            nothing("nothing has been run yet");
+			            return;
+		            }
+		            auto sql = body.Get("sql") ? body.Get("sql")->Str() : string();
+		            auto cursor = body.Get("cursor") ? body.Get("cursor")->Num() : -1;
+		            if (sql.empty() || cursor < 0 || cursor > static_cast<double>(sql.size())) {
+			            nothing("no SQL or cursor position");
+			            return;
+		            }
+		            auto rows = body.Get("rows") ? static_cast<idx_t>(body.Get("rows")->Num()) : 5;
+		            rows = MaxValue<idx_t>(1, MinValue<idx_t>(rows, 20));
+		            // The newest peek wins: it stops the one that is running and takes its place.
+		            auto ticket = ++session->peeks;
+		            session->InterruptPeek();
+		            std::lock_guard<std::mutex> guard(session->lock);
+		            if (session->peeks != ticket || !session->ran) {
+			            nothing("superseded");
+			            return;
+		            }
+		            auto db = Database(state);
+		            Json result;
+		            {
+			            // A copy of the session's state: a peek leaves the session exactly as it was.
+			            SessionState scratch = session->state;
+			            Runner runner(*db, scratch);
+			            {
+				            std::lock_guard<std::mutex> running(session->running_lock);
+				            session->peeking = runner.Conn().context;
+			            }
+			            try {
+				            result = runner.Peek(sql, static_cast<idx_t>(cursor), rows, 1500);
+			            } catch (std::exception &ex) {
+				            result = Json::Object().Set("reason", Json::String(ErrorData(ex).RawMessage()));
+			            }
+			            std::lock_guard<std::mutex> running(session->running_lock);
+			            session->peeking.reset();
+		            }
+		            SendJson(res, result);
 	            }));
 
 	server.Get("/api/page", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {

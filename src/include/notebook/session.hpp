@@ -78,6 +78,12 @@ public:
 	//! Every chart of a cell, in order. Sets `error` to the first chart's error, if any.
 	notebook::Json Charts(const notebook::Notebook &notebook, const notebook::Cell &cell, string &error);
 
+	//! Peek under the pen: the first `rows` rows of the CTE or sub-query around byte offset `cursor`
+	//! of `sql`, as `{kind, name, start, end, columns, rows, more, total}` (`total` only when counting
+	//! was cheap), or `{reason}` when there is nothing to show. Read-only: it runs one SELECT in a
+	//! read-only transaction with a time limit, and creates, replaces and records nothing.
+	notebook::Json Peek(const string &sql, idx_t cursor, idx_t rows, idx_t timeout_ms);
+
 	//! The SQL whose rows a query cell displays, or empty for other cells.
 	static string DisplaySql(const notebook::Cell &cell);
 

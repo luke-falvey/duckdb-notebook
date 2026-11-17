@@ -61,6 +61,8 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
   its buttons appear on hover in a row at its top right, in line with the dot. Its rows, what it defines and its run time are in the bottom right;
   the gear's "timing" switch writes `timing: false` into the `[notebook]` cell.
 - Pointing at a chart shows the values under the pointer (the nearest point on lines).
+- Peek under the pen: once the notebook has run, the caret in a CTE or sub-query of a query cell shows
+  its first rows in a note beside the code. Escape hides it; the gear's "peek" switch turns it off.
 
 ## Looking at it (agents)
 

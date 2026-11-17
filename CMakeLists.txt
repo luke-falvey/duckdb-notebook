@@ -58,6 +58,7 @@ set(EXTENSION_SOURCES
     src/functions/storage.cpp
     src/functions/export.cpp
     src/functions/server.cpp
+    src/functions/peek.cpp
     ${NOTEBOOK_ASSET_CPP}
     src/notebook_extension.cpp)
 
