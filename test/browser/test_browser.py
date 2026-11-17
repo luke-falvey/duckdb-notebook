@@ -375,6 +375,33 @@ def test_metadata_first(browser, work):
         stop(shell)
 
 
+def test_cache_written_later(browser, work):
+    # B24: a session reads the store again until it has run, so results a scheduled
+    # notebook_run(cache := true) writes after the editor opened appear on the next reload.
+    folder = os.path.join(work, "cache_later")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "later.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% answer\nSELECT 42 AS answer;\n")
+    shell, url = serve(folder, notebook, os.path.join(folder, "later.duckdb"))
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        check(page.locator("table.nb-grid").count() == 0, "a notebook never run shows no results")
+        shell.stdin.write(f"SELECT count(*) FROM notebook_run('{notebook}', cache := true);\n")
+        shell.stdin.flush()
+        shell.stdout.readline()
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        grid = page.locator("table.nb-grid")
+        check(grid.count() == 1 and "42" in grid.text_content(), "results kept by notebook_run after the editor opened show on reload")
+        page.close()
+    finally:
+        stop(shell)
+
+
 def test_cache(browser, work):
     """The result cache (FORMAT §8): a reopened notebook shows its last results without running anything,
     results whose inputs changed are marked, and the cache can be cleared or switched off."""
@@ -1870,6 +1897,7 @@ def main():
             test_metadata_error(browser, work)
             test_metadata_first(browser, work)
             test_cache(browser, work)
+            test_cache_written_later(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))

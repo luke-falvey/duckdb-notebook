@@ -156,6 +156,13 @@ string Source(const http::Request &req, const Json &body) {
 	return body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb");
 }
 
+//! The last results and input values kept for the session's notebook, to show without running anything.
+void LoadKept(DatabaseInstance &db, Session &session) {
+	auto notebook = notebook::ParseNotebook(session.text);
+	session.cache.Load(db, session.source, notebook);
+	session.cache.RestoreVariables(db, notebook, session.state);
+}
+
 shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	if (source.empty()) {
 		throw InvalidInputException("No notebook given: add nb=<path> or nb=db:<name> to the URL");
@@ -171,10 +178,7 @@ shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	bool exists = source.compare(0, 3, "db:") == 0 || FileSystem::GetFileSystem(*db).FileExists(source);
 	if (exists) {
 		session->text = ReadNotebookText(*db, source);
-		// The last results and input values, to show without running anything.
-		auto notebook = notebook::ParseNotebook(session->text);
-		session->cache.Load(*db, source, notebook);
-		session->cache.RestoreVariables(*db, notebook, session->state);
+		LoadKept(*db, *session);
 	} else {
 		// A new notebook: it becomes a file when first saved.
 		session->text = "-- %% [markdown]\n/*\n# Untitled\n*/\n\n-- %%\nSELECT 42 AS answer;\n";
@@ -301,6 +305,12 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto session = GetSession(state, Param(req, "nb"));
 		           std::lock_guard<std::mutex> guard(session->lock);
 		           auto db = Database(state);
+		           if (!session->ran) {
+			           // Until this session runs something, the store is the truth: a scheduled notebook_run(cache :=
+			           // true) may have written results since, or notebook_cache_clear removed them.
+			           session->cache = ResultCache();
+			           LoadKept(*db, *session);
+		           }
 		           SendJson(res, NotebookJson(*db, *session, true));
 	           }));
 
