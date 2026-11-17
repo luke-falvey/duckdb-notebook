@@ -701,6 +701,10 @@ Arrow hands decimals over unscaled, and bundlers rename Arrow's classes, so the 
   each cell outline seeds its own generator from stable inputs (title, data shape, cell position).
 - **Outlines follow their content.** A cell's outline is an SVG drawn behind it at its measured size; a
   `ResizeObserver` redraws it when a result, a chart or a font load changes the size.
+- **Nothing scrolls inside the page.** A scrollbar is not part of a sketchbook. A table's page holds
+  only the rows that fit its box (`NB.tableRows`, measured from the stylesheet), columns too wide for
+  the cell are paged with ‹ › rather than scrolled, a KPI value is sized by its length, and outputs
+  clip rather than scroll as a last resort. Only the page itself scrolls.
 - **View settings that matter belong in the file.** Page size and hiding code or output change what
   readers of an export see, so the UI writes them as cell options (`rows=`, `hide=`) rather than
   keeping them in the browser. Only the default page size, a personal preference, stays in the

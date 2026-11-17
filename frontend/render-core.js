@@ -199,9 +199,28 @@ var NB = (function () {
   // ---- Result grid --------------------------------------------------------------------------
   NB.pageSizes = [10, 25, 50, 100, 250, 1000];
 
-  // A result grid with a page-size picker.
+  // How many rows a table shows without scrolling: tables never scroll (a scrollbar is not part of
+  // the sketchbook), so a page holds at most what fits its box. Measured once from the stylesheet with
+  // a hidden probe; rows do not wrap, so every row has the same height.
+  var rowFit = 0;
+  NB.tableRows = function () {
+    if (rowFit) return rowFit;
+    var probe = NB.el('div', { 'class': 'nb-grid-wrap', style: 'position:absolute;visibility:hidden;left:-9999px;top:0', 'aria-hidden': 'true' });
+    probe.innerHTML = '<table class="nb-grid"><thead><tr><th class="nb-rownum"></th><th><div class="nb-colname">x</div></th></tr></thead>' +
+      '<tbody><tr><td class="nb-rownum">1</td><td>x</td></tr></tbody></table>';
+    document.body.appendChild(probe);
+    var head = probe.querySelector('thead').offsetHeight, row = probe.querySelector('tbody tr').offsetHeight;
+    var max = parseFloat(getComputedStyle(probe).maxHeight);
+    probe.remove();
+    if (!row || !isFinite(max)) return 25;
+    rowFit = Math.max(3, Math.floor((max - head - 4) / row));
+    return rowFit;
+  };
+
+  // A result grid with a page-size picker. It never scrolls: a page holds what fits its box
+  // (NB.tableRows), and columns that do not fit its width are paged with ‹ › instead.
   //   data: {columns, rows, total}
-  //   opts.pageSize: rows per page (default 25)
+  //   opts.pageSize: rows per page (default 25, at most NB.tableRows())
   //   opts.onPage(offset, size): fetch a page from the server; without it, pages through data.rows
   //   opts.onPageSize(size): the reader picked a page size (the editor writes it to the cell)
   //   opts.offset: first row of data.rows (server paging)
@@ -210,7 +229,7 @@ var NB = (function () {
     opts = opts || {};
     container.innerHTML = '';
     if (!data || !data.columns) return;
-    var size = opts.pageSize || 25;
+    var fit = NB.tableRows(), size = Math.min(opts.pageSize || 25, fit);
     var serverPaging = !!opts.onPage;
     var all = data.rows || [], cols = data.columns;
     var offset = serverPaging ? (opts.offset || 0) : (container.__nbOffset || 0);
@@ -246,8 +265,13 @@ var NB = (function () {
     table.innerHTML = thead + '</thead>' + body;
     wrap.appendChild(table);
     container.appendChild(wrap);
-    // The header rule is a hand-drawn line under the column names.
-    if (window.Sketch) requestAnimationFrame(function () {
+    // Once laid out, in its final fonts: the columns that fit the width, then the hand-drawn rule
+    // under their names.
+    var fonts = document.fonts && document.fonts.status !== 'loaded' ? document.fonts.ready : null;
+    var laidOut = function (f) { if (fonts) fonts.then(function () { requestAnimationFrame(f); }); else requestAnimationFrame(f); };
+    laidOut(function () {
+      fitColumns();
+      if (!window.Sketch) return;
       var head = table.querySelector('thead tr');
       if (!head || !table.offsetWidth) return;
       var svg = Sketch.el('svg', { 'class': 'nb-head-rule', width: table.offsetWidth, height: 6 });
@@ -261,6 +285,44 @@ var NB = (function () {
       if (serverPaging) opts.onPage(next, size);
       else { container.__nbOffset = next; NB.table(container, data, opts); }
     };
+
+    // Columns from data.__nbColumn on that fit the wrap's width are shown; the rest are hidden
+    // and reached with ‹ › in the footer. The row number always shows. The first column shown
+    // shows even if it is too wide on its own: it is then cut short with an ellipsis.
+    var colControls = NB.el('span', { 'class': 'nb-col-pages' });
+    function fitColumns() {
+      var avail = wrap.clientWidth, heads = table.querySelectorAll('thead th');
+      if (!avail || heads.length < 2) return;
+      var first = Math.min(data.__nbColumn || 0, cols.length - 1), used = heads[0].offsetWidth, last = first;
+      for (var k = first; k < cols.length; k++) {
+        var w = heads[k + 1].offsetWidth;
+        if (k > first && used + w > avail) break;
+        used += w;
+        last = k;
+      }
+      if (first === 0 && last === cols.length - 1) return;
+      Array.prototype.forEach.call(table.rows, function (tr) {
+        for (var k = 0; k < cols.length; k++) if (k < first || k > last) tr.cells[k + 1].classList.add('nb-col-off');
+      });
+      if (used > avail) table.classList.add('nb-grid-narrow');
+      var page = function (next) { data.__nbColumn = next; NB.table(container, data, opts); };
+      var shown = last - first + 1;
+      colControls.appendChild(NB.el('button', { 'class': 'nb-col-page', text: '‹', title: 'Previous columns', disabled: first <= 0 ? 'disabled' : null,
+        onclick: function () { page(Math.max(0, first - shown)); } }));
+      colControls.appendChild(NB.el('span', { 'class': 'nb-col-range', text: 'columns ' + (first + 1) + (shown > 1 ? '–' + (last + 1) : '') + ' of ' + cols.length }));
+      colControls.appendChild(NB.el('button', { 'class': 'nb-col-page', text: '›', title: 'More columns', disabled: last >= cols.length - 1 ? 'disabled' : null,
+        onclick: function () { page(last + 1); } }));
+    }
+    // A table drawn for one width is fitted again when its box changes width (a window resized).
+    if (window.ResizeObserver) {
+      var width = null;
+      new ResizeObserver(function (entries) {
+        var w = Math.round(entries[0].contentRect.width);
+        if (width !== null && w !== width && wrap.isConnected) { width = w; NB.table(container, data, opts); return; }
+        width = w;
+      }).observe(wrap);
+    }
+
     var footer = NB.el('div', { 'class': 'nb-grid-footer' });
     footer.appendChild(NB.el('span', { text: total === 1 ? '1 row' : NB.formatNumber(total, ',') + ' rows' }));
     if (available > size || offset > 0) {
@@ -271,8 +333,11 @@ var NB = (function () {
     if (!serverPaging && total > all.length) {
       footer.appendChild(NB.el('span', { text: '(' + NB.formatNumber(all.length, ',') + ' included)' }));
     }
+    footer.appendChild(colControls);
+    // Page sizes up to what fits the table's box.
     var picker = NB.el('select', { 'class': 'nb-page-size', title: 'Rows per page' });
-    var sizes = NB.pageSizes.indexOf(size) < 0 ? NB.pageSizes.concat([size]).sort(function (a, b) { return a - b; }) : NB.pageSizes;
+    var sizes = NB.pageSizes.filter(function (n) { return n < fit; }).concat([size, fit]);
+    sizes = sizes.filter(function (n, k) { return sizes.indexOf(n) === k; }).sort(function (a, b) { return a - b; });
     sizes.forEach(function (n) { picker.appendChild(NB.el('option', { value: n, text: n + ' per page', selected: n === size ? 'selected' : null })); });
     picker.onchange = function () {
       var next = +picker.value;

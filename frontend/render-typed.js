@@ -33,7 +33,8 @@
     var spec = render.spec || {}, enc = render.encoding || {}, row = (data[0] || [])[0] || {};
     var box = NB.el('div', { 'class': 'nb-kpi' });
     box.appendChild(NB.el('div', { 'class': 'nb-kpi-label', text: spec.label || (enc.value && enc.value.title) || '' }));
-    var value = NB.el('div', { 'class': 'nb-kpi-value', text: fmt(row.value, enc.value) });
+    var text = fmt(row.value, enc.value);
+    var value = NB.el('div', { 'class': 'nb-kpi-value', text: text, style: '--nb-chars: ' + Math.max(4, String(text).length) });
     // bands: [{from, to, color}] colours the value by the band it falls in (ends inclusive; either may be omitted).
     var v = Number(row.value), band = (spec.bands || []).filter(function (b) {
       return isFinite(v) && (b.from == null || v >= +b.from) && (b.to == null || v <= +b.to);
