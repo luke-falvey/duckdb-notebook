@@ -32,7 +32,9 @@ with `frontend/render-*.js`, all of it hand-drawn through the primitives in
 `frontend/render-sketch.js` (the "sketchbook" look, DESIGN §6 Themes).
 
 Every piece of the page is written by a pen as it appears (`frontend/render-ink.js`, DESIGN §15,
-`docs/HANDWRITING.md`). The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
+`docs/HANDWRITING.md`). Watch mode (`ink=watch`, gear menu "watch") is the same pen under another
+scheduling policy (`planWatch`, `timelineWatch`, the pen's own clock): one piece and one stroke at a time,
+slowly, in reading order, with the page following the pen. The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
 into `frontend/ink-strokes.js`.
 
 Presenting (DESIGN §18) is `frontend/render-present.js` (`Present`), shared by the editor and exports:
@@ -222,6 +224,10 @@ create, because all test files share one database.
 
 ## Things that are easy to get wrong
 
+- Watch mode keeps the gentle mode's rules: nothing new animates outside `Ink`, and a watched page
+  ends identical to `ink=off`. Its times are on the pen clock (`Ink.penNow()`), which `Ink.advance(ms)`
+  moves at the reader's speed; `test_ink_watch` shows how to drive it. A piece is taken apart only when
+  the pen reaches it, so a component that changes size or content while waiting needs nothing special.
 - Browser tests check the finished page and load every page with `ink=off` (`still()` in
   `test/browser/test_browser.py`). To test the animation itself, stop its clock (`window.__INK_PAUSE`
   in an init script, then `Ink.advance(ms)`); `test_ink` shows how. After changing the fonts, run
