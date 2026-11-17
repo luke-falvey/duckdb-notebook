@@ -609,10 +609,6 @@ struct PeekBindData : public TableFunctionData {
 	PeekTarget target;
 };
 
-struct PeekState : public GlobalTableFunctionState {
-	bool done = false;
-};
-
 unique_ptr<FunctionData> PeekBind(ClientContext &context, TableFunctionBindInput &input,
                                   vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<PeekBindData>();
@@ -639,12 +635,8 @@ unique_ptr<FunctionData> PeekBind(ClientContext &context, TableFunctionBindInput
 	return std::move(result);
 }
 
-unique_ptr<GlobalTableFunctionState> PeekInit(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<PeekState>();
-}
-
 void PeekScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &state = data.global_state->Cast<PeekState>();
+	auto &state = data.global_state->Cast<OnceState>();
 	if (state.done) {
 		return;
 	}
@@ -663,7 +655,7 @@ void PeekScan(ClientContext &context, TableFunctionInput &data, DataChunk &outpu
 
 void RegisterNotebookPeek(ExtensionLoader &loader) {
 	loader.RegisterFunction(
-	    TableFunction("notebook_peek", {LogicalType::VARCHAR, LogicalType::BIGINT}, PeekScan, PeekBind, PeekInit));
+	    TableFunction("notebook_peek", {LogicalType::VARCHAR, LogicalType::BIGINT}, PeekScan, PeekBind, OnceInit));
 }
 
 } // namespace duckdb

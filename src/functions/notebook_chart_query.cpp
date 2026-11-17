@@ -17,10 +17,6 @@ struct ChartBindData : public TableFunctionData {
 	notebook::ChartPlan plan;
 };
 
-struct ChartState : public GlobalTableFunctionState {
-	bool done = false;
-};
-
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
                               vector<Identifier> &names) {
 	auto spec = input.inputs[0].GetValue<string>();
@@ -53,12 +49,8 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	return std::move(result);
 }
 
-unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<ChartState>();
-}
-
 void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &state = data.global_state->Cast<ChartState>();
+	auto &state = data.global_state->Cast<OnceState>();
 	if (state.done) {
 		return;
 	}
@@ -75,7 +67,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 } // namespace
 
 void RegisterNotebookChartQuery(ExtensionLoader &loader) {
-	TableFunction function("notebook_chart_query", {LogicalType::VARCHAR, LogicalType::VARCHAR}, Scan, Bind, Init);
+	TableFunction function("notebook_chart_query", {LogicalType::VARCHAR, LogicalType::VARCHAR}, Scan, Bind, OnceInit);
 	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
 		options.Add("width", LogicalType::INTEGER)
 		    .Add("height", LogicalType::INTEGER)

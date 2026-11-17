@@ -811,10 +811,6 @@ struct StartBindData : public TableFunctionData {
 	bool open = true;
 };
 
-struct OnceState : public GlobalTableFunctionState {
-	bool done = false;
-};
-
 unique_ptr<FunctionData> StartBind(ClientContext &context, TableFunctionBindInput &input,
                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<StartBindData>();
@@ -839,10 +835,6 @@ unique_ptr<FunctionData> StartBind(ClientContext &context, TableFunctionBindInpu
 	names.emplace_back("token");
 	return_types.push_back(LogicalType::VARCHAR);
 	return std::move(result);
-}
-
-unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<OnceState>();
 }
 
 void OpenBrowser(const string &url) {

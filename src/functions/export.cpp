@@ -671,10 +671,6 @@ struct ExportBindData : public TableFunctionData {
 	ExportOptions options;
 };
 
-struct ExportState : public GlobalTableFunctionState {
-	bool done = false;
-};
-
 string FindBrowser(const string &requested) {
 	if (!requested.empty()) {
 		return requested;
@@ -774,12 +770,8 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	return std::move(result);
 }
 
-unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<ExportState>();
-}
-
 void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &state = data.global_state->Cast<ExportState>();
+	auto &state = data.global_state->Cast<OnceState>();
 	if (state.done) {
 		return;
 	}
@@ -873,7 +865,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 } // namespace
 
 void RegisterNotebookExport(ExtensionLoader &loader) {
-	TableFunction function("notebook_export", {LogicalType::VARCHAR}, Scan, Bind, Init);
+	TableFunction function("notebook_export", {LogicalType::VARCHAR}, Scan, Bind, OnceInit);
 	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
 		options.Add("file", LogicalType::VARCHAR)
 		    .Add("format", LogicalType::VARCHAR)

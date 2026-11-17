@@ -73,8 +73,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 		}
 	}
 
-	auto cache = input.named_parameters.find("cache");
-	result->cache = cache != input.named_parameters.end() && !cache->second.IsNull() && cache->second.GetValue<bool>();
+	result->cache = NamedBool(input, "cache");
 
 	auto column = [&](const char *name, LogicalType type) {
 		names.emplace_back(name);
