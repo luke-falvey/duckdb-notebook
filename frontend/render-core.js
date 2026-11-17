@@ -515,6 +515,7 @@ var NB = (function () {
   NB.width = (function () {
     var W = {}, picked = null, declared = 'normal', printing = false, page = null;
     var charts = new WeakMap();
+    var OVERHANG = 32;
     function valid(v) { return v === 'wide' || v === 'normal' ? v : null; }
     function saved() { try { return valid(localStorage.getItem('nb.width')); } catch (e) { return null; } }
     W.mode = function () {
@@ -562,7 +563,8 @@ var NB = (function () {
       var list = scope.matches && scope.matches('[data-nb-fluid]') ? [scope] : [];
       list = list.concat(Array.prototype.slice.call(scope.querySelectorAll('[data-nb-fluid]')));
       list.forEach(function (box) {
-        var entry = charts.get(box), w = Math.floor(box.clientWidth);
+        // Less room for the last tick's label, which hangs past the plot (outputs clip overflow).
+        var entry = charts.get(box), w = Math.floor(box.clientWidth) - OVERHANG;
         if (!entry || !w) return;
         var base = (entry.chart.render && entry.chart.render.width) || 640;
         if (w <= base) return;

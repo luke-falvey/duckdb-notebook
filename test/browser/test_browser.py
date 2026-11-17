@@ -863,8 +863,8 @@ def test_ink(browser, work, chromium):
     pdf = os.path.join(work, "ink.pdf")
     sql(db, f"FROM notebook_export('{revenue}', file := '{pdf}', format := 'pdf', chrome := '{wrapper}')")
     printed = open(os.path.join(work, "printed.html")).read()
-    check(open(pdf, "rb").read(5) == b"%PDF-" and '<html lang="en" data-ink="off">' in printed,
-          "PDF export prints a page marked not to animate")
+    check(open(pdf, "rb").read(5) == b"%PDF-" and '<html lang="en" data-ink="off" data-width-fixed="normal">' in printed,
+          "PDF export prints a page marked not to animate, at the normal width (DESIGN §21)")
     page = browser.new_page(viewport=viewport)
     page.goto("file://" + os.path.join(work, "printed.html"))
     page.wait_for_function("window.__NB_READY === true")
@@ -1868,7 +1868,8 @@ FROM range(5);
 WIDE_STATE = """() => {
     const svg = sel => { const e = document.querySelector(sel); if (!e) return null;
       const b = e.getBoundingClientRect(); return { view: +e.getAttribute('viewBox').split(' ')[2], w: Math.round(b.width), h: Math.round(b.height),
-        ticks: e.querySelectorAll('.nb-axis text').length }; };
+        ticks: e.querySelectorAll('.nb-axis text').length,
+        overhang: Math.round(Math.max(...[...e.querySelectorAll('.nb-axis text')].map(t => t.getBoundingClientRect().right)) - e.closest('.nb-output').getBoundingClientRect().right) }; };
     const cells = document.querySelector('.nb-cells').getBoundingClientRect();
     const p = document.querySelector('.nb-md p');
     return { mode: document.documentElement.getAttribute('data-width'), cells: Math.round(cells.width),
@@ -1910,6 +1911,7 @@ def test_wide(browser, work):
     check(wide["fluid"]["view"] > 1400 and wide["fluid"]["w"] > 1400 and abs(wide["fluid"]["h"] - normal["fluid"]["h"]) <= 2
           and wide["fluid"]["ticks"] > normal["fluid"]["ticks"],
           f"a chart is drawn again for the wider box: same height, more ticks, not stretched ({normal['fluid']} -> {wide['fluid']})")
+    check(wide["fluid"]["overhang"] <= 0, f"its last tick label stays inside its box ({wide['fluid']['overhang']}px)")
     check(wide["fixed"]["view"] == 500 and wide["fixed"]["w"] == 500, f"a chart whose cell sets width= keeps it ({wide['fixed']})")
     check(wide["prose"] <= 760 and wide["columns"] > normal["columns"],
           f"prose keeps its line length while a table shows more columns ({wide['prose']}px; {normal['columns']} -> {wide['columns']} columns)")

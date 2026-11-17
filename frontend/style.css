@@ -279,6 +279,9 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
 /* Exported page */
 .nb-viewer { max-width: 1000px; margin: 0 auto; padding: 24px 24px 60px; }
 .nb-viewer-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--nb-muted); font-size: 15px; margin-bottom: 12px; }
+/* A narrow window wraps the header rather than scrolling sideways: a long source path breaks anywhere. */
+.nb-viewer-header { flex-wrap: wrap; }
+.nb-viewer-header > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .nb-viewer pre.nb-source { margin: 2px 0 6px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; color: #343a40; }
 .nb-viewer .nb-code-label { color: var(--nb-faint); font-size: 14px; }
 .nb-frozen { color: var(--nb-muted); font-size: 14px; margin-bottom: 8px; }
