@@ -1018,7 +1018,7 @@ draws the line:
 
 | SQL function | In DuckDB-WASM |
 |---|---|
-| `notebook_cells`, `notebook_sql`, `notebook_chart_query` | Work |
+| `notebook_cells`, `notebook_sql`, `notebook_chart_query`, `notebook_peek` | Work |
 | `notebook_run` | Works. Each run opens its own `Connection`, as natively |
 | `notebook_save`, `notebook_checkout` | Built; not exercised by the test |
 | `notebook_export` html, md, sql, data | Built; md tested, writing to DuckDB-WASM's virtual file system |

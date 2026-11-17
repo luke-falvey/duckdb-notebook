@@ -132,6 +132,11 @@ async function testArch(browser, arch, origin) {
     check('compiled chart query runs', data.rows && data.rows.length === 3, data);
   }
 
+  const peekSql = 'WITH a AS (SELECT 1 AS x) SELECT * FROM a';
+  const peek = await sql(`SELECT kind, name, query FROM notebook_peek('${peekSql}', ${peekSql.indexOf('SELECT 1')})`);
+  check('notebook_peek', peek.rows && peek.rows[0].kind === 'cte' && peek.rows[0].name === 'a' &&
+    peek.rows[0].query === 'WITH a AS (SELECT 1 AS x) SELECT * FROM a', peek);
+
   const run = await sql(
     "SELECT idx, kind, name, status, error, row_count FROM notebook_run('revenue.sql', params := {region: 'US'}) ORDER BY idx",
   );
