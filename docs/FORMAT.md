@@ -166,7 +166,6 @@ statements create. Effect cells run only when asked (see [DESIGN.md §3](DESIGN.
 |---|---|---|
 | `run` | `auto`, `manual` | Default `auto` for query cells, `manual` for effect cells |
 | `materialize` | `view`, `table` | `view` (default) keeps the result lazy. `table` stores it as a temp table: use for slow queries that many cells read |
-| `display` | `table`, `none` | Whether to show the result grid |
 
 ### Ordering
 
