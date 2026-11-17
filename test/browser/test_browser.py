@@ -433,6 +433,29 @@ def test_cache_redraw_stale(browser, work):
         stop(shell)
 
 
+def test_brush_listeners(browser, work):
+    # B4: drawing a brushable chart again does not add window listeners each time.
+    notebook = os.path.join(work, "brush.sql")
+    shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
+    shell, url = serve(work, notebook)
+    try:
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.add_init_script("""(() => { window.__moves = 0; const add = window.addEventListener;
+            window.addEventListener = function (type) { if (type === 'mousemove') window.__moves++; return add.apply(this, arguments); }; })()""")
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.click("#run-all")
+        page.wait_for_function("!App.running && document.getElementById('status').textContent.startsWith('Ran')", timeout=60000)
+        check(page.locator(".nb-brush-overlay").count() > 0, "the notebook has a brushable chart")
+        before = page.evaluate("window.__moves")
+        page.evaluate("() => { App.render(); App.render(); App.render(); }")
+        after = page.evaluate("window.__moves")
+        check(after == before, f"drawing brushable charts again adds no window listeners ({before} -> {after})")
+        page.close()
+    finally:
+        stop(shell)
+
+
 def test_cache(browser, work):
     """The result cache (FORMAT §8): a reopened notebook shows its last results without running anything,
     results whose inputs changed are marked, and the cache can be cleared or switched off."""
@@ -1930,6 +1953,7 @@ def main():
             test_cache(browser, work)
             test_cache_written_later(browser, work)
             test_cache_redraw_stale(browser, work)
+            test_brush_listeners(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
