@@ -142,7 +142,7 @@ textarea.nb-code-over::selection { color: transparent; background: rgba(103, 65,
 .tk-num { color: #e8590c; } .tk-var, .tk-name { color: #c2255c; } .tk-comment { color: #adb5bd; }
 .nb-stub { display: block; width: max-content; color: var(--nb-faint); font-size: 14px; cursor: pointer; margin: 2px 0; }
 .nb-stub:hover { color: var(--nb-accent); }
-.nb-output { position: relative; padding-top: 6px; overflow: auto; }
+.nb-output { position: relative; padding-top: 6px; overflow-x: clip; }
 .nb-output:empty { display: none; }
 .nb-meta { color: var(--nb-faint); font-size: 14px; }
 .nb-meta:empty { display: none; }
@@ -174,7 +174,7 @@ button.nb-pick-chart { display: block; margin-top: 4px; }
 .nb-md h2 { font-size: 30px; } .nb-md h3 { font-size: 24px; }
 .nb-md p { margin: .35em 0; max-width: 760px; }
 .nb-md code { background: #f1efe8; padding: 1px 5px; border-radius: 4px; }
-.nb-md pre.nb-code { background: rgba(255, 255, 255, .6); padding: 8px 10px; border-radius: var(--nb-wobbly); overflow: auto; }
+.nb-md pre.nb-code { background: rgba(255, 255, 255, .6); padding: 8px 10px; border-radius: var(--nb-wobbly); white-space: pre-wrap; overflow-wrap: anywhere; }
 .nb-md blockquote { border-left: 3px solid var(--nb-border); margin: .4em 0; padding-left: 14px; color: var(--nb-muted); }
 .nb-md table.nb-md-table { border-collapse: collapse; margin: .4em 0; font-size: 17px; }
 .nb-md table.nb-md-table th, .nb-md table.nb-md-table td { border-bottom: 1px solid var(--nb-border); padding: 3px 12px; }
@@ -184,7 +184,14 @@ button.nb-pick-chart { display: block; margin-top: 4px; }
 .nb-md img { max-width: 100%; }
 
 /* Grid */
-.nb-grid-wrap { overflow: auto; max-height: 520px; position: relative; }
+/* Tables never scroll: a page holds the rows that fit max-height (NB.tableRows), and columns that do
+   not fit the width are paged (fitColumns in NB.table). Clipping is only a last resort. */
+.nb-grid-wrap { overflow: hidden; max-height: 520px; position: relative; }
+table.nb-grid .nb-col-off { display: none; }
+table.nb-grid.nb-grid-narrow { width: 100%; table-layout: fixed; }
+table.nb-grid.nb-grid-narrow .nb-rownum { width: 3em; }
+.nb-col-pages { display: inline-flex; gap: 8px; align-items: center; }
+.nb-col-pages:empty { display: none; }
 .nb-head-rule { position: absolute; left: 0; pointer-events: none; color: var(--nb-ink); }
 table.nb-grid { border-collapse: separate; border-spacing: 0; font-size: 16px; width: max-content; min-width: 100%; }
 table.nb-grid th, table.nb-grid td { padding: 2px 14px 2px 4px; text-align: left; white-space: nowrap; max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
@@ -233,7 +240,8 @@ td.nb-null { color: var(--nb-faint); }
 .nb-kpi { padding: 4px 0; }
 .nb-kpi-label { color: var(--nb-muted); font-size: 18px; }
 .nb-output { container-type: inline-size; }
-.nb-kpi-value { font-size: clamp(30px, 22cqw, 76px); line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Sized by its length (--nb-chars, set by the renderer) so a long value fits its cell. */
+.nb-kpi-value { font-size: clamp(18px, min(22cqw, calc(165cqw / var(--nb-chars, 6))), 76px); line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .nb-kpi-delta.up { color: var(--nb-ok); } .nb-kpi-delta.down { color: var(--nb-error); }
 /* A sparkline shrinks with a narrow cell (span=3 or 4) instead of scrolling it. */
 .nb-kpi svg.nb-sparkline { display: block; max-width: 100%; height: auto; }
