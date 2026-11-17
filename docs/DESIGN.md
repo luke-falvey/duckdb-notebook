@@ -881,7 +881,8 @@ show their own results, so what was missing was a look inside one.
   scalar function (`nextval`, `setval`, `write_log`...; `random()` and `uuid()` are allowed), or a table
   function on a short list of ones that change something (`checkpoint`, `copy_database`, the
   `notebook_*` functions, `enable_*`/`disable_*`), is refused before it runs. Anything the list misses
-  is stopped by the read-only transaction: a macro that hides `nextval` fails with "cannot write".
+  in the local database is stopped by the read-only transaction: a macro that hides `nextval` fails with
+  "cannot write". Effects outside it (an extension's function that writes to a remote system) are not.
 - **Trust.** Opening a notebook does not run it (§3), so the server refuses to peek in a session until
   the reader has run something, and again after the text has been replaced from the file on disk. Its
   own flag (`Session::trusted`) is separate from the result cache's `ran` (§17): a notebook reopened
@@ -913,6 +914,8 @@ show their own results, so what was missing was a look inside one.
   goes away; peeking on a copy keeps the session exactly as it was.
 
 **Not done.** A part of a recursive CTE that reads the CTE itself (its rows depend on the iteration);
-table functions from other extensions are judged only by the read-only transaction; the note can
+table functions from other extensions cannot be judged, so one that acts on a remote system (for
+example `postgres_execute`) inside a CTE could run during a peek: the read-only transaction protects
+only the local database; the note can
 cover part of the cell's (stale) result in a narrow window when the code leaves no room beside it.
 Only Chromium was available for testing.
