@@ -118,11 +118,6 @@ string Param(const http::Request &req, const string &key) {
 	return req.has_param(key) ? req.get_param_value(key) : string();
 }
 
-notebook::Notebook Analyze(DatabaseInstance &db, const string &text) {
-	Connection connection(db);
-	return AnalyzeText(*connection.context, text);
-}
-
 Json CellsJson(const notebook::Notebook &notebook) {
 	auto cells = Json::Array();
 	for (auto &cell : notebook.cells) {
@@ -134,7 +129,7 @@ Json CellsJson(const notebook::Notebook &notebook) {
 //! The notebook as the editor shows it. With `results`, also the cached result of every cell that has
 //! one and the input values that go with them: sent when a notebook is opened, not on every edit.
 Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) {
-	auto notebook = Analyze(db, session.text);
+	auto notebook = AnalyzeText(db, session.text);
 	auto json = Json::Object()
 	                .Set("source", Json::String(session.source))
 	                .Set("text", Json::String(session.text))

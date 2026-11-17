@@ -31,6 +31,12 @@ SELECT content = (SELECT sql FROM notebook_sql('test/notebooks/basic.sql')) FROM
 ----
 true
 
+# B1: the sql export refuses what notebook_sql refuses, graph errors included
+statement error
+FROM notebook_export('test/notebooks/graph_errors.sql', file := '{TEST_DIR}/graph_errors.expanded.sql', format := 'sql')
+----
+'later' is defined further down, at line 5
+
 # The expanded example in examples/ is notebook_sql's output, kept in step with the notebook
 query I
 SELECT content = (SELECT sql FROM notebook_sql('examples/revenue.sql')) FROM read_text('examples/revenue.expanded.sql')

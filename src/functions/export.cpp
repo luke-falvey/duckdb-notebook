@@ -423,7 +423,7 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
                       string &note) {
 	auto &format = options.format;
 	if (format == "sql") {
-		auto notebook = notebook::ParseNotebook(text);
+		auto notebook = AnalyzeText(db, text);
 		ThrowIfInvalid(notebook, source);
 		return notebook::ExpandNotebook(notebook, source);
 	}
@@ -447,7 +447,7 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 			throw InvalidInputException("html-wasm export needs the DuckDB-WASM runtime: build it with wasm/build.sh "
 			                            "and pass wasm_runtime := '<directory>' (or set NOTEBOOK_WASM_RUNTIME)");
 		}
-		auto notebook = notebook::ParseNotebook(text);
+		auto notebook = AnalyzeText(db, text);
 		auto cells = Json::Array();
 		for (auto &cell_json : payload.Get("cells")->Items()) {
 			auto copy = cell_json;
