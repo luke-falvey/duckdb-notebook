@@ -1,7 +1,8 @@
 // Loads the notebook extension's WebAssembly build into DuckDB-WASM in headless Chromium and runs
 // notebook_cells, notebook_sql, notebook_chart_query and notebook_run on examples/revenue.sql.
-// See test/wasm/README.md. No server is started: Playwright answers every request of the page
-// (and its workers) from local files, under a made-up origin.
+// See test/wasm/README.md. The files are served by an HTTP server inside this process, on
+// 127.0.0.1 and a free port, closed when the run ends. (Playwright's request routing cannot answer
+// the threads bundle: it starts its pthread workers from inside a worker.)
 //
 //   node test/wasm/run.cjs [wasm_eh] [wasm_threads]
 //
@@ -9,13 +10,13 @@
 // architecture that has been built is tested.
 'use strict';
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const { chromium } = require('playwright');
 const esbuild = require('esbuild');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const DIST = path.join(__dirname, 'node_modules', '@duckdb', 'duckdb-wasm', 'dist');
-const ORIGIN = 'http://notebook.test';
 
 // DuckDB-WASM 2.0 has two bundles: base (platform wasm_eh) and threads (wasm_threads). There is no
 // bundle for wasm_mvp any more, so a wasm_mvp extension has nothing to load into.
@@ -30,44 +31,59 @@ function extensionPath(arch) {
 
 const CONTENT_TYPES = { '.js': 'text/javascript', '.wasm': 'application/wasm', '.html': 'text/html', '.sql': 'text/plain' };
 
-async function testArch(browser, arch, pageScript) {
+// A step that hangs fails the run instead of stalling it.
+function withTimeout(promise, what, ms = 60000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms: ${what.slice(0, 100)}`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Serves the page, DuckDB-WASM and each architecture's extension, with the headers that make the
+// page cross-origin isolated (the threads bundle needs SharedArrayBuffer). 127.0.0.1 is a secure
+// context, which isolation also needs.
+function serve(pageScript) {
+  const files = {
+    '/index.html': Buffer.from('<!doctype html><meta charset="utf-8"><title>notebook wasm test</title><script src="page.js"></script>'),
+    '/page.js': Buffer.from(pageScript),
+  };
+  for (const name of fs.readdirSync(DIST)) {
+    if (/\.(wasm|worker\.js)$/.test(name)) files['/' + name] = path.join(DIST, name);
+  }
+  for (const arch of Object.keys(ARCHS)) files[`/${arch}/notebook.duckdb_extension.wasm`] = extensionPath(arch);
+  const server = http.createServer((req, res) => {
+    const pathname = new URL(req.url, 'http://localhost').pathname;
+    const file = files[pathname];
+    if (file === undefined || (typeof file === 'string' && !fs.existsSync(file))) {
+      res.writeHead(404).end('not found');
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': CONTENT_TYPES[path.extname(pathname)] || 'application/octet-stream',
+      'cross-origin-opener-policy': 'same-origin',
+      'cross-origin-embedder-policy': 'require-corp',
+    });
+    res.end(typeof file === 'string' ? fs.readFileSync(file) : file);
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+async function testArch(browser, arch, origin) {
   const failures = [];
   const check = (name, ok, detail) => {
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${ok || detail === undefined ? '' : ': ' + JSON.stringify(detail)}`);
     if (!ok) failures.push(name);
   };
-  const files = {
-    '/index.html': '<!doctype html><meta charset="utf-8"><title>notebook wasm test</title><script src="page.js"></script>',
-    '/page.js': pageScript,
-    '/notebook.duckdb_extension.wasm': extensionPath(arch),
-  };
-  for (const name of fs.readdirSync(DIST)) {
-    if (/\.(wasm|worker\.js)$/.test(name)) files['/' + name] = path.join(DIST, name);
-  }
   const context = await browser.newContext();
-  await context.route(ORIGIN + '/**', (route) => {
-    const url = new URL(route.request().url());
-    const file = files[url.pathname];
-    if (file === undefined) return route.fulfill({ status: 404, body: 'not found' });
-    const body = file.startsWith('/') && fs.existsSync(file) ? fs.readFileSync(file) : file;
-    // Cross-origin isolation, which the threads bundle needs for SharedArrayBuffer.
-    route.fulfill({
-      status: 200,
-      body,
-      headers: {
-        'content-type': CONTENT_TYPES[path.extname(url.pathname)] || 'application/octet-stream',
-        'cross-origin-opener-policy': 'same-origin',
-        'cross-origin-embedder-policy': 'require-corp',
-      },
-    });
-  });
   const page = await context.newPage();
   page.on('pageerror', (e) => console.log('  page error:', e.message));
-  await page.goto(ORIGIN + '/index.html');
+  await page.goto(origin + '/index.html');
+  check('page is cross-origin isolated', await page.evaluate(() => window.notebookTest.isolated()));
   const t0 = Date.now();
-  await page.evaluate((bundle) => window.notebookTest.boot(bundle), ARCHS[arch].bundle);
+  await withTimeout(page.evaluate((bundle) => window.notebookTest.boot(bundle), ARCHS[arch].bundle), 'starting DuckDB-WASM');
   console.log(`  DuckDB-WASM started in ${Date.now() - t0} ms`);
-  const sql = (text) => page.evaluate((t) => window.notebookTest.sql(t), text);
+  const sql = (text) => withTimeout(page.evaluate((t) => window.notebookTest.sql(t), text), text);
 
   const info = await sql("SELECT version() AS version, (SELECT platform FROM pragma_platform()) AS platform");
   const engine = info.rows && info.rows[0];
@@ -81,7 +97,7 @@ async function testArch(browser, arch, pageScript) {
   check('engine: .lo of an untyped NULL variable', untyped.rows && untyped.rows[0].v === null, untyped);
 
   const t1 = Date.now();
-  const load = await sql(`LOAD '${ORIGIN}/notebook.duckdb_extension.wasm'`);
+  const load = await sql(`LOAD '${origin}/${arch}/notebook.duckdb_extension.wasm'`);
   check('LOAD notebook', !load.error, load.error);
   if (load.error) {
     await context.close();
@@ -123,15 +139,16 @@ async function testArch(browser, arch, pageScript) {
     run.rows.every((r) => r.status === 'ok' || r.status === 'skipped'), run);
   check('notebook_run: tables it creates remain', !(await sql('SELECT count(*) AS n FROM orders')).error);
 
-  // The result cache writes files beside the notebook through DuckDB's file system.
+  // The result cache keeps entries in a directory beside the notebook. DuckDB-WASM's in-memory file
+  // system has no directories, so there is no cache there: the run works and nothing is written.
   const cached = await sql("SELECT count(*) AS n FROM notebook_run('revenue.sql', cache := true) WHERE status = 'ok'");
-  check('notebook_run(cache := true)', cached.rows && cached.rows[0].n > 0, cached);
-  const entries = await sql("SELECT count(*) AS n, count(*) FILTER (status = 'fresh') AS fresh FROM notebook_cache('revenue.sql')");
-  check('notebook_cache lists fresh entries', entries.rows && entries.rows[0].n > 0 && entries.rows[0].fresh === entries.rows[0].n, entries);
+  check('notebook_run(cache := true) runs', cached.rows && cached.rows[0].n > 0, cached);
+  const entries = await sql("SELECT count(*) AS n FROM notebook_cache('revenue.sql')");
+  check('notebook_cache: no entries in the in-memory file system', entries.rows && entries.rows[0].n === 0, entries);
+  const leftovers = await sql("SELECT count(*) AS n FROM glob('.duckdb-notebook/**')");
+  check('notebook_cache: nothing written', leftovers.rows && leftovers.rows[0].n === 0, leftovers);
   const cleared = await sql("SELECT * FROM notebook_cache_clear('revenue.sql')");
   check('notebook_cache_clear', !cleared.error, cleared);
-  const after = await sql("SELECT count(*) AS n FROM notebook_cache('revenue.sql')");
-  check('notebook_cache is empty after clearing', after.rows && after.rows[0].n === 0, after);
 
   const md = await sql("SELECT bytes FROM notebook_export('revenue.sql', file := 'revenue.md', format := 'md')");
   check('notebook_export md', md.rows && md.rows[0].bytes > 0, md);
@@ -177,17 +194,20 @@ async function testArch(browser, arch, pageScript) {
     write: false,
     logLevel: 'warning',
   });
-  const pageScript = bundled.outputFiles[0].text;
-  const browser = await chromium.launch();
+  const server = await serve(bundled.outputFiles[0].text);
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  let browser = null;
   let failed = 0;
   try {
+    browser = await chromium.launch();
     for (const arch of archs) {
       console.log(`${arch}:`);
-      const failures = await testArch(browser, arch, pageScript);
+      const failures = await testArch(browser, arch, origin);
       failed += failures.length;
     }
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
+    server.close();
   }
   console.log(failed ? `${failed} check(s) failed` : 'all checks passed');
   process.exit(failed ? 1 : 0);

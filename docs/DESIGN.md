@@ -885,12 +885,25 @@ draws the line:
 | `notebook_run` | Works. Each run opens its own `Connection`, as natively |
 | `notebook_save`, `notebook_checkout` | Built; not exercised by the test |
 | `notebook_export` html, md, sql, data | Built; md tested, writing to DuckDB-WASM's virtual file system |
+| `notebook_cache`, `notebook_cache_clear`, `notebook_run(cache := true)` | Work, but find no cache: see below |
 | `notebook_export` pdf | Fails: "runs a local Chrome, which this build … cannot do" |
 | `notebook_start`, `notebook_stop` | Registered with the same signatures; fail: "the notebook server is not available in this build" |
 
 With the option off, `src/functions/server_unavailable.cpp` replaces `server.cpp`, and `export.cpp`
 has one `#ifdef` for pdf. `src/core` has no platform conditionals. Paths go through DuckDB's file
 system as natively (`ReadNotebook`), so files registered with `registerFileText` and URLs work.
+
+**The result cache needs directories, and DuckDB-WASM's in-memory file system has none.** Creating
+a directory there does nothing, and no directory exists. Before the change, `cache := true` wrote
+entries that could never be listed back. Now the cache checks that its directory exists after creating
+it and is otherwise off: nothing is written, and `notebook_cache` lists nothing. The check is not
+specific to WebAssembly. A notebook on `opfs://` paths should have a working cache, since DuckDB-WASM's
+OPFS support has directories, but that is untested.
+
+**`wasm_threads` needed a build fix.** extension-ci-tools' release branch (`v2.0-cyanoptera`) compiles
+`wasm_threads` without `-fwasm-exceptions`, because of a misnamed variable. DuckDB-WASM's threads
+bundle uses Wasm exceptions, so the extension failed to `dlopen`, with an empty error. Our `Makefile`
+sets the flags as extension-ci-tools' `main` branch does, after including its Makefile.
 
 `test/wasm/run.cjs` loads the build into DuckDB-WASM in headless Chromium and runs the functions on
 `examples/revenue.sql`. CI runs it on the artifacts of the extension pipeline, which itself does not

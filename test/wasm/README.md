@@ -3,12 +3,13 @@
 `run.cjs` loads the WebAssembly build of the extension into DuckDB-WASM 2.0 in headless Chromium and
 runs `notebook_cells`, `notebook_sql`, `notebook_chart_query`, `notebook_run` and a markdown
 `notebook_export` on `examples/revenue.sql`, which it hands to DuckDB-WASM's virtual file system. It
-also checks that `notebook_start`, `notebook_stop` and the pdf export fail with a clear message, since
+checks that the result cache stays off there (no directories), and that `notebook_start`, `notebook_stop` and the pdf export fail with a clear message, since
 the WebAssembly build has no server (docs/DESIGN.md §18).
 
-No server is started: Playwright answers the page's and its workers' requests from local files,
-under a made-up origin, with the headers that make the page cross-origin isolated (the threads
-bundle needs `SharedArrayBuffer`).
+The files are served by an HTTP server inside the test process, on 127.0.0.1 and a free port, closed
+when the run ends, with the headers that make the page cross-origin isolated (the threads bundle needs
+`SharedArrayBuffer`). Playwright's request routing would avoid the server, but it cannot answer the
+threads bundle, which starts its pthread workers from inside a worker.
 
 ## Run it
 
