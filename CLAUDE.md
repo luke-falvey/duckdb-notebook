@@ -90,6 +90,16 @@ The loadable file is `build/release/extension/notebook/notebook.duckdb_extension
 stamps it with DuckDB's commit hash, because the submodule is a shallow clone with no tag, so it
 loads into the shell built here but not into a released DuckDB. CI builds are stamped `v2.0.0`.
 
+To use the extension in an installed DuckDB v2.0.0 (for example one with the `hdfs` extension), build a
+copy stamped `v2.0.0` and install it; a running server must be restarted afterwards:
+
+```bash
+ninja -C build/v2.0.0 notebook_loadable_extension   # configured once with -DOVERRIDE_GIT_DESCRIBE=v2.0.0
+duckdb -unsigned -init /dev/null -c "FORCE INSTALL '$PWD/build/v2.0.0/extension/notebook/notebook.duckdb_extension'"
+```
+
+Then `LOAD notebook` in `duckdb -unsigned`.
+
 Run one test file with `./build/release/test/unittest "test/sql/notebook_run.test"`.
 
 ```bash
