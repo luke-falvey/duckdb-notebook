@@ -1638,8 +1638,9 @@ def test_input_widget(browser, work):
                   .filter(([a, b]) => a !== b);
     }""")
     check(not differ, f"an input looks the same in the editor and an export ({differ})")
-    shown = page.evaluate("NB.inputWidget({name: 'n', widget: 'slider', value: 1000, options: {}}, () => {}).querySelector('.nb-input-value').textContent")
-    check(shown == "1,000", f"a slider's value is shown with thousands separators ({shown})")
+    shown = page.evaluate("""() => [1000, 2026, 123.45].map(v =>
+      NB.inputWidget({name: 'n', widget: 'slider', value: v, options: {}}, () => {}).querySelector('.nb-input-value').textContent)""")
+    check(shown == ["1000", "2026", "123.45"], f"a slider shows its exact value: a year is not 2,026, a fraction is not rounded ({shown})")
     empty = page.evaluate("NB.inputWidget({name: 'n', widget: 'number', value: null, options: {label: '', step: ''}}, () => {}).outerHTML")
     check("<label>n</label>" in empty and 'step="any"' in empty and "value=" not in empty,
           f"an empty label= or step= is not set, and an empty number has no value ({empty})")

@@ -422,9 +422,10 @@ var NB = (function () {
     } else if (w === 'checkbox') {
       control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
     } else if (w === 'slider' || w === 'number') {
-      var shown = NB.el('span', { 'class': 'nb-input-value', text: NB.formatNumber(v) });
+      // The exact value: a year is 2026, not 2,026, and 123.45 is not rounded.
+      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : String(v) });
       var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option('min'), max: option('max'), step: option('step', 'any'),
-        value: v, oninput: function () { shown.textContent = NB.formatNumber(input.value); }, onchange: function () { fire(Number(input.value)); } });
+        value: v, oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
       box.appendChild(input);
       box.appendChild(shown);
     } else if (w === 'date') {
