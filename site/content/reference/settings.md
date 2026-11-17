@@ -48,12 +48,13 @@ Kept in the browser's local storage, per browser, never in the file:
 |---|---|---|---|
 | Rows per page | ⚙ → rows per page | 10 to 1,000 | 25 |
 | Theme | ⚙ → ◐ | light, dark | light |
-| Handwriting | ⚙ → handwriting | `gentle`, `slow`, `off` | `gentle` |
+| Handwriting | ⚙ → handwriting | `gentle`, `watch`, `off` (a remembered `slow` from older versions reads as `gentle`) | `gentle` |
+| Watch speed | the − and + controls in watch mode | 0.25× to 8× | 1× |
 | Peek | ⚙ → peek | on, off | on |
 | Auto-run | ⚙ → auto-run | on, off | on (not remembered between visits) |
 
 Adding `ink=off` to a page's URL turns the handwriting off for that visit, in the editor and in HTML
-exports. It is also off when the system asks for reduced motion.
+exports; `ink=watch` opens it in [watch mode](../guides/reading.md#watch-mode). It is also off when the system asks for reduced motion.
 
 ## Environment variables
 

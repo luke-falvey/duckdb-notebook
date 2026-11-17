@@ -16,7 +16,8 @@ browser with no server. Open one, then look at the `.sql` file it came from.
 | [charts.html](charts.html) | [`examples/charts.sql`](https://github.com/luke-falvey/duckdb-notebook/blob/main/examples/charts.sql) | `notebook_export('examples/charts.sql', file := 'charts.html')` |
 | [hello.html](hello.html) | [`site/notebooks/hello.sql`](https://github.com/luke-falvey/duckdb-notebook/blob/main/site/notebooks/hello.sql) | `notebook_export('hello.sql', file := 'hello.html')` |
 
-Add `?ink=off` to an export's address to see it without the handwriting animation, or `#present` to
+Press **✎ watch** in an export's header (or add `?ink=watch`) to watch one pen write it, add `?ink=off`
+to see it without the handwriting animation, or `#present` to
 present it one screen at a time: try [revenue.html#present](revenue.html#present).
 
 ## Not published here: a live DuckDB-WASM export

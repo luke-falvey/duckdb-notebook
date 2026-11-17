@@ -19,6 +19,7 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
 | <kbd>Esc</kbd> | a peek note showing | Put the [peek](#peek-under-the-pen) away until the caret is in another part |
 | <kbd>Enter</kbd> / <kbd>Esc</kbd> | in a cell's `-- %%` line | Keep / cancel the change |
 | <kbd>Esc</kbd> | ⚙ menu open | Close it |
+| <kbd>Space</kbd>/<kbd>P</kbd> <kbd>+</kbd> <kbd>−</kbd> <kbd>N</kbd> <kbd>E</kbd> <kbd>Esc</kbd> | watch mode | Pause, faster, slower, skip the piece, finish, stop watching ([watch mode](../guides/reading.md#watch-mode)) |
 | <kbd>→</kbd> <kbd>←</kbd> <kbd>Space</kbd> <kbd>Home</kbd> <kbd>End</kbd> <kbd>F</kbd> <kbd>Esc</kbd> | presenting | Next, back, first, last, full screen, stop ([presenting](../guides/reading.md#presenting)) |
 
 ## A cell
@@ -112,7 +113,7 @@ show nothing.
 | ◐ | Light or dark |
 | rows per page | Default page size for tables without `rows=`, remembered in this browser |
 | timing | Show run times; writes `timing:` into the `[notebook]` cell |
-| handwriting | `gentle`, `slow` or `off`; remembered in this browser |
+| handwriting | `gentle`, `watch` ([watch the pen](../guides/reading.md#watch-mode) write the page) or `off`; remembered in this browser |
 | peek | Show the first rows of the CTE or sub-query the caret is in ([peek](#peek-under-the-pen)); remembered in this browser |
 | Export | HTML, HTML with inputs precomputed, PDF (prints the reading view from the browser), Markdown or SQL, with or without code and output |
 

@@ -142,6 +142,54 @@ re-running a cell rewrites only its result.
 
 <img src="../../images/handwriting/revenue.gif" alt="The revenue notebook being written onto the page by a pen" width="720">
 
-The ⚙ menu's **handwriting** setting is `gentle` (the default), `slow` or `off`, remembered in your
+The ⚙ menu's **handwriting** setting is `gentle` (the default), `watch` or `off`, remembered in your
 browser. It is off when the system asks for reduced motion, when printing, in PDF exports, and when the
-page's URL has `ink=off`. The finished page is identical either way.
+page's URL has `ink=off`, whatever the setting says. The finished page is identical either way.
+
+### Watch mode
+
+The gentle pen gets out of the way: a screen is written in a couple of seconds, many strokes at once.
+**Watch mode** is the opposite, for watching: one pen writes the whole page in front of you, letter by
+letter and stroke by stroke, as a person drawing it would, and the page scrolls to follow it.
+
+<img src="../../images/handwriting/watch-open.gif" alt="Watch mode: one pen writes the title and opening prose of the revenue notebook, letter by letter" width="720">
+
+Start it in any of three ways:
+
+- choose **watch** under handwriting in the editor's ⚙ menu (remembered in this browser);
+- add `ink=watch` to the address of the editor or of an HTML export, so a link opens straight into it:
+  try [revenue.html?ink=watch](../examples/revenue.html?ink=watch);
+- press **✎ watch** in an HTML export's header, which writes the page again from the top.
+
+While the pen has work, a small row of controls sits in the bottom-left corner:
+
+| Control | Key | Does |
+|---|---|---|
+| pause / go on | <kbd>Space</kbd> or <kbd>P</kbd> | Stop and start the pen |
+| − and + | <kbd>−</kbd> and <kbd>+</kbd> | Slower or faster, from 0.25× to 8×; remembered |
+| skip | <kbd>N</kbd> | Finish the piece being written and go on to the next |
+| finish | <kbd>E</kbd> | Write everything now |
+| × | <kbd>Esc</kbd> | Stop watching: the page completes and the pen goes back to gentle |
+| follow | | Shown when you have scrolled away: go back to following the pen |
+
+**Following the pen.** The page keeps the pen in view. Scroll away and it stops following; it picks
+up again when you leave the pen in view for a moment, press a key, or press **follow**.
+
+At 1× the revenue example takes about five and a half minutes and the chart gallery about eighteen;
+the title and opening paragraph take under half a minute. Press + a couple of times for the gist.
+Where something is too big to draw mark by mark (thousands of points, a long table, hatching), the pen
+draws a representative part properly and then hurries through the rest. Selects and sliders, which
+cannot be written, fade in.
+
+**While presenting**, watch mode writes each screen as you come to it. <kbd>Space</kbd> and
+<kbd>Esc</kbd> belong to the presentation there; use <kbd>P</kbd> to pause, and the other keys as
+usual.
+
+**Using the page meanwhile.** Your own changes (moving a slider, brushing, switching a tab, paging a
+table) show at once in anything the pen has already written. Results of a run are written in reading
+order, so a result further down waits for the pen.
+
+<img src="../../images/handwriting/watch-chart.gif" alt="Watch mode: a chart drawn after its query, axes first, then the line, then labels" width="720">
+
+The design and measurements are in
+[docs/HANDWRITING.md](https://github.com/luke-falvey/duckdb-notebook/blob/main/docs/HANDWRITING.md#watch-mode).

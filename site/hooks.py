@@ -103,5 +103,5 @@ def on_post_build(config):
     # The handwriting captures live with the document that explains them.
     gifs = os.path.join(config["site_dir"], "images", "handwriting")
     os.makedirs(gifs, exist_ok=True)
-    for name in ("revenue.gif", "charts.gif"):
+    for name in ("revenue.gif", "charts.gif", "watch-open.gif", "watch-chart.gif"):
         shutil.copyfile(os.path.join(ROOT, "docs", "handwriting", name), os.path.join(gifs, name))
