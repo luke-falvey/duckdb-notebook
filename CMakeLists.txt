@@ -57,22 +57,9 @@ set(EXTENSION_SOURCES
     src/functions/notebook_chart_query.cpp
     src/functions/storage.cpp
     src/functions/export.cpp
+    src/functions/server.cpp
     ${NOTEBOOK_ASSET_CPP}
     src/notebook_extension.cpp)
-
-# The HTTP server needs sockets and threads, which DuckDB-WASM does not have. Without it,
-# notebook_start and notebook_stop are registered but say the server is not in this build.
-if(EMSCRIPTEN)
-  set(NOTEBOOK_SERVER_DEFAULT OFF)
-else()
-  set(NOTEBOOK_SERVER_DEFAULT ON)
-endif()
-option(NOTEBOOK_SERVER "Build the notebook HTTP server (notebook_start)" ${NOTEBOOK_SERVER_DEFAULT})
-if(NOTEBOOK_SERVER)
-  list(APPEND EXTENSION_SOURCES src/functions/server.cpp)
-else()
-  list(APPEND EXTENSION_SOURCES src/functions/server_unavailable.cpp)
-endif()
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

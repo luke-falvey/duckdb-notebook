@@ -890,10 +890,6 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		}
 		note = std::to_string(files) + " file(s)";
 	} else if (format == "pdf") {
-#ifdef __EMSCRIPTEN__
-		throw NotImplementedException("notebook_export: PDF is not available in DuckDB-WASM, which cannot run a "
-		                              "browser. Export html and print it");
-#endif
 		auto browser = FindBrowser(bind.options.chrome);
 		if (browser.empty()) {
 			throw InvalidInputException("notebook_export: PDF needs Chrome, Chromium or Edge. Pass chrome := "
