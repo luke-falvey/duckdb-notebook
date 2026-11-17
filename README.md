@@ -82,6 +82,10 @@ FROM notebook_save('examples/revenue.sql', message := 'first draft');
 SELECT name, version, saved_at FROM _notebook.versions;
 FROM notebook_checkout('revenue', file := 'revenue_copy.sql');
 
+-- Peek under the pen: the CTE or sub-query at a byte offset, and the query that selects from it.
+-- The editor does this as you type: put the caret in a CTE to see its first rows in a note.
+FROM notebook_peek('WITH a AS (SELECT 1 AS x) SELECT * FROM a', 12);
+
 -- What a chart spec compiles to
 FROM notebook_chart_query('mark: bar
 x: region
