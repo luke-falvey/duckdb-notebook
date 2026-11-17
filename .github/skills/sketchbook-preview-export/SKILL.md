@@ -51,7 +51,14 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
 - **▶ Run all**, or Shift+Enter in a cell to run it and (with auto-run) what depends on it.
 - Ctrl+S or **Save** writes the `.sql` file. Edits made in another editor appear in the browser.
 - The ⚙ gear menu: open another notebook, save, auto-run, **Reading** view (code hidden, `span` grid),
-  **Graph** (dependencies), **Catalog** (tables), ◐ dark mode, default rows per page, export.
+  **Graph** (dependencies), **Catalog** (tables), ◐ dark mode, default rows per page, export, and
+  **handwriting**: gentle (the page is written quickly as it appears), watch, or off.
+- **Watch** (or `?ink=watch` on the editor's or an export's URL; an export also has "✎ watch" in its
+  header) writes the page again slowly with one pen, in reading order, the page following the pen. Space
+  or p pauses, + and − change speed, n finishes the piece being written, e everything, Escape stops
+  watching; the controls sit small in the bottom-left corner while the pen has work. Scrolling yourself
+  stops the following until you leave the pen in view or press a key. Use it to show a notebook to
+  someone, or to record it; `?ink=off` is still the way to check the finished page.
 - In a cell's button strip: `</>` and `◫` write `hide=code` / `hide=output`; under a table the page-size picker
   writes `rows=N`, and "+ chart" opens the chart picker. Under a query's charts: tabs, "edit chart
   spec", "+ chart".

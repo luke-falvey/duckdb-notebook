@@ -148,7 +148,7 @@ var Present = (function () {
     var text = P.count ? (P.shown + 1) + ' / ' + P.count : '';
     var page = mark.lastChild;
     if (page.textContent !== text) page.textContent = text;
-    if (window.Ink) Ink.present(mark, 'present/mark', P.run + ':' + text);
+    if (window.Ink) Ink.present(mark, 'present/mark', P.run + ':' + text, { update: 'now' });
   }
 
   // ---- The URL: #present opens the first screen, #present=3 the third. Other flags are kept. ----

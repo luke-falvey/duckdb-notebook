@@ -768,6 +768,12 @@ what was built). It is a renderer concern like the look itself: nothing in the f
   everything; content below the fold waits until it is scrolled to.
 - **Off when it should be.** Reduced motion, print, PDF export, the gear menu's setting and `ink=off`
   all give the plain page. The existing browser tests run with `ink=off`.
+- **Watching is a policy, not a second animator.** Watch mode (`ink=watch`, the gear menu's "watch", an
+  export's "✎ watch") uses the same pen with another scheduler: one piece at a time in reading order, one
+  stroke or letter at a time, at a human pace on a clock the reader can pause and speed up, nothing
+  swept or faded to save time except where a person would hurry too (the 61st bar, the 7th table row).
+  The page follows the pen until the reader scrolls. HANDWRITING.md, "Watch mode", has the pace and
+  what is approximated.
 
 ## 16. Charts that say "compared with what"
 

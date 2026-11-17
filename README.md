@@ -45,7 +45,9 @@ y: revenue
 - **Reopens with its results.** The last result of each cell is kept beside the notebook, so it opens
   showing them without running anything; results whose inputs changed since are marked.
 - **Looks like a sketchbook.** Paper, handwriting and hand-drawn charts, after Excalidraw, in the
-  editor and in every export.
+  editor and in every export. The page is written by a pen as it appears; in watch mode (`?ink=watch`,
+  or "watch" in the gear menu or an export's header) one pen writes the whole notebook slowly, in
+  reading order, for an audience to follow.
 
 ## What works today
 
