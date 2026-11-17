@@ -431,6 +431,23 @@ var NB = (function () {
     return box;
   };
 
+  // ---- Cell framing, shared by the editor and the export viewer ------------------------------
+  // `query` for a SQL cell that is a query, `sql` for one that changes the database, else the cell's kind.
+  NB.kindName = function (cell) { return cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind; };
+  // Whether a hide= value hides `what` (code or output).
+  NB.hides = function (hide, what) { return hide === 'all' || hide === what; };
+  // The columns of 12 a cell spans in reading view (span=).
+  NB.span = function (span) { return Math.max(1, Math.min(12, +span)); };
+  // The tabs over a query cell's result: one per chart (marked when it failed), then the table.
+  NB.queryTabItems = function (charts, count) {
+    var items = [];
+    for (var k = 0; k < count; k++) {
+      var chart = (charts || [])[k];
+      items.push({ label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) });
+    }
+    return items.concat([{ label: 'table', title: 'The query\'s rows' }]);
+  };
+
   // A row of tabs. items: [{label, title}]; extra: elements appended after the tabs.
   NB.tabs = function (items, active, onPick, extra) {
     var bar = NB.el('div', { 'class': 'nb-tabs', role: 'tablist' });

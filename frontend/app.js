@@ -278,7 +278,7 @@ var App = (function () {
   // hide= as two switches.
   A.hidden = function (cell) {
     var h = (cell.options && cell.options.hide) || '';
-    return { code: h === 'code' || h === 'all', output: h === 'output' || h === 'all' };
+    return { code: NB.hides(h, 'code'), output: NB.hides(h, 'output') };
   };
   A.setHidden = function (cell, code, output) {
     A.setOption(cell, 'hide', code && output ? 'all' : code ? 'code' : output ? 'output' : null);
@@ -423,7 +423,7 @@ var App = (function () {
     query: ['▦', 'Query: its result is a table, with charts as tabs'], sql: ['✎', 'SQL that changes the database']
   };
   function kindMark(cell) {
-    var k = KINDS[cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind] || ['•', cell.kind];
+    var k = KINDS[NB.kindName(cell)] || ['•', cell.kind];
     return NB.el('span', { 'class': 'nb-kind', text: k[0], title: k[1], 'aria-label': k[1] });
   }
 
@@ -474,10 +474,7 @@ var App = (function () {
     var r = cell.result || {}, specs = cell.specs || [];
     var tab = specs.length ? Math.min(cell.tab || 0, specs.length) : specs.length;
     if (specs.length) {
-      var items = specs.map(function (_, k) {
-        var chart = (r.charts || [])[k];
-        return { label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) };
-      }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+      var items = NB.queryTabItems(r.charts, specs.length);
       out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; A.render(); },
         [NB.el('button', { 'class': 'nb-tab nb-tab-add nb-hide-reading', text: '+ chart', title: 'Add a chart of this result', onclick: function () { cell.tab = specs.length; cell.picking = true; A.render(); } })]));
     }
@@ -629,7 +626,7 @@ var App = (function () {
         box.addEventListener('mouseleave', function () { box.classList.remove('pointed'); }, { once: true });
       }
       var span = cell.options && cell.options.span;
-      if (span && A.reading) box.style.gridColumn = 'span ' + Math.max(1, Math.min(12, +span));
+      if (span && A.reading) box.style.gridColumn = 'span ' + NB.span(span);
       // Left margin: the cell's kind and name. Clicking either opens its -- %% line (name and options)
       // for editing. Right margin: its state. Its buttons show while the pointer or caret is in it.
       var head = NB.el('input', { 'class': 'nb-head', value: cell.head || '', placeholder: 'name and options', title: 'The -- %% marker line' });

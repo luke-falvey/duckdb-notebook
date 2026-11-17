@@ -37,7 +37,7 @@
   // A query cell's charts as tabs, with its table last. The first chart shows until another is picked.
   function queryTabs(cell, out) {
     var charts = cell.charts, tab = Math.min(cell.tab || 0, charts.length);
-    var items = charts.map(function (c, k) { return { label: (c && c.error ? '⚠ ' : '') + NB.chartLabel(c, k) }; }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+    var items = NB.queryTabItems(charts, charts.length);
     out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; render(); }));
     var holder = NB.el('div', { 'class': 'nb-tab-body' });
     out.appendChild(holder);
@@ -59,9 +59,8 @@
   // a reader came for.
   function parts(cell) {
     var own = option(cell, 'hide', ''), global = payload.hide || '';
-    var hides = function (h, what) { return h === 'all' || h === what; };
-    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !hides(own, 'code') && !hides(global, 'code');
-    var output = cell.kind !== 'notebook' && !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
+    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !NB.hides(own, 'code') && !NB.hides(global, 'code');
+    var output = cell.kind !== 'notebook' && !NB.hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !NB.hides(global, 'output'));
     if (output && cell.kind === 'sql') output = !!((cell.charts && cell.charts.length) || cell.error || cell.table);
     return { code: code, output: output };
   }
@@ -94,10 +93,10 @@
     current.forEach(function (cell, i) {
       var showCode = shows[i].code, showOutput = shows[i].output;
       if ((!showCode && !showOutput) || (screen && !screen[i])) return;
-      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
+      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + NB.span(option(cell, 'span', 12)) });
       var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
       if (showCode) {
-        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
+        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: NB.kindName(cell) + (cell.name ? ' · ' + cell.name : '') }));
         box.appendChild(NB.el('pre', { 'class': 'nb-source', html: NB.highlightSql(cell.sql) }));
         shown++;
       }
