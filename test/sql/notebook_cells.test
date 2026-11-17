@@ -89,7 +89,7 @@ SELECT name, errors FROM notebook_cells('test/notebooks/options.sql') ORDER BY i
 ----
 shown	[]
 secret	[]
-bad_hide	['hide=everything is not valid; use hide=code, hide=output or hide=all']
+bad_hide	['hide=everything is not valid; use hide=code, hide=output, hide=all or hide=none']
 bad_rows	['rows=0 is not valid; rows is a page size from 1 to 10000']
 joined	[]
 bad_screen	['screen=next is not valid; use screen=new, screen=join or screen=skip']
