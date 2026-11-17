@@ -78,16 +78,23 @@ var App = (function () {
   // page shows what it showed last time without running anything. A result made from inputs that
   // have changed since is stale. Until something runs in this session the page is a picture of the
   // last run (A.live is false): inputs and brushes do not run cells on their own.
+  // A result arrives for a cell: kept (remembered from an earlier run, with when it was saved) or null.
+  function show(c, result, kept) {
+    c.result = result;
+    c.kept = kept;
+    c.offset = 0;
+    if (result.choices) c.choices = result.choices;
+    c.state = result.status === 'error' ? 'failed' : 'fresh';
+  }
+  // A remembered result goes: the cell waits to run again.
+  function dropKept(c) { c.result = null; c.kept = null; c.state = 'stale'; }
   A.kept = function (data) {
     A.live = !!data.ran;
     (data.cached || []).forEach(function (item) {
       var c = A.cells[item.idx];
       if (!c || !item.result) return;
-      c.result = item.result;
-      c.kept = item.saved_at || true;
-      c.offset = 0;
-      if (item.result.choices) c.choices = item.result.choices;
-      c.state = item.stale ? 'stale' : item.result.status === 'error' ? 'failed' : 'fresh';
+      show(c, item.result, item.saved_at || true);
+      if (item.stale) c.state = 'stale';
     });
     var shown = data.variables || {};
     A.cells.forEach(function (c) {
@@ -108,7 +115,7 @@ var App = (function () {
   A.forget = function () {
     return A.api('POST', '/api/cache/clear', {}).then(function (r) {
       // Results this session computed stay on the page; ones only remembered go.
-      A.cells.forEach(function (c) { if (c.kept) { c.result = null; c.kept = null; c.state = 'stale'; } });
+      A.cells.forEach(function (c) { if (c.kept) dropKept(c); });
       A.status(r.removed ? 'Forgot the results of ' + r.removed + ' cell' + (r.removed === 1 ? '' : 's') : 'No results were kept');
       A.render();
     }).catch(function (e) { A.status(e.message); });
@@ -181,11 +188,7 @@ var App = (function () {
           c.state = res.status === 'error' ? 'failed' : 'fresh';
           return;
         }
-        c.result = res;
-        c.kept = null;
-        c.offset = 0;
-        if (res.choices) c.choices = res.choices;
-        c.state = res.status === 'error' ? 'failed' : 'fresh';
+        show(c, res, null);
       });
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'stale'; });
       if ($('banner').querySelector('.nb-problem')) $('banner').innerHTML = '';
@@ -394,7 +397,7 @@ var App = (function () {
   A.setCaching = function (on) {
     A.setFlag('cache', on);
     // Switching it off forgets what was kept: the server does so when it reads the new text.
-    if (!on) A.cells.forEach(function (c) { if (c.kept) { c.result = null; c.kept = null; c.state = 'stale'; } });
+    if (!on) A.cells.forEach(function (c) { if (c.kept) dropKept(c); });
     A.status(on ? 'Results will be kept from the next run on' : 'Results are no longer kept for this notebook');
     A.render();
   };
@@ -674,7 +677,7 @@ var App = (function () {
       try { out = output(cell); } catch (e) {
         // A remembered result that cannot be drawn is dropped, never an error.
         if (!cell.kept) throw e;
-        cell.result = null; cell.kept = null; cell.state = 'stale';
+        dropKept(cell);
         box.classList.remove('outdated');
         out = output(cell);
       }
