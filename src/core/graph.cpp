@@ -2,6 +2,7 @@
 
 #include "notebook/chart.hpp"
 #include "notebook/yaml.hpp"
+#include "notebook/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -12,19 +13,6 @@
 namespace notebook {
 
 namespace {
-
-std::string Lower(std::string s) {
-	for (auto &c : s) {
-		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	}
-	return s;
-}
-
-void AddUnique(std::vector<std::string> &values, const std::string &value) {
-	if (std::find(values.begin(), values.end(), value) == values.end()) {
-		values.push_back(value);
-	}
-}
 
 //! How a name from `defines` or `reads` is shown in a message.
 std::string Describe(const std::string &name) {

@@ -2,6 +2,7 @@
 
 #include "notebook/script.hpp"
 #include "notebook/sql_lexer.hpp"
+#include "notebook/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -15,24 +16,6 @@ namespace {
 const int DEFAULT_LIMIT = 10000;
 //! Above this many rows, point-like marks are binned to a pixel grid instead of drawn one by one.
 const int64_t POINT_THRESHOLD = 5000;
-
-std::string Lower(std::string s) {
-	for (auto &c : s) {
-		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	}
-	return s;
-}
-
-std::string SqlString(const std::string &s) {
-	std::string out = "'";
-	for (char c : s) {
-		out += c;
-		if (c == '\'') {
-			out += '\'';
-		}
-	}
-	return out + "'";
-}
 
 //! One encoding channel after parsing: a field with transforms, or a constant value.
 struct Channel {
@@ -173,7 +156,7 @@ public:
 				continue;
 			}
 			auto &selection = found->second;
-			auto var = "getvariable(" + SqlString(name) + ")";
+			auto var = "getvariable(" + QuoteString(name) + ")";
 			std::string test;
 			if (selection.type == "point" && !selection.fields.empty()) {
 				test = "list_contains(" + var + ", " + QuoteIdentifier(selection.fields[0]) + ")";
@@ -212,7 +195,7 @@ public:
 			                                               "date", "hour",    "minute", "second"};
 			auto &unit = channel.timeunit;
 			if (TRUNCATE.count(unit)) {
-				expr = "date_trunc(" + SqlString(unit == "date" ? "day" : unit) + ", " + expr + ")";
+				expr = "date_trunc(" + QuoteString(unit == "date" ? "day" : unit) + ", " + expr + ")";
 				cls = "temporal";
 			} else if (unit == "hours" || unit == "hourofday") {
 				expr = "hour(" + expr + ")";
@@ -1360,7 +1343,7 @@ std::string RewriteVariables(const std::string &sql) {
 				continue;
 			}
 		}
-		out += sql.substr(copied, at - copied) + "getvariable(" + SqlString(name) + ")";
+		out += sql.substr(copied, at - copied) + "getvariable(" + QuoteString(name) + ")";
 		copied = end;
 		while (scan.Position() < end && !scan.Done()) {
 			scan.Advance();
