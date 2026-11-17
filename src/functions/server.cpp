@@ -512,7 +512,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto db = Database(state);
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
-		           auto sql = Runner::DisplaySql(CellAt(notebook, Param(req, "cell")));
+		           auto sql = notebook::DisplaySql(CellAt(notebook, Param(req, "cell")));
 		           if (sql.empty()) {
 			           throw InvalidInputException("That cell has no result to page through");
 		           }

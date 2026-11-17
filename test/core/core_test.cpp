@@ -120,6 +120,18 @@ static void TestScript() {
 	                              "SELECT * FROM t WHERE r = $region AND $brush IS NULL LIMIT $lim;\n");
 	CHECK(CellSql(nb.cells[3]) == "CREATE OR REPLACE TEMP TABLE \"snap\" AS\nFROM filtered;\n");
 	CHECK(CellSql(nb.cells[4]) == "SELECT 1;\n");
+	// What a fresh connection replays, and what a query cell displays.
+	CHECK(ReplaySql(nb.cells[0]).empty() && ReplaySql(nb.cells[1]).empty());
+	// SET VARIABLE is not replayed: variables are saved and restored on their own.
+	CHECK(ReplaySql(nb.cells[2]) == "-- pick rows\nCREATE OR REPLACE TEMP VIEW \"filtered\" AS\n"
+	                                "SELECT * FROM t WHERE r = $region AND $brush IS NULL LIMIT $lim;\n");
+	CHECK(ReplaySql(nb.cells[3]) == "CREATE OR REPLACE TEMP TABLE \"snap\" AS\nFROM filtered;\n");
+	CHECK(ReplaySql(nb.cells[4]).empty());
+	auto effects =
+	    ParseNotebook("-- %% setup\nSET threads = 2;\nCREATE TEMP TABLE t AS SELECT 1;\nCREATE TABLE u (x INT);\n");
+	CHECK(ReplaySql(effects.cells[0]) == "SET threads = 2;\nCREATE TEMP TABLE t AS SELECT 1;\n");
+	CHECK(DisplaySql(nb.cells[2]) == "SELECT * FROM \"filtered\"" && DisplaySql(nb.cells[4]) == "SELECT 1");
+	CHECK(DisplaySql(nb.cells[0]).empty() && DisplaySql(effects.cells[0]).empty());
 	auto undefined = UndefinedVariables(nb);
 	CHECK(undefined.size() == 1 && undefined[0] == "brush");
 	CHECK(ExpandNotebook(nb, "x.sql").find("SET VARIABLE \"brush\" = NULL;") != std::string::npos);

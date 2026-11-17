@@ -91,9 +91,6 @@ public:
 	//! read-only transaction with a time limit, and creates, replaces and records nothing.
 	notebook::Json Peek(const string &sql, idx_t cursor, idx_t rows, idx_t timeout_ms);
 
-	//! The SQL whose rows a query cell displays, or empty for other cells.
-	static string DisplaySql(const notebook::Cell &cell);
-
 	//! Records the connection's variables into the state (also done by the destructor).
 	void Save();
 

@@ -111,32 +111,6 @@ Json ResultToJson(QueryResult &result, idx_t limit, int64_t &total) {
 	    .Set("truncated", Json::Bool(NumericCast<idx_t>(total) > limit));
 }
 
-string ReplaySql(const notebook::Cell &cell) {
-	if (cell.kind != notebook::CellKind::SQL) {
-		return string();
-	}
-	auto sql = notebook::CellSql(cell);
-	if (cell.is_query && !cell.name.empty()) {
-		// The view (or temp table) the cell defines, plus anything else per-connection before it.
-		string replay;
-		auto statements = notebook::SplitStatements(cell.sql);
-		for (size_t i = 0; i + 1 < statements.size(); i++) {
-			if (notebook::IsConnectionState(statements[i].text)) {
-				replay += statements[i].text + ";\n";
-			}
-		}
-		auto wrapped = notebook::SplitStatements(sql);
-		return replay + (wrapped.empty() ? string() : wrapped.back().text + ";\n");
-	}
-	string replay;
-	for (auto &statement : notebook::SplitStatements(cell.sql)) {
-		if (notebook::IsConnectionState(statement.text)) {
-			replay += statement.text + ";\n";
-		}
-	}
-	return replay;
-}
-
 } // namespace
 
 Runner::Runner(DatabaseInstance &db, SessionState &state) : state(state) {
@@ -240,17 +214,6 @@ void Runner::InitializeVariables(const notebook::Notebook &notebook, const std::
 			config.SetUserVariable(name, Value());
 		}
 	}
-}
-
-string Runner::DisplaySql(const notebook::Cell &cell) {
-	if (cell.kind != notebook::CellKind::SQL || !cell.is_query) {
-		return string();
-	}
-	if (!cell.name.empty()) {
-		return "SELECT * FROM " + notebook::QuoteIdentifier(cell.name);
-	}
-	auto statements = notebook::SplitStatements(cell.sql);
-	return statements.empty() ? string() : statements.back().text;
 }
 
 Json Runner::Page(const string &sql, idx_t limit, string &error) {
@@ -474,7 +437,7 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 		count.reset();
 		if (!failed && data && page_rows > 0) {
 			string error;
-			*data = Page(DisplaySql(cell), page_rows, error);
+			*data = Page(notebook::DisplaySql(cell), page_rows, error);
 		}
 	}
 	if (!failed && options.charts && !cell.charts.empty()) {
@@ -485,7 +448,7 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	outcome.status = failed ? "error" : "ok";
 	outcome.error = message;
 	if (!failed || !outcome.charts.IsNull()) {
-		auto replay = ReplaySql(cell);
+		auto replay = notebook::ReplaySql(cell);
 		if (replay.empty()) {
 			state.replay.erase(cell.index);
 		} else {

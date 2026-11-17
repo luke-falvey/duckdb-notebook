@@ -344,7 +344,7 @@ void AddWasmQueries(Json &cell_json, const notebook::Cell &cell) {
 		cell_json.Set(key, many ? rewritten : rewritten.Items()[0]);
 	}
 	if (cell.kind == notebook::CellKind::SQL && cell.is_query) {
-		auto sql = Runner::DisplaySql(cell);
+		auto sql = notebook::DisplaySql(cell);
 		cell_json.Set("display_sql", Json::String(notebook::RewriteVariables(sql)));
 	} else if (cell.kind == notebook::CellKind::MARKDOWN) {
 		auto expressions = Json::Array();
