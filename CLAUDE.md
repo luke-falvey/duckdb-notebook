@@ -16,7 +16,7 @@ taught us and where it departs from the design.
 | `notebook_chart_query(spec, from)` | The SQL and render description a chart spec compiles to | `src/functions/notebook_chart_query.cpp` |
 | `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
 | `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
-| `notebook_start`, `notebook_stop` | The HTTP server and browser UI | `src/functions/server.cpp` |
+| `notebook_start`, `notebook_stop` | The HTTP server and browser UI (not in WASM builds) | `src/functions/server.cpp` |
 
 Every path argument also accepts `db:<name>[@version]` for a stored notebook.
 
@@ -49,6 +49,7 @@ src/include/       Headers: notebook/*.hpp for core, notebook/functions.hpp for 
 test/core/         Unit tests for src/core. No DuckDB needed.
 test/sql/          sqllogictest files: end-to-end tests through SQL.
 test/browser/      Playwright tests of the server, UI and exports in Chromium.
+test/wasm/         The WebAssembly build loaded into DuckDB-WASM in headless Chromium (Node).
 test/notebooks/    Notebook files the SQL tests read.
 examples/          Notebooks for people to read. Tests check they stay valid and runnable.
 .github/skills/    Agent skills for writing sketchbooks (notebooks) and making them look good: authoring
@@ -124,6 +125,33 @@ Needs `pip install playwright` and `playwright install chromium`. Set
 `NOTEBOOK_WASM_RUNTIME=$PWD/wasm/dist` after `make wasm_runtime` (Node and npm) to include the
 html-wasm export. On a machine without Chromium's system libraries, `apt-get download` the missing
 packages, `dpkg -x` them into a directory and point `LD_LIBRARY_PATH` at its `usr/lib/x86_64-linux-gnu`.
+
+### WebAssembly (DuckDB-WASM)
+
+The extension also builds for DuckDB-WASM (`wasm_eh`, `wasm_threads`; DESIGN §17). Install the
+Emscripten version DuckDB's extension pipeline uses, 6.0.9, once:
+
+```bash
+git clone --depth 1 https://github.com/emscripten-core/emsdk /opt/emsdk
+/opt/emsdk/emsdk install 6.0.9 && /opt/emsdk/emsdk activate 6.0.9
+```
+
+```bash
+source /opt/emsdk/emsdk_env.sh
+OVERRIDE_GIT_DESCRIBE=v2.0.0 make wasm_eh
+```
+
+Writes `build/wasm_eh/extension/notebook/notebook.duckdb_extension.wasm`. It compiles DuckDB for
+WebAssembly too: about 12 minutes on 4 cores the first time. `make wasm_threads` builds the threaded
+variant. Then:
+
+```bash
+(cd test/wasm && npm ci) && node test/wasm/run.cjs
+```
+
+Loads every built architecture into DuckDB-WASM 2.0 in headless Chromium and runs the notebook
+functions on `examples/revenue.sql` (`test/wasm/README.md`). CI runs it on the pipeline's artifacts
+(the `wasm-test` job).
 
 ## Conventions
 
@@ -220,6 +248,17 @@ create, because all test files share one database.
   (`VariableSqlType`), or a brush on a timestamp axis compares text with timestamps.
 - The html-wasm export runs on DuckDB-WASM 1.5: `$name` is rewritten to `getvariable('name')`, data
   is written with `STORAGE_VERSION 'v1.5.0'`, and selection variables start as typed NULLs.
+  The extension itself targets DuckDB-WASM 2.0 (npm `next`, `1.33.1-dev110.0` and later); see DESIGN §17
+  for which of these workarounds 2.0 makes unnecessary.
+- The WebAssembly build has no server, no PDF export and no process spawning: `NOTEBOOK_HOST_FEATURES`
+  is off under Emscripten, `server_unavailable.cpp` replaces `server.cpp`, and `export.cpp` has one
+  `#ifdef NOTEBOOK_NO_HOST_FEATURES`. Keep anything that needs sockets, threads or processes behind
+  that boundary, and keep `src/core` free of platform conditionals.
+- Build wasm targets without `GEN=ninja` (they run `emmake make`) and with `OVERRIDE_GIT_DESCRIBE=v2.0.0`:
+  DuckDB-WASM refuses an extension whose stamped version or platform differs from its own, and a local
+  build is otherwise stamped with a commit hash.
+- DuckDB-WASM 2.0 has two bundles: `base` is platform `wasm_eh`, `threads` is `wasm_threads`. No bundle
+  loads `wasm_mvp`, though CI still builds it.
 - clang-format re-indents lambdas inside `server.cpp` with mixed tabs and spaces; match on content,
   not indentation, when scripting edits there.
 - `vcpkg.json` must exist at the repository root even with no dependencies, or CI fails at configure.

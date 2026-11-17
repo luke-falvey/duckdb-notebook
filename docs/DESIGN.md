@@ -493,7 +493,7 @@ a browser to produce the SVG.
 | S2 | ~~Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder?~~ | **Done: neither; JSON.** Pages and chart data are small after aggregation. See §11 |
 | S3 | ~~Size of the extension with the frontend embedded; lazy loading of heavy renderers~~ | **Done: 132 KB of frontend source, 30 KB compressed**, negligible next to the extension itself |
 | S4 | ~~DuckDB-WASM inlined in a single HTML file, opened from `file://`~~ | **Done: it works in Chromium.** See [the spike](../spikes/wasm-single-file/README.md). Firefox, Safari and inlined extensions are untested |
-| S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Not needed**: `html-wasm` ships precompiled chart SQL (§7). Still untried |
+| S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Done: yes** (§17). `html-wasm` does not need it yet: it ships precompiled chart SQL (§7) |
 | S6 | Will the community repository accept an extension that embeds an HTTP server and a multi-megabyte asset bundle? | Distribution. The process itself is documented: a pull request with a descriptor file, after which DuckDB's CI builds for Linux, macOS, Windows and Wasm |
 | S7 | ~~Chart compiler coverage: how much of the grammar compiles cleanly to one query~~ | **Done: all of FORMAT.md §5** compiles, with layers and sparklines as one query each. See `examples/charts.sql` |
 
@@ -812,3 +812,72 @@ or a bracket (FORMAT §5.1).
 - **The pen needed nothing.** Notes are `Sketch` shapes and SVG text appended after the marks, so they
   are written after the marks with no animation code. A note in a query cell whose answer depends on
   an input can point at the wrong thing; that is the author's to judge, and the skill says so.
+
+## 17. The extension in DuckDB-WASM
+
+The extension builds for WebAssembly and loads into DuckDB-WASM 2.0. This answers S5, which §7 had
+set aside as not needed.
+
+### Which DuckDB-WASM
+
+- **2.0 is on npm under `next`, not `latest`.** `@duckdb/duckdb-wasm` `1.33.1-dev110.0` and later are
+  built with DuckDB at the `v2.0.0` tag, the same commit as our submodule (the npm `gitHead` of each
+  release pins `submodules/duckdb` at `d54cbbe3`). `latest` (`1.33.1-dev57.0`) is still engine 1.5.
+  The npm version number says nothing about the engine.
+- **An extension must match the engine exactly.** Its footer records the DuckDB version and platform,
+  and DuckDB-WASM refuses a mismatch. A local build is stamped with a commit hash unless built with
+  `OVERRIDE_GIT_DESCRIBE=v2.0.0`.
+- **Two bundles, two platforms.** DuckDB-WASM 2.0 ships `base`, whose platform is `wasm_eh`, and
+  `threads` (`wasm_threads`, which needs a cross-origin isolated page). There is no `wasm_mvp`
+  bundle any more. CI still builds `wasm_mvp`, because the community repository does, but nothing
+  can load that build.
+- **Unsigned builds load for testing.** `db.open({allowUnsignedExtensions: true})`, then
+  `LOAD '<url of notebook.duckdb_extension.wasm>'`. DuckDB-WASM fetches extensions by URL. Without
+  the flag, only extensions signed with DuckDB's core or community keys load, which a build from the
+  community repository would be.
+
+### The boundary
+
+The server needs sockets and threads, and opening a browser or printing a PDF needs processes.
+DuckDB-WASM has none of these. One CMake option, `NOTEBOOK_HOST_FEATURES` (off under Emscripten),
+draws the line:
+
+| SQL function | In DuckDB-WASM |
+|---|---|
+| `notebook_cells`, `notebook_sql`, `notebook_chart_query` | Work |
+| `notebook_run` | Works. Each run opens its own `Connection`, as natively |
+| `notebook_save`, `notebook_checkout` | Built; not exercised by the test |
+| `notebook_export` html, md, sql, data | Built; md tested, writing to DuckDB-WASM's virtual file system |
+| `notebook_export` pdf | Fails: "runs a local Chrome, which this build … cannot do" |
+| `notebook_start`, `notebook_stop` | Registered with the same signatures; fail: "the notebook server is not available in this build" |
+
+With the option off, `src/functions/server_unavailable.cpp` replaces `server.cpp`, and `export.cpp`
+has one `#ifdef` for pdf. `src/core` has no platform conditionals. Paths go through DuckDB's file
+system as natively (`ReadNotebook`), so files registered with `registerFileText` and URLs work.
+
+`test/wasm/run.cjs` loads the build into DuckDB-WASM in headless Chromium and runs the functions on
+`examples/revenue.sql`. CI runs it on the artifacts of the extension pipeline, which itself does not
+test wasm builds. The extension is 1.0 MB, or 360 KB gzip-compressed. It loads in about 0.1 to 0.2
+seconds once DuckDB-WASM has started (about 1.6 seconds).
+
+### What it means for the html-wasm export
+
+Nothing in the export changed yet. Two separate steps are open:
+
+1. **Move the runtime to DuckDB-WASM 2.0** (`wasm/package.json` to `1.33.1-dev118.0` or later; the
+   bundle files are now `duckdb-base.wasm` and `duckdb-browser-base.worker.js`). This removes the 1.5
+   workarounds of §12:
+   - the `$name` to `getvariable('name')` rewrite (the test checks `$name` works);
+   - the typed `NULL::STRUCT(lo T, hi T)` selections (the test checks `.lo` of an untyped `NULL`
+     variable returns NULL);
+   - writing data with `STORAGE_VERSION 'v1.5.0'` (follows from the engine reading its own default
+     storage version; not tested in the browser).
+2. **Inline the extension** (about 360 KB compressed, against 12 MB for DuckDB-WASM) and `LOAD` it
+   through the same worker shim that serves the module from memory under `file://`. The page could
+   then compile chart specs and run notebooks the way the server does, instead of replaying SQL that
+   was compiled in advance. That makes an exported page editable: change a spec or a cell and see
+   the result. A local build needs `allowUnsignedExtensions`, which a page should not set for SQL it
+   did not write. A build signed by the community repository needs no such flag.
+
+Precompiled charts stay right for a read-only export. Inlining is worth doing when the export is
+meant to be edited.

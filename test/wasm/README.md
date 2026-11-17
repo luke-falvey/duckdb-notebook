@@ -22,7 +22,7 @@ OVERRIDE_GIT_DESCRIBE=v2.0.0 make wasm_eh
 
 `OVERRIDE_GIT_DESCRIBE=v2.0.0` stamps the extension for DuckDB v2.0.0; without it a local build is
 stamped with a commit hash and DuckDB-WASM refuses it. Do not set `GEN=ninja`: the wasm targets
-run `emmake make`. The first build compiles DuckDB for WebAssembly and takes about 40 minutes on 4
+run `emmake make`. The first build compiles DuckDB for WebAssembly and takes about 12 minutes on 4
 cores. `make wasm_threads` builds the threaded variant.
 
 Then, with Node and the Playwright package (pre-installed in Claude's cloud sessions; otherwise
