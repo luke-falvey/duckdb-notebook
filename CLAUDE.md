@@ -229,6 +229,23 @@ create, because all test files share one database.
   `.github/workflows/MainDistributionPipeline.yml`, and the `extension-ci-tools` branch must all name
   the same release.
 
+## Rules, bands and notes on charts
+
+`rules:`, `bands:` and `notes:` are spec-level keys of grammar charts (FORMAT §5.1, DESIGN §16).
+
+- Aggregates for rules and bands (`y: avg`) are compiled in `Compiler::References` in
+  `src/core/chart.cpp` from each layer's query *before* downsampling (`LayerInfo::base`), into one extra
+  query whose index is `render.reference_data`. Never compute them in the browser.
+- Notes need no query: `Compiler::Notes` only validates them and types their values by axis. Placement
+  is `drawNotes` in `frontend/render-chart.js`, which avoids what the marks leave for hover
+  (`plot.__points`, `__bars`, `__dots`) plus rules and their labels (`refs.boxes`). A new mark kind
+  that notes should avoid must push its geometry there too.
+- Order in the chart's SVG is the pen's order: `nb-refs` (behind), `nb-plot`, `nb-ref-labels`,
+  `nb-notes`. Keep it, and keep `pointer-events: none` on notes so hover and brushing still reach the
+  marks.
+- Browser tests find gallery charts by cell position. Add new gallery charts at the end of
+  `examples/charts.sql`, or the positional checks move.
+
 ## Git
 
 Develop on a feature branch and open a pull request against `main`. CI runs the core tests and
