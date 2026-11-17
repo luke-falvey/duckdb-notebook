@@ -113,4 +113,4 @@ SELECT count(*), count(*) FILTER (len(errors) > 0) FROM notebook_cells('examples
 statement error
 SELECT * FROM notebook_cells('test/notebooks/missing.sql')
 ----
-No such file or directory
+<REGEX>:.*Cannot open file.*missing\.sql.*
