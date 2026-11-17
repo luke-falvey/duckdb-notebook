@@ -34,7 +34,7 @@ Every piece of the page is written by a pen as it appears (`frontend/render-ink.
 `docs/HANDWRITING.md`). The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
 into `frontend/ink-strokes.js`.
 
-The result cache (FORMAT §8, DESIGN §16) keeps each cell's last `/api/run` result beside the notebook
+The result cache (FORMAT §8, DESIGN §17) keeps each cell's last `/api/run` result beside the notebook
 (`.duckdb-notebook/`) or in `_notebook.cache`. Keys and the fresh/stale decision are in
 `src/core/cache.cpp`; the store and the session's copy in `src/functions/result_cache.cpp`. The editor
 reads it on open and writes it after every run; `notebook_run` writes it only with `cache := true`.
@@ -238,6 +238,24 @@ create, because all test files share one database.
 - The version of DuckDB in the `duckdb` submodule, the `duckdb_version` in
   `.github/workflows/MainDistributionPipeline.yml`, and the `extension-ci-tools` branch must all name
   the same release.
+
+## Rules, bands and notes on charts
+
+`rules:`, `bands:` and `notes:` are spec-level keys of grammar charts (FORMAT §5.1, DESIGN §16).
+
+- Aggregates for rules and bands (`y: avg`) are compiled in `Compiler::References` in
+  `src/core/chart.cpp` from each layer's query *before* downsampling (`LayerInfo::base`), into one extra
+  query whose index is `render.reference_data`. Never compute them in the browser.
+- Notes need no query: `Compiler::Notes` only validates them and types their values by axis. Placement
+  is `drawNotes` in `frontend/render-chart.js`, which avoids what the marks leave for hover
+  (`plot.__points`, `__bars`, `__dots`, gathered by `markObstacles`) plus rules and their labels
+  (`refs.boxes`). Rule and band labels pick the least-covered of a few spots the same way
+  (`coverage`). A new mark kind that text should avoid must push its geometry there too.
+- Order in the chart's SVG is the pen's order: `nb-refs` (behind), `nb-plot`, `nb-ref-labels`,
+  `nb-notes`. Keep it, and keep `pointer-events: none` on notes so hover and brushing still reach the
+  marks.
+- Browser tests find gallery charts by cell position. Add new gallery charts at the end of
+  `examples/charts.sql`, or the positional checks move.
 
 ## Git
 

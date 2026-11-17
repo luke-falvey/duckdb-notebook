@@ -229,6 +229,14 @@ td.nb-null { color: var(--nb-faint); }
 .nb-facets { display: grid; gap: 8px; }
 .nb-facet-title { font-size: 15px; color: var(--nb-muted); text-align: center; }
 .nb-mark-text { font-size: 13px; }
+/* Notes on charts: handwriting in ink, with a halo of paper; they never take the pointer from the marks. */
+.nb-notes { pointer-events: none; }
+.nb-note-text { fill: currentColor; font-size: 14px; paint-order: stroke; stroke: var(--nb-bg); stroke-width: 3.5px; stroke-linejoin: round; }
+/* Rules and bands: muted ink behind the data. A spec's color: sets `color` on the group. */
+.nb-ref { color: var(--nb-muted); }
+.nb-ref-label { fill: currentColor; font-size: 13px; pointer-events: none;
+  /* A halo of paper, so a label stays readable over hatching. */
+  paint-order: stroke; stroke: var(--nb-bg); stroke-width: 3px; stroke-linejoin: round; }
 .nb-node-label { fill: var(--nb-fg); font-size: 13px; }
 .nb-on-color { fill: var(--nb-fg); }
 .nb-map-bg { fill: rgba(241, 239, 232, .7); }
