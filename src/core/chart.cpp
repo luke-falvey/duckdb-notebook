@@ -245,6 +245,14 @@ Json Compiler::Encoding(const Channel &channel, const std::string &column) {
 	return json;
 }
 
+std::string Positions(size_t count) {
+	std::string positions;
+	for (size_t i = 1; i <= count; i++) {
+		positions += (i > 1 ? ", " : "") + std::to_string(i);
+	}
+	return positions;
+}
+
 std::string Compiler::Query(const std::vector<std::string> &items, bool group, const std::string &order,
                             const std::string &limit) {
 	std::string sql = "WITH __src AS (" + source + ")";
@@ -262,8 +270,11 @@ std::string Compiler::Query(const std::vector<std::string> &items, bool group, c
 	if (group) {
 		sql += "\nGROUP BY ALL";
 	}
-	if (!order.empty()) {
-		sql += "\nORDER BY " + order;
+	// A query a chart draws (it has an order or a limit; one inside a CTE has neither) orders every column by
+	// position after its own order: a total order, so the rows, and which of them survive the LIMIT, are the
+	// same on every run, whatever order a parallel aggregate produced them in.
+	if (!order.empty() || !limit.empty()) {
+		sql += "\nORDER BY " + (order.empty() ? "" : order + ", ") + Positions(items.size());
 	}
 	if (!limit.empty()) {
 		sql += "\nLIMIT " + limit;

@@ -232,7 +232,7 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 		      series + ", __p ORDER BY x) = 1 OR row_number() OVER (PARTITION BY " + series +
 		      ", __p ORDER BY x DESC) = 1 OR row_number() OVER (PARTITION BY " + series +
 		      ", __p ORDER BY y) = 1 OR row_number() OVER (PARTITION BY " + series +
-		      ", __p ORDER BY y DESC) = 1\nORDER BY x\nLIMIT " + limit;
+		      ", __p ORDER BY y DESC) = 1\nORDER BY x, " + Positions(items.size()) + "\nLIMIT " + limit;
 		flags.Set("m4", Json::Bool(true));
 	} else if (!has_agg && (mark == "hexbin" || ((draw == "point" || draw == "rect" || draw == "tick") && large)) &&
 	           x.type == "quantitative" && quantitative_y) {

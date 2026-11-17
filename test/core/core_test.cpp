@@ -413,8 +413,10 @@ static void TestChartCompiler() {
 	      std::string::npos);
 	CHECK(TypeClass("TIMESTAMP WITH TIME ZONE") == "temporal" && TypeClass("DECIMAL(9,2)") == "quantitative");
 	// B2: a type is matched by its whole name, not a prefix: INTERVAL is not an integer, nor a list a number.
-	CHECK(TypeClass("INTERVAL") == "nominal" && TypeClass("INTEGER[]") == "nominal" && TypeClass("INT") == "quantitative");
-	CHECK(TypeClass("TIME WITH TIME ZONE") == "temporal" && TypeClass("TIMESTAMP_NS") == "temporal" && TypeClass("BIGINT") == "quantitative");
+	CHECK(TypeClass("INTERVAL") == "nominal" && TypeClass("INTEGER[]") == "nominal" &&
+	      TypeClass("INT") == "quantitative");
+	CHECK(TypeClass("TIME WITH TIME ZONE") == "temporal" && TypeClass("TIMESTAMP_NS") == "temporal" &&
+	      TypeClass("BIGINT") == "quantitative");
 }
 
 static void TestChartErrors() {
@@ -436,7 +438,24 @@ static void TestChartErrors() {
 	plan = CompileChart("type: map\ngeometry: g\ncolor: {field: n, bin: true}\n", "t", columns);
 	auto &sql = plan.queries.at(0);
 	auto first = sql.find("__bin_color AS");
-	CHECK(plan.error.empty() && first != std::string::npos && sql.find("__bin_color AS", first + 1) == std::string::npos);
+	CHECK(plan.error.empty() && first != std::string::npos &&
+	      sql.find("__bin_color AS", first + 1) == std::string::npos);
+	// B32: every chart query orders all its rows, so the data a chart (or an export) gets is the same
+	// on every run, however DuckDB's parallel aggregate happens to return it.
+	ChartContext sales;
+	sales.columns = {{"region", "VARCHAR"}, {"category", "VARCHAR"}, {"amount", "DOUBLE"}};
+	auto ends_ordered = [](const std::string &sql, const std::string &order) {
+		auto at = sql.rfind("\nORDER BY ");
+		if (at == std::string::npos) {
+			return false;
+		}
+		auto end = sql.find('\n', at + 1);
+		return sql.substr(at + 10, end == std::string::npos ? std::string::npos : end - at - 10) == order;
+	};
+	plan = CompileChart("mark: bar\nx: region\ny: {field: amount, agg: sum}\ncolor: category\n", "t", sales);
+	CHECK(plan.error.empty() && ends_ordered(plan.queries.at(0), "x, color, 1, 2, 3"));
+	plan = CompileChart("mark: bar\nx: {field: amount, agg: sum}\ny: region\n", "t", sales);
+	CHECK(plan.error.empty() && ends_ordered(plan.queries.at(0), "1, 2"));
 }
 
 static void TestChartReferences() {

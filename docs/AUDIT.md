@@ -39,7 +39,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | C5 | `chart.cpp` does too much (now ~1370 lines) | Safe | med | ±0 | done: a pure move into `chart.cpp` (513 lines), `chart_grammar.cpp`, `chart_references.cpp`, `chart_typed.cpp`, with the class in `chart_compiler.hpp`. The table of typed-chart handlers was not made: it would reword errors |
 | C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | deferred: one `NotebookMeta` touches the parser, the runner, the cache, the title and a regular expression in `app.js`; more than a structural change should, so left for its own PR |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
-| B1–B31 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
+| B1–B32 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features, B32 from review) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
 | DOC1–DOC11 | Docs that disagree with the code | Docs | none | small | done, except DOC1 (`display=`), which is B15 |
 | N1 | Chart rules, bands and notes repeat their checks | Safe | low | −30 | deferred: C5 was kept a pure move so it can be reviewed as one; N1 is easy on top of it, alongside B28 in the same code |
 | N2 | Editor result handling repeated | Safe | low | −20 | done: `show()`, `dropKept()` |
@@ -313,6 +313,7 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B29 | low | Presenting writes the requested screen to the hash, not the one shown (`#present=99` stays 99) | `render-present.js:136` |
 | B30 | low | A map chart measures `color` twice (`Measure` with and without an encoding); a binned colour adds its `__bin_color` CTE twice | `chart.cpp` map branch |
 | B31 | low | An input looks different in the editor and an export: a slider shows `1000` in one and `1,000` in the other, and an empty `label=` or `step=` counts as unset in one and set in the other (`NB.inputWidget`'s `exported` flag keeps both until fixed) | `render-core.js` `NB.inputWidget` |
+| B32 | medium | Exports differ between runs: chart queries order only by `x` (and `color`) or not at all, so a parallel aggregate's row order leaks into the data; `examples/charts.sql` sums `DOUBLE` amounts (low bits vary) and two of its queries have no `ORDER BY`. Found by the parent session's review (6 of 6 Markdown exports differed) | `chart.cpp` `Query`, `examples/charts.sql` |
 
 Also: graph de-duplicates the "defined twice" error by matching the parser's message text
 (`graph.cpp:209-213` against `format.cpp:421-423`); hidden code is not drawn in HTML exports but is

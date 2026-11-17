@@ -111,3 +111,24 @@ DROP TABLE nb_test_numbers
 
 statement ok
 DROP TABLE orders
+
+# Exports are the same on every run: chart queries order every row, and the example's data is exact
+statement ok
+FROM notebook_export('examples/charts.sql', file := '{TEST_DIR}/det1.md', format := 'md')
+
+statement ok
+FROM notebook_export('examples/charts.sql', file := '{TEST_DIR}/det2.md', format := 'md')
+
+statement ok
+FROM notebook_export('examples/charts.sql', file := '{TEST_DIR}/det3.md', format := 'md')
+
+query I
+SELECT count(DISTINCT content) FROM read_text('{TEST_DIR}/det*.md')
+----
+1
+
+statement ok
+DROP TABLE gallery_sales
+
+statement ok
+DROP TABLE gallery_tasks
