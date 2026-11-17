@@ -48,6 +48,16 @@ private:
 	std::string dollar_tag;
 };
 
+//! A balanced `( ... )` in SQL code: byte offsets of its two parentheses.
+struct ParenPair {
+	size_t open = 0;
+	size_t close = 0;
+};
+
+//! Every balanced pair of parentheses in code (not in strings, quoted identifiers or comments),
+//! ordered by their opening parenthesis. Unmatched parentheses are left out.
+std::vector<ParenPair> ParenPairs(const std::string &sql);
+
 //! Splits text into statements on top-level semicolons. Comments stay attached to
 //! the statement that follows them; a trailing comment-only fragment is dropped.
 std::vector<Statement> SplitStatements(const std::string &sql);
