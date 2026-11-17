@@ -201,7 +201,9 @@ def test_server(browser, work):
 
     # Page size: the picker under a table writes rows=N to the cell, so it is saved with the notebook.
     filtered = page.locator(".nb-cell[data-idx='6']")
-    check(filtered.locator("table.nb-grid tbody tr").count() == 25, "tables show 25 rows per page by default")
+    fit = page.evaluate("NB.tableRows()")
+    check(10 < fit < 25 and filtered.locator("table.nb-grid tbody tr").count() == fit,
+          f"tables show 25 rows per page by default, or as many as fit without scrolling ({fit})")
     check(filtered.locator("table.nb-grid thead tr").count() == 1 and filtered.locator(".nb-coltype, svg.nb-spark").count() == 0,
           "table headers show column names only, no types or profile")
     filtered.locator("select.nb-page-size").select_option("10")
@@ -352,7 +354,8 @@ def test_exports(browser, work, chromium):
     check(page.locator(".nb-cell[data-idx='7'] table.nb-grid").count() == 1, "an export's table tab shows the rows")
     check(page.evaluate("document.fonts.check('20px Excalifont')"), "an export carries its handwriting font")
     first = page.locator(".nb-cell[data-kind='sql'] table.nb-grid").nth(1)
-    check(first.locator("tbody tr").count() == 25, "exported tables page 25 rows at a time")
+    fit = page.evaluate("NB.tableRows()")
+    check(first.locator("tbody tr").count() == min(25, fit), f"exported tables page as many rows as fit their box ({fit})")
 
     nocode = os.path.join(work, "revenue_nocode.html")
     sql(db, f"FROM notebook_export('{notebook}', file := '{nocode}', hide := 'code')")
@@ -383,6 +386,23 @@ def test_exports(browser, work, chromium):
     widths = page.locator(".nb-cell[data-idx='15'] svg.nb-chart-svg [data-tip] > .sk-hit").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
     check(len(widths) == 48 and min(widths) > 0.9 * max(widths),
           f"bars on a date axis fill their slot, the first and last as wide as the rest ({min(widths or [0]):.1f}-{max(widths or [0]):.1f}px)")
+    # Nothing scrolls inside a page: tables show fewer rows and page their columns instead.
+    scrolling = """() => [...document.querySelectorAll('#nb-root *')].filter(e => { const s = getComputedStyle(e);
+      return (/auto|scroll/.test(s.overflowX) && e.scrollWidth > e.clientWidth + 1) || (/auto|scroll/.test(s.overflowY) && e.scrollHeight > e.clientHeight + 1); }).length"""
+    clipped = "() => [...document.querySelectorAll('.nb-output, .nb-grid-wrap')].filter(e => e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1).length"
+    for width in (1300, 600):
+        page.set_viewport_size({"width": width, "height": 900})
+        page.wait_for_timeout(400)
+        check(page.evaluate(scrolling) == 0 and page.evaluate(clipped) == 0, f"at {width}px no table or chart in examples/charts.sql scrolls or is cut off")
+    pivot = page.locator(".nb-cell[data-idx='20']")
+    pivot.scroll_into_view_if_needed()
+    check(pivot.locator(".nb-col-range").text_content() == "columns 1–2 of 4" and pivot.locator("th:not(.nb-col-off)").count() == 3,
+          "a table too wide for its cell shows the columns that fit, and says how many there are")
+    pivot.locator("button.nb-col-page", has_text="›").click()
+    page.wait_for_timeout(100)
+    check(pivot.locator(".nb-col-range").text_content() == "columns 3–4 of 4" and pivot.locator("th:not(.nb-col-off)").first.text_content() == ""
+          and pivot.locator("th:not(.nb-col-off) .nb-colname").first.text_content() == "Services", "› shows the next columns, with the row numbers kept")
+    page.set_viewport_size({"width": 1280, "height": 720})
     check(not errors, f"no browser errors in the exports {errors[:3]}")
 
     check(open(pdf, "rb").read(5) == b"%PDF-", "PDF export prints through headless Chromium")

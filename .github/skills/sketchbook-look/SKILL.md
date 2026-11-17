@@ -69,6 +69,10 @@ both anyway.
 - **Narrow containers**: SVGs with a `viewBox` should have `max-width: 100%; height: auto` so they shrink
   in `span=3/4` cells instead of scrolling. `.nb-output` is a size container: use `cqw` units for type
   that must fit (the KPI value does).
+- **No scrollbars inside the page**: only the page scrolls. Tables show the rows that fit their box
+  (`NB.tableRows`) and page their columns when too wide; anything new must fit its cell the same way
+  (fewer items, smaller type sized by content, paging) rather than scroll. The browser test checks
+  `examples/charts.sql` at 1300 and 600 px for any element that scrolls or is cut off.
 - **Handwriting is wide**: leave margin for labels (the y axis grows its left margin from the longest
   tick label) and truncate with an ellipsis rather than overlap.
 - **No libraries, no network.** Exports must work offline; do not add CDN fonts, scripts or images. A
