@@ -55,10 +55,46 @@ After the kind comes an optional name and then `key=value` options. Quote values
 | `hide` | `code`, `output`, `all`, `none` | What to hide in reading view and exports. The editor collapses the hidden part to a line that shows it on click |
 | `span` | `1`–`12` | Width on a 12-column grid in reading view and exports; consecutive cells whose spans fit share a row. Default `12` |
 | `rows` | `1`–`10000` | Rows per page of the cell's result table, in the editor and in exports. Default: the reader's own setting, 25 unless changed |
+| `screen` | `new`, `join`, `skip` | Where the cell goes when the notebook is presented (see below). Default: the reading layout decides |
 
-`hide` and `rows` are checked: any other value is an error on the cell. In the editor, the
+`hide`, `rows` and `screen` are checked: any other value is an error on the cell. In the editor, the
 code and output switches in a cell's header and the page-size picker under a table write these
 options into the marker line, so the choice is saved with the notebook and reviewed like any edit.
+
+### Presenting
+
+A notebook can be presented one screen at a time, from the editor's gear menu or from an HTML export
+(open it with `#present` at the end of its address, or `#present=3` for the third screen). Code is
+never shown; what a screen holds follows from the reading layout, so a notebook that reads well
+presents well without any markup:
+
+- **A screen is a row of the reading layout**: one cell, or the consecutive cells whose `span`s share a
+  row (two `span=6` charts, three `span=4` KPIs).
+- **An input is shown with what follows it**: input cells share the screen of the next cell, so the
+  audience sees what the input changes.
+- Cells that show nothing when reading have no screen: `hide=all`, `hide=output`, the `[notebook]`
+  cell, and SQL cells that return no rows.
+
+`screen=` on a cell overrides this:
+
+| Value | Meaning |
+|---|---|
+| `screen=new` | The cell starts a new screen, even if it would share a row or follow an input |
+| `screen=join` | The cell stays on the screen of the cell before it: a note under its chart, a table under its KPIs |
+| `screen=skip` | The cell is left out of the presentation, though it still shows when reading and in exports |
+
+```sql
+-- %% chart trend from=monthly
+-- %% [markdown] screen=join
+/* What the trend shows, on the same screen as the chart. */
+-- %% detail rows=10 screen=skip
+SELECT * FROM monthly;
+```
+
+A screen is laid out as in the reading view, no wider than what it holds, centred, and scaled up to
+fill the window. One that is too tall is
+scaled back down, to no less than four fifths of the size of the reading view; past that it scrolls. `screen` changes
+nothing but presenting.
 
 ## 2. SQL cells
 

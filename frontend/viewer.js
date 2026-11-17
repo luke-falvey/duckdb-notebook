@@ -98,28 +98,45 @@
     return { date: 'DATE', daterange: 'DATE', number: 'DOUBLE', slider: 'DOUBLE' }[cell.widget] || '';
   }
 
+  // What a cell shows: its code (never while presenting, as in the editor's reading view) and its
+  // output, when it has any. The export's hide= applies to code and results; prose and inputs are what
+  // a reader came for.
+  function parts(cell) {
+    var own = option(cell, 'hide', ''), global = payload.hide || '';
+    var hides = function (h, what) { return h === 'all' || h === what; };
+    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !hides(own, 'code') && !hides(global, 'code');
+    var output = cell.kind !== 'notebook' && !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
+    if (output && cell.kind === 'sql') output = !!((cell.charts && cell.charts.length) || cell.error || cell.table);
+    return { code: code, output: output };
+  }
+
   function render() {
     root.innerHTML = '';
     var head = NB.el('div', { 'class': 'nb-viewer-header' }, [
       NB.el('span', { text: payload.source || '' }),
-      NB.el('span', { id: 'nb-mode', text: wasm ? 'Live: queries run in this page with DuckDB-WASM' : payload.precomputed ? 'Inputs switch between precomputed results' : 'Static export' })
+      NB.el('span', {}, [
+        NB.el('span', { id: 'nb-mode', text: wasm ? 'Live: queries run in this page with DuckDB-WASM' : payload.precomputed ? 'Inputs switch between precomputed results' : 'Static export' }),
+        NB.el('button', { 'class': 'nb-tab nb-present-start', text: 'present', title: 'Present: one screen at a time. Arrows, Space or a click move; Esc leaves; F for full screen',
+          onclick: function () { Present.enter(0); } })
+      ])
     ]);
     root.appendChild(head);
     if (payload.frozen && payload.frozen.length) root.appendChild(NB.el('div', { 'class': 'nb-frozen', text: 'Fixed at their current value in this export: ' + payload.frozen.join(', ') }));
     var grid = NB.el('div', { 'class': 'nb-cells' });
     var pre = {};
     if (payload.precomputed && !wasm) payload.precomputed.inputs.forEach(function (i) { pre[i.name] = i.values; });
-    var global = payload.hide || '';
-    var hides = function (h, what) { return h === 'all' || h === what; };
-    current.forEach(function (cell) {
-      if (cell.kind === 'notebook') return;
-      var own = option(cell, 'hide', '');
-      // The export's hide= applies to code and results; prose and inputs are what a reader came for.
-      var showCode = !hides(own, 'code') && !hides(global, 'code');
-      var showOutput = !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
+    var shows = current.map(parts), screen = null;
+    if (Present.on) {
+      screen = Present.begin(current.map(function (cell, i) {
+        return { id: cell.idx, span: option(cell, 'span'), kind: cell.kind, screen: option(cell, 'screen'), visible: shows[i].code || shows[i].output };
+      }), grid, root);
+    }
+    current.forEach(function (cell, i) {
+      var showCode = shows[i].code, showOutput = shows[i].output;
+      if ((!showCode && !showOutput) || (screen && !screen[i])) return;
       var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
       var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
-      if (cell.kind === 'sql' && showCode && cell.sql) {
+      if (showCode) {
         box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
         box.appendChild(NB.el('pre', { 'class': 'nb-source', html: NB.highlightSql(cell.sql) }));
         shown++;
@@ -133,8 +150,9 @@
           queryTabs(cell, out);
           shown++;
         } else if (cell.kind === 'sql') {
-          if (cell.error) { out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error })); shown++; }
-          else if (cell.table) { NB.table(out, cell.table, { pageSize: +option(cell, 'rows', 25) }); shown++; }
+          if (cell.error) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
+          else NB.table(out, cell.table, { pageSize: +option(cell, 'rows', 25) });
+          shown++;
         } else if (cell.kind === 'input') {
           var enabled = !!wasm || !!pre[cell.name];
           box.appendChild(inputWidget(cell, onInput, enabled, wasm ? null : pre[cell.name]));
@@ -153,6 +171,7 @@
     // Outlines are drawn once the cells are laid out, and follow their size from then on.
     Array.prototype.forEach.call(grid.children, function (box) { Sketch.outline(box, { width: 1.5 }); });
     if (window.Ink) write(head, grid);
+    if (Present.on) Present.finish(root, grid);
     window.__NB_READY = true;
   }
 
@@ -162,7 +181,7 @@
     Ink.present(head, 'header');
     if (head.nextSibling && head.nextSibling.classList.contains('nb-frozen')) Ink.present(head.nextSibling, 'frozen');
     Array.prototype.forEach.call(grid.children, function (box) {
-      var id = 'cell' + box.getAttribute('data-idx') + '/';
+      var id = Present.prefix() + 'cell' + box.getAttribute('data-idx') + '/';
       Array.prototype.forEach.call(box.children, function (part, k) {
         if (part.classList.contains('sk-outline')) Ink.present(part, id + 'outline', box.getAttribute('data-seed'), Ink.bracket(box));
         else Ink.present(part, id + k + (part.getAttribute('class') || part.tagName));
@@ -263,6 +282,7 @@
     current = payload.cells;
     document.title = payload.title || document.title;
     render();
+    Present.start({ render: render });
     if (payload.wasm && window.NotebookWasm) return bootWasm();
   }).catch(function (e) {
     root.appendChild(NB.el('div', { 'class': 'nb-error', text: 'Could not read this notebook: ' + (e.message || e) }));

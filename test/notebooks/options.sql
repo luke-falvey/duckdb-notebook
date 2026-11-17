@@ -9,3 +9,9 @@ SELECT 1;
 
 -- %% bad_rows rows=0
 SELECT 2;
+
+-- %% joined screen=join
+SELECT 3;
+
+-- %% bad_screen screen=next
+SELECT 4;

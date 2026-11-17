@@ -131,6 +131,8 @@ void CheckOptions(Cell &cell) {
 		auto &value = option.second;
 		if (key == "hide" && value != "code" && value != "output" && value != "all" && value != "none") {
 			cell.errors.push_back("hide=" + value + " is not valid; use hide=code, hide=output or hide=all");
+		} else if (key == "screen" && value != "new" && value != "join" && value != "skip") {
+			cell.errors.push_back("screen=" + value + " is not valid; use screen=new, screen=join or screen=skip");
 		} else if (key == "rows") {
 			bool digits = !value.empty() && value.size() <= 5;
 			for (char c : value) {

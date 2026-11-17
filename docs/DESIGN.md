@@ -850,6 +850,73 @@ tested) and `src/functions/result_cache.cpp` (where entries live, and the sessio
 - **Not done:** entries are not shared between notebooks that compute the same thing, there is no
   total size limit across notebooks, and the html-wasm export does not start from cached data.
 
+## 18. Presenting
+
+A notebook can be shown to a room: one screen at a time, large and centred, with nothing else on the
+page but a page number. It is the reading view taken a row at a time, in the editor (gear menu,
+**Present**) and in every HTML export (a faint `present` control, or `#present` in the address).
+`frontend/render-present.js` (`Present`) holds everything the two share; `app.js` and `viewer.js` still
+draw the cells and only ask it which ones.
+
+- **A screen is a row of the reading layout.** One cell, or the consecutive cells whose `span`s share a
+  row; an input goes with the row after it, so the audience sees what it changes. An author who laid a
+  notebook out for reading has already laid it out for presenting, and `screen=new`, `screen=join` and
+  `screen=skip` on a cell cover the rest (FORMAT §1). The obvious alternative, a new screen at each
+  heading, fails on both examples: `revenue.sql` has one heading and `charts.sql` one heading
+  over thirty charts, so each would be a single screen. Rows need no headings and give `charts.sql` two
+  charts to a screen, as its author arranged them.
+- **The screen is the reading layout, scaled.** The row is laid out as in the reading view, in a grid
+  no wider than what it holds (a title, a 640px chart or three KPIs do not need 1000px), and the whole
+  grid is scaled with one CSS transform and centred. Nothing about a cell changes: the same fonts, the
+  same charts, the same wobble, only larger. Scaling by font size instead would have meant a second
+  set of sizes for every piece.
+- **Too tall: shrink a little, then scroll.** A screen that fits is scaled up, to at most 2.5 times.
+  One taller than the window is scaled back down so it can be seen whole, but to no less than four
+  fifths of the reading view: text smaller than that cannot be read from the back of a room, and a
+  table shrunk to fit is worse than a table that scrolls. Past that the screen scrolls (wheel, or the
+  up and down arrows, which presenting leaves alone).
+- **Moving.** Right arrow, Space, Page Down or a click move on; Left arrow, Page Up or Shift+Space go
+  back; Home and End jump; Escape leaves, landing on the cell that was showing; F is full screen.
+  Clicks on controls, links, tabs, table paging and charts act on them instead. A picked value gives up
+  the keyboard focus so the arrows move between screens again.
+- **The pen writes each screen once.** Pieces of a presentation are keyed to it (`Present.prefix`), so
+  a screen is written when it first arrives even if the editor had already written the cell. Going
+  back, or forward again, to a screen already shown puts it on the page at once: the audience has seen
+  it written, and a presenter going back is looking for something. This needs no code: Ink never
+  writes the same key and signature twice. Moving on calls `Ink.fresh`, or the key press would make
+  the new screen a "quick" update. A key or click still finishes whatever is being written, and the
+  same press moves on: one press per screen, however fast the presenter goes.
+- **Live.** Presenting changes which cells are built, not how: inputs, brushing, tabs and paging go
+  through the same code as the reading view, in the editor and in precomputed and html-wasm exports.
+  Cells off screen are re-run all the same and show their new results when their screen comes.
+- **State is the address.** `#present=3` is written with `history.replaceState` as the presenter moves,
+  so a reload, a restored tab or a shared link opens the same screen, and Back is not filled with
+  screens. In the editor a reload starts a new session: the result cache (§17) puts the last results
+  on screen at once, and presenting runs the notebook so its inputs and brushes are live again.
+- **Print is unchanged.** `beforeprint` leaves presenting before the browser lays out the page, so paper
+  and PDF get the whole notebook.
+
+What building it taught us:
+
+- **The pen assumed nothing was scaled.** Its canvases are positioned from `getBoundingClientRect`,
+  which reports the scaled size, but they live inside the scaled grid and so were scaled a second
+  time. `layers()` now measures the scale of the canvas's host and works in the host's own px, with
+  the backing store that much denser so the writing stays sharp. At scale 1 the arithmetic is
+  unchanged. Shapes needed nothing: they are drawn inside their own SVG.
+- **Hidden pieces count as written.** Ink finishes a piece with no size at once, so cells kept in the
+  page but hidden would have appeared unwritten when their screen came. Presenting therefore builds
+  only the cells of the current screen, which also keeps a screen with thirty charts behind it cheap.
+- **"As wide as what it holds" had to be measured.** The first version scaled the 1000px reading
+  column, and a title or a chart sat small at the left of a centred, mostly empty box. The grid is now
+  measured at its `max-content` width before it is scaled. Outputs are size containers (KPI values are
+  sized in `cqw`), which by definition hides their content's width from layout, so containment is
+  lifted for the moment of measuring (`.nb-measure`). Tables were the other trap: a table shows the
+  columns that fit the width it has, so a screen measured narrow once dropped a column and then
+  measured narrower still. While measuring, every column counts.
+- **`position: fixed` is not fixed in dark mode.** The dark theme is a filter on `body`, and a filtered
+  element becomes the containing block of its fixed descendants. The page number stays in the corner
+  only because the presenting page does not scroll: the screen scrolls inside its own box.
+
 ## 20. Building for every platform
 
 The extension is built by DuckDB's shared pipeline (`extension-ci-tools`) for every native platform

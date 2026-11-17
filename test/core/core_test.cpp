@@ -501,6 +501,13 @@ static void TestCellOptions() {
 	CHECK(nb.cells[1].errors.size() == 1 && nb.cells[1].errors[0].find("hide=everything") != std::string::npos);
 	CHECK(nb.cells[2].errors.size() == 1 && nb.cells[3].errors.size() == 1);
 	CHECK(nb.cells[4].errors.empty());
+	// screen= says where a cell goes when the notebook is presented.
+	auto shown =
+	    ParseNotebook("-- %% a screen=new\nSELECT 1;\n-- %% b screen=join\nSELECT 2;\n-- %% c screen=skip\nSELECT 3;\n"
+	                  "-- %% d screen=next\nSELECT 4;\n");
+	CHECK(shown.cells[0].errors.empty() && shown.cells[1].errors.empty() && shown.cells[2].errors.empty());
+	CHECK(shown.cells[1].Option("screen") == "join");
+	CHECK(shown.cells[3].errors.size() == 1 && shown.cells[3].errors[0].find("screen=next") != std::string::npos);
 }
 
 static void TestQueryCharts() {
