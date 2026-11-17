@@ -258,6 +258,10 @@ void CheckBody(Cell &cell) {
 			if (cache && (!cache->IsScalar() || (cache->scalar != "true" && cache->scalar != "false"))) {
 				cell.errors.push_back("cache: " + cache->scalar + " is not valid; use cache: true or cache: false");
 			}
+			auto width = meta.Get("width");
+			if (width && (!width->IsScalar() || (width->scalar != "normal" && width->scalar != "wide"))) {
+				cell.errors.push_back("width: " + width->scalar + " is not valid; use width: normal or width: wide");
+			}
 		}
 		break;
 	case CellKind::INPUT: {

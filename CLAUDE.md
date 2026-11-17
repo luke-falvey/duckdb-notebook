@@ -229,6 +229,10 @@ create, because all test files share one database.
   (`A.presentable` in `app.js`, `parts` in `viewer.js`): keep those in step with what the cell shows.
   A new control inside a cell must be matched by `ACTS` in `render-present.js`, or a click on it moves
   to the next screen. Test with `#present=N` in the URL; `ink=off` goes in the query string.
+- Wide pages (DESIGN §21) are `NB.width` in `render-core.js`. A chart whose cell has no `width=` is drawn
+  again at its box's width by `NB.width.fit`, which must run once the cell is in the page and before
+  `Ink.present` (see `A.render` and the viewer's `render`). Pass `fluid` to `NB.chart` for such charts.
+  Presenting and print always get the normal width; test with `?width=wide`, `ink=off` as usual.
 - A SQL cell's `body` is its full text, chart comments included; what runs is `Cell::sql`, and its charts
   are `Cell::charts`. Use `sql` for anything that executes or analyses SQL, and `ChartFrom` for the
   relation a cell's charts read. The editor edits `sql` and the specs separately and rebuilds `body`.

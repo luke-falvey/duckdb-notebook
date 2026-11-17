@@ -106,6 +106,17 @@ SELECT idx, errors[1] FROM notebook_cells('test/notebooks/errors.sql') ORDER BY 
 5	chart cell needs from=<cell or table>
 6	unterminated {{ in markdown; expressions are written {{ expr }}
 
+# width: in the [notebook] cell is normal or wide (FORMAT §6); anything else is an error on that cell
+query I
+SELECT count(*) FILTER (len(errors) > 0) FROM notebook_cells('test/notebooks/metadata.sql')
+----
+0
+
+query II
+SELECT kind, errors[1] FROM notebook_cells('test/notebooks/bad_width.sql') WHERE len(errors) > 0
+----
+notebook	width: 1400px is not valid; use width: normal or width: wide
+
 # The example notebook in the repository stays valid
 query II
 SELECT count(*), count(*) FILTER (len(errors) > 0) FROM notebook_cells('examples/revenue.sql')

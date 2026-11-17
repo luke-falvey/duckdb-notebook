@@ -584,6 +584,20 @@ static void TestTimingSetting() {
 	CHECK(HasMessage(nb.cells[0].errors, "timing: sometimes is not valid"));
 }
 
+static void TestWidthSetting() {
+	auto nb = ParseNotebook("-- %% [notebook]\n/*\ntitle: T\nwidth: wide\n*/\n");
+	CHECK(nb.cells[0].errors.empty());
+	nb = ParseNotebook("-- %% [notebook]\n/*\nwidth: normal\n*/\n");
+	CHECK(nb.cells[0].errors.empty());
+	nb = ParseNotebook("-- %% [notebook]\n/*\nwidth: 1200\n*/\n");
+	CHECK(HasMessage(nb.cells[0].errors, "width: 1200 is not valid; use width: normal or width: wide"));
+	nb = ParseNotebook("-- %% [notebook]\n/*\nwidth: [wide]\n*/\n");
+	CHECK(!nb.cells[0].errors.empty());
+	// A cell's width= option sizes its charts; it is not the notebook's width.
+	nb = ParseNotebook("-- %% q width=900\nSELECT 1 AS x\n");
+	CHECK(nb.cells[0].errors.empty());
+}
+
 #include "cache_test.hpp"
 
 int main() {
@@ -608,6 +622,7 @@ int main() {
 	TestCellOptions();
 	TestQueryCharts();
 	TestTimingSetting();
+	TestWidthSetting();
 	TestCache();
 	if (failures) {
 		std::cerr << failures << " check(s) failed" << std::endl;

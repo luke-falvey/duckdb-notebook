@@ -86,7 +86,7 @@
     var holder = NB.el('div', { 'class': 'nb-tab-body' });
     out.appendChild(holder);
     if (tab < charts.length) {
-      NB.chart(holder, charts[tab], { selected: selected, onSelect: wasm ? onSelect : null, seed: 'cell' + cell.idx + '/' + tab, inTab: true });
+      NB.chart(holder, charts[tab], { selected: selected, onSelect: wasm ? onSelect : null, fluid: !option(cell, 'width'), seed: 'cell' + cell.idx + '/' + tab, inTab: true });
     } else if (cell.table) {
       NB.table(holder, cell.table, { pageSize: +option(cell, 'rows', 25) });
     } else if (cell.error) {
@@ -112,10 +112,13 @@
 
   function render() {
     root.innerHTML = '';
+    NB.width.apply();
     var head = NB.el('div', { 'class': 'nb-viewer-header' }, [
       NB.el('span', { text: payload.source || '' }),
       NB.el('span', {}, [
         NB.el('span', { id: 'nb-mode', text: wasm ? 'Live: queries run in this page with DuckDB-WASM' : payload.precomputed ? 'Inputs switch between precomputed results' : 'Static export' }),
+        NB.el('button', { 'class': 'nb-tab nb-width-toggle' + (NB.width.mode() === 'wide' ? ' on' : ''), type: 'button', text: 'wide',
+          title: 'Use the whole width of the window (remembered in this browser; or open with ?width=wide)', onclick: function () { NB.width.toggle(); } }),
         NB.el('button', { 'class': 'nb-tab nb-present-start', text: 'present', title: 'Present: one screen at a time. Arrows, Space or a click move; Esc leaves; F for full screen',
           onclick: function () { Present.enter(0); } })
       ])
@@ -163,7 +166,7 @@
           shown++;
         } else if (cell.kind === 'chart') {
           if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
-          else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null, seed: 'chart' + cell.idx });
+          else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null, fluid: !option(cell, 'width'), seed: 'chart' + cell.idx });
           shown++;
         }
       }
@@ -172,6 +175,7 @@
       grid.appendChild(box);
     });
     root.appendChild(grid);
+    NB.width.fit(grid);
     // Outlines are drawn once the cells are laid out, and follow their size from then on.
     Array.prototype.forEach.call(grid.children, function (box) { Sketch.outline(box, { width: 1.5 }); });
     if (window.Ink) { Ink.onrewrite = render; write(head, grid); }
@@ -182,7 +186,8 @@
   // Hands each piece of the page to the pen (render-ink.js). A piece already written, with the same
   // content, is left as it is; one that changed is written again.
   function write(head, grid) {
-    Ink.present(head, 'header');
+    // Keyed by its text: switching the page's width marks the toggle, and that is not new writing.
+    Ink.present(head, 'header', head.textContent);
     if (head.nextSibling && head.nextSibling.classList.contains('nb-frozen')) Ink.present(head.nextSibling, 'frozen');
     Array.prototype.forEach.call(grid.children, function (box) {
       var id = Present.prefix() + 'cell' + box.getAttribute('data-idx') + '/';
@@ -285,6 +290,8 @@
     window.__NB_PAYLOAD = payload;
     current = payload.cells;
     document.title = payload.title || document.title;
+    NB.width.declare(NB.width.declared(payload.cells));
+    NB.width.start({ render: render });
     render();
     Present.start({ render: render });
     if (payload.wasm && window.NotebookWasm) return bootWasm();
