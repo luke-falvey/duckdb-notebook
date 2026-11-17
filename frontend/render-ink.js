@@ -959,6 +959,9 @@ var Ink = (function () {
   function restore(job, el) {
     var s = job.saved.get(el);
     if (!s) return;
+    // Chromium writes el.style into the attribute lazily: removing the attribute before anything has
+    // read it since the last el.style write leaves style="" behind. Reading it brings it up to date.
+    el.getAttribute('style');
     if (s.style == null) el.removeAttribute('style'); else el.setAttribute('style', s.style);
     if (s.cls == null) el.removeAttribute('class'); else el.setAttribute('class', s.cls);
     job.saved.delete(el);

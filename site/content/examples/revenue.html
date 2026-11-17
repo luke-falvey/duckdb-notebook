@@ -286,6 +286,9 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
 /* Exported page */
 .nb-viewer { max-width: 1000px; margin: 0 auto; padding: 24px 24px 60px; }
 .nb-viewer-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--nb-muted); font-size: 15px; margin-bottom: 12px; }
+/* A narrow window wraps the header rather than scrolling sideways: a long source path breaks anywhere. */
+.nb-viewer-header { flex-wrap: wrap; }
+.nb-viewer-header > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .nb-viewer pre.nb-source { margin: 2px 0 6px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; color: #343a40; }
 .nb-viewer .nb-code-label { color: var(--nb-faint); font-size: 14px; }
 .nb-frozen { color: var(--nb-muted); font-size: 14px; margin-bottom: 8px; }
@@ -311,6 +314,15 @@ body.presenting { overflow: hidden; }
 button.nb-present-leave, button.nb-present-leave:hover:not(:disabled) { background: none; border: none; box-shadow: none; padding: 0 2px; font-size: .8em; color: var(--nb-faint); }
 button.nb-present-leave:hover:not(:disabled) { color: var(--nb-fg); }
 button.nb-present-start { font-size: 15px; margin-left: 14px; }
+
+/* Wide (NB.width): the column, tables and charts take the window's width, less a gutter. Prose keeps
+   its line length (.nb-md p is 760px at most, and lists and quotes follow it): a line of 200
+   characters is hard to read and the eye loses its way back to the next one. Presenting and print set
+   their own widths, and NB.width puts the page back to normal for both. */
+button.nb-width-toggle { font-size: 15px; margin-left: 14px; }
+:root[data-width="wide"] :is(.nb-cells, .nb-banner, .nb-graph, .nb-viewer) { max-width: none; }
+:root[data-width="wide"] .nb-viewer { padding-left: clamp(16px, 3vw, 48px); padding-right: clamp(16px, 3vw, 48px); }
+:root[data-width="wide"] .nb-md :is(ul, ol, blockquote) { max-width: 760px; }
 
 @media print {
   @page { size: A4; margin: 14mm; }
@@ -1605,6 +1617,9 @@ var Ink = (function () {
   function restore(job, el) {
     var s = job.saved.get(el);
     if (!s) return;
+    // Chromium writes el.style into the attribute lazily: removing the attribute before anything has
+    // read it since the last el.style write leaves style="" behind. Reading it brings it up to date.
+    el.getAttribute('style');
     if (s.style == null) el.removeAttribute('style'); else el.setAttribute('style', s.style);
     if (s.cls == null) el.removeAttribute('class'); else el.setAttribute('class', s.cls);
     job.saved.delete(el);
@@ -2762,6 +2777,98 @@ var NB = (function () {
     return { show: show, hide: hide };
   })();
 
+  // ---- Width: the reading column or the whole window ----------------------------------------
+  // "normal" keeps the cells in their 1000px column; "wide" lets the column, tables and charts use
+  // the window's width. Shared by the editor and exports. The page's choice comes from, in order:
+  // a page that fixes it (data-width-fixed on <html>, the PDF export), a toggle on this page, the
+  // URL (width=wide or width=normal), the reader's saved choice (nb.width), the notebook's
+  // `width:` (FORMAT §6), and then normal. It shows as data-width on <html>, which style.css reads.
+  // Presenting and print ignore it: a screen is sized by Present, paper by the page.
+  NB.width = (function () {
+    var W = {}, picked = null, declared = 'normal', printing = false, page = null;
+    var charts = new WeakMap();
+    var OVERHANG = 32;
+    function valid(v) { return v === 'wide' || v === 'normal' ? v : null; }
+    function saved() { try { return valid(localStorage.getItem('nb.width')); } catch (e) { return null; } }
+    W.mode = function () {
+      var fixed = valid(document.documentElement.getAttribute('data-width-fixed'));
+      if (fixed) return fixed;
+      if (picked) return picked;
+      var m = /[?&#]width=(wide|normal)\b/.exec(location.search + location.hash);
+      return m ? m[1] : saved() || declared;
+    };
+    // Whether the page is drawn wide now (not while presenting or printing).
+    W.wide = function () { return W.mode() === 'wide' && !printing && !(window.Present && Present.on); };
+    // The notebook's own default, from its [notebook] cell: `width: wide` or `width: normal`.
+    W.declared = function (cells) {
+      var nb = (cells || []).filter(function (c) { return c && c.kind === 'notebook'; })[0];
+      var m = nb && /^width:\s*['"]?(wide|normal)['"]?\s*$/m.exec(nb.content || '');
+      return m ? m[1] : 'normal';
+    };
+    W.declare = function (value) { declared = valid(value) || 'normal'; W.apply(); };
+    W.apply = function () {
+      var root = document.documentElement, wide = W.wide() ? 'wide' : 'normal';
+      if (root.getAttribute('data-width') !== wide) root.setAttribute('data-width', wide);
+    };
+    // The reader's toggle: remembered in this browser, and it wins over the URL from now on.
+    W.set = function (value) {
+      picked = valid(value) || 'normal';
+      try { localStorage.setItem('nb.width', picked); } catch (e) { /* private window */ }
+      W.apply();
+      if (page) page.render();
+    };
+    W.toggle = function () { W.set(W.mode() === 'wide' ? 'normal' : 'wide'); };
+
+    // A chart whose cell sets no width= is drawn at the width its box has when the page is wide,
+    // never narrower than the width it was compiled for (a phone keeps the scaled-down chart). The
+    // page builds a cell detached, so NB.chart draws it at its compiled width and fit() draws it again
+    // once it is in the page, before the pen is handed the piece.
+    W.track = function (container, chart, opts) {
+      if (!W.wide() || !opts || !opts.fluid || !chart || chart.error) return;
+      // Values, tables and round charts look the same at any width.
+      if (['kpi', 'gauge', 'table', 'pivot', 'chord', 'sunburst'].indexOf((chart.render || {}).kind) >= 0) return;
+      charts.set(container, { chart: chart, opts: opts });
+      container.setAttribute('data-nb-fluid', '');
+    };
+    W.fit = function (scope) {
+      if (!W.wide() || !scope) return;
+      var list = scope.matches && scope.matches('[data-nb-fluid]') ? [scope] : [];
+      list = list.concat(Array.prototype.slice.call(scope.querySelectorAll('[data-nb-fluid]')));
+      list.forEach(function (box) {
+        // Less room for the last tick's label, which hangs past the plot (outputs clip overflow).
+        var entry = charts.get(box), w = Math.floor(box.clientWidth) - OVERHANG;
+        if (!entry || !w) return;
+        var base = (entry.chart.render && entry.chart.render.width) || 640;
+        if (w <= base) return;
+        NB.chart(box, entry.chart, Object.assign({}, entry.opts, { width: w }));
+      });
+    };
+    // The page's render function, redrawn when the setting changes, when a wide window is resized
+    // (charts take the new width) and around printing (paper gets the normal page).
+    W.start = function (p) {
+      page = p;
+      W.apply();
+      var timer = null, last = window.innerWidth;
+      window.addEventListener('resize', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () {
+          if (window.innerWidth === last) return;
+          last = window.innerWidth;
+          if (W.wide() && page) page.render();
+        }, 200);
+      });
+      window.addEventListener('beforeprint', function () {
+        printing = true;
+        if (document.documentElement.getAttribute('data-width') === 'wide') { W.apply(); if (page) page.render(); }
+      });
+      window.addEventListener('afterprint', function () {
+        printing = false;
+        if (W.mode() === 'wide') { W.apply(); if (page) page.render(); }
+      });
+    };
+    return W;
+  })();
+
   return NB;
 })();
 // SQL syntax highlighting for the editor and exports. The tokenizer follows src/core/sql_lexer.cpp
@@ -3779,6 +3886,10 @@ var NB = (function () {
     if (!chart) return;
     if (chart.error) { container.appendChild(NB.el('div', { 'class': 'nb-error', text: chart.error })); return; }
     var render = chart.render || {}, datasets = (chart.datasets || []).map(NB.objects);
+    // A wide page draws a chart again at the width of its box (NB.width.fit): the axes, ticks and
+    // marks are laid out for that width, not stretched.
+    if (opts && opts.width) render = Object.assign({}, render, { width: opts.width });
+    else if (NB.width) NB.width.track(container, chart, opts);
     // A stable wobble per chart: the same chart is drawn the same way every time.
     Sketch.reseed((opts && opts.seed) || ((render.title || '') + JSON.stringify(render.layers || render.kind).length + '/' + datasets.map(function (d) { return d.length; }).join(',')));
     // In a query cell's tabs the title is already the tab's label.
@@ -4510,7 +4621,7 @@ var Present = (function () {
     var holder = NB.el('div', { 'class': 'nb-tab-body' });
     out.appendChild(holder);
     if (tab < charts.length) {
-      NB.chart(holder, charts[tab], { selected: selected, onSelect: wasm ? onSelect : null, seed: 'cell' + cell.idx + '/' + tab, inTab: true });
+      NB.chart(holder, charts[tab], { selected: selected, onSelect: wasm ? onSelect : null, fluid: !option(cell, 'width'), seed: 'cell' + cell.idx + '/' + tab, inTab: true });
     } else if (cell.table) {
       NB.table(holder, cell.table, { pageSize: +option(cell, 'rows', 25) });
     } else if (cell.error) {
@@ -4535,10 +4646,13 @@ var Present = (function () {
 
   function render() {
     root.innerHTML = '';
+    NB.width.apply();
     var head = NB.el('div', { 'class': 'nb-viewer-header' }, [
       NB.el('span', { text: payload.source || '' }),
       NB.el('span', {}, [
         NB.el('span', { id: 'nb-mode', text: wasm ? 'Live: queries run in this page with DuckDB-WASM' : payload.precomputed ? 'Inputs switch between precomputed results' : 'Static export' }),
+        NB.el('button', { 'class': 'nb-tab nb-width-toggle' + (NB.width.mode() === 'wide' ? ' on' : ''), type: 'button', text: 'wide',
+          title: 'Use the whole width of the window (remembered in this browser; or open with ?width=wide)', onclick: function () { NB.width.toggle(); } }),
         NB.el('button', { 'class': 'nb-tab nb-present-start', text: 'present', title: 'Present: one screen at a time. Arrows, Space or a click move; Esc leaves; F for full screen',
           onclick: function () { Present.enter(0); } })
       ])
@@ -4586,7 +4700,7 @@ var Present = (function () {
           shown++;
         } else if (cell.kind === 'chart') {
           if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
-          else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null, seed: 'chart' + cell.idx });
+          else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null, fluid: !option(cell, 'width'), seed: 'chart' + cell.idx });
           shown++;
         }
       }
@@ -4595,6 +4709,7 @@ var Present = (function () {
       grid.appendChild(box);
     });
     root.appendChild(grid);
+    NB.width.fit(grid);
     // Outlines are drawn once the cells are laid out, and follow their size from then on.
     Array.prototype.forEach.call(grid.children, function (box) { Sketch.outline(box, { width: 1.5 }); });
     if (window.Ink) { Ink.onrewrite = render; write(head, grid); }
@@ -4605,7 +4720,8 @@ var Present = (function () {
   // Hands each piece of the page to the pen (render-ink.js). A piece already written, with the same
   // content, is left as it is; one that changed is written again.
   function write(head, grid) {
-    Ink.present(head, 'header');
+    // Keyed by its text: switching the page's width marks the toggle, and that is not new writing.
+    Ink.present(head, 'header', head.textContent);
     if (head.nextSibling && head.nextSibling.classList.contains('nb-frozen')) Ink.present(head.nextSibling, 'frozen');
     Array.prototype.forEach.call(grid.children, function (box) {
       var id = Present.prefix() + 'cell' + box.getAttribute('data-idx') + '/';
@@ -4708,6 +4824,8 @@ var Present = (function () {
     window.__NB_PAYLOAD = payload;
     current = payload.cells;
     document.title = payload.title || document.title;
+    NB.width.declare(NB.width.declared(payload.cells));
+    NB.width.start({ render: render });
     render();
     Present.start({ render: render });
     if (payload.wasm && window.NotebookWasm) return bootWasm();

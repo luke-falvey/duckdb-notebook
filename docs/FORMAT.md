@@ -504,6 +504,7 @@ extensions: [spatial]
 theme: light
 timing: false
 cache: false
+width: wide
 */
 ```
 
@@ -512,7 +513,12 @@ took to run, in the bottom right corner of its box in the editor; `timing: false
 value is an error. The editor's gear menu has a switch that writes this line. `cache` (`true` by
 default) keeps each cell's last result for the editor to show when the notebook is next opened
 (§8); `cache: false` keeps none and removes what was kept. Any other value is an error, and the gear
-menu's *keep results* switch writes this line. `attach` and `extensions` are applied before the first
+menu's *keep results* switch writes this line. `width` (`normal` by default) is how wide the page is for a reader who has not chosen:
+`normal` keeps the cells in a reading column, `wide` lets cells, tables and charts use the width of the
+window. Any other value is an error. A reader's own choice (the editor's gear menu, an export's *wide*
+control, or `?width=wide` / `?width=normal` in the address) wins over it; presenting, print and PDF
+always use the normal width. A chart cell or query with `width=` keeps that width when the page is
+wide; the others are drawn at the width they have. `attach` and `extensions` are applied before the first
 cell runs (`LOAD` for each extension, `ATTACH IF NOT EXISTS` for each database). Paths are relative to
 the notebook file.
 

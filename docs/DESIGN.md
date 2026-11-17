@@ -1156,3 +1156,36 @@ Nothing in the export changed yet. Two separate steps are open:
 
 Precompiled charts stay right for a read-only export. Inlining is worth doing when the export is
 meant to be edited.
+
+## 22. Wide pages
+
+The reading column is 1000px, which suits prose and a 640px chart but wastes most of a large monitor
+on a notebook of wide tables and time series. **Wide** lets the page use the window's width. It is a
+reader's setting first: the editor's gear menu (*wide*), a quiet *wide* control in every HTML export,
+or `?width=wide` / `?width=normal` in the address, remembered in the browser (`nb.width`). An author
+can make it the default for readers who have not chosen with `width: wide` in the `[notebook]` cell
+(FORMAT §6). `NB.width` in `frontend/render-core.js` holds all of it for the editor and the viewer.
+
+- **What widens.** The cell column, banners and the graph lose their `max-width`; the page keeps its
+  gutters (the editor's margins, the viewer's padding of 16 to 48px). Tables show the columns that now
+  fit. Spans keep their meaning: `span=6` is half of whatever the row is.
+- **Charts are drawn for their width, not stretched.** A chart is compiled for its cell's `width`
+  (640px by default) and its SVG scales down to fit a narrower box. Scaling it up would make the
+  handwriting and the wobble huge. A wide page instead draws a chart again at the width its box has,
+  with the same height, so the axes get more ticks and the marks more room. Cells are built detached,
+  so `NB.chart` draws at the compiled width and `NB.width.fit` draws again once the cell is in the page
+  and before the pen is handed the piece; the pen only ever sees the final drawing. A window resized
+  while wide renders again. A chart never gets narrower than it was compiled for, so a phone sees what
+  it always saw, and a cell with `width=` keeps it: the author asked for that size. Downsampling (§16)
+  still targets the compiled width; a line of up to 2,560 points is fine at any screen width.
+- **Prose keeps its measure.** Paragraphs were already at most 760px; lists and quotes follow them on
+  a wide page. Lines much longer than 80 characters are hard to read and the eye loses its way back to
+  the start of the next one, and headings, tables and charts beside the prose still use the width.
+- **Presenting and paper ignore it.** A screen is already sized by what it holds and scaled to the
+  window (§18), so presenting draws the normal page whatever the setting and comes back wide. Paper has
+  its own width: `beforeprint` draws the normal page and `afterprint` puts the wide one back, and the
+  PDF export marks its page `data-width-fixed="normal"`, as it marks it `data-ink="off"`.
+- **The pen needs nothing.** Switching redraws the page through the usual render; a chart drawn at
+  a new width has a new signature and is written again, and a written wide page is identical to it
+  drawn with `ink=off` (tested, also when the switch comes mid-way and in watch mode). The export's
+  header is keyed by its text, so marking the control does not write the header again.

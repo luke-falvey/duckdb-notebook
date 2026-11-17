@@ -1,6 +1,7 @@
 -- %% [notebook]
 /*
 title: Metadata
+width: wide
 attach:
   - {path: ":memory:", as: nb_meta_db}
 */

@@ -505,5 +505,97 @@ var NB = (function () {
     return { show: show, hide: hide };
   })();
 
+  // ---- Width: the reading column or the whole window ----------------------------------------
+  // "normal" keeps the cells in their 1000px column; "wide" lets the column, tables and charts use
+  // the window's width. Shared by the editor and exports. The page's choice comes from, in order:
+  // a page that fixes it (data-width-fixed on <html>, the PDF export), a toggle on this page, the
+  // URL (width=wide or width=normal), the reader's saved choice (nb.width), the notebook's
+  // `width:` (FORMAT §6), and then normal. It shows as data-width on <html>, which style.css reads.
+  // Presenting and print ignore it: a screen is sized by Present, paper by the page.
+  NB.width = (function () {
+    var W = {}, picked = null, declared = 'normal', printing = false, page = null;
+    var charts = new WeakMap();
+    var OVERHANG = 32;
+    function valid(v) { return v === 'wide' || v === 'normal' ? v : null; }
+    function saved() { try { return valid(localStorage.getItem('nb.width')); } catch (e) { return null; } }
+    W.mode = function () {
+      var fixed = valid(document.documentElement.getAttribute('data-width-fixed'));
+      if (fixed) return fixed;
+      if (picked) return picked;
+      var m = /[?&#]width=(wide|normal)\b/.exec(location.search + location.hash);
+      return m ? m[1] : saved() || declared;
+    };
+    // Whether the page is drawn wide now (not while presenting or printing).
+    W.wide = function () { return W.mode() === 'wide' && !printing && !(window.Present && Present.on); };
+    // The notebook's own default, from its [notebook] cell: `width: wide` or `width: normal`.
+    W.declared = function (cells) {
+      var nb = (cells || []).filter(function (c) { return c && c.kind === 'notebook'; })[0];
+      var m = nb && /^width:\s*['"]?(wide|normal)['"]?\s*$/m.exec(nb.content || '');
+      return m ? m[1] : 'normal';
+    };
+    W.declare = function (value) { declared = valid(value) || 'normal'; W.apply(); };
+    W.apply = function () {
+      var root = document.documentElement, wide = W.wide() ? 'wide' : 'normal';
+      if (root.getAttribute('data-width') !== wide) root.setAttribute('data-width', wide);
+    };
+    // The reader's toggle: remembered in this browser, and it wins over the URL from now on.
+    W.set = function (value) {
+      picked = valid(value) || 'normal';
+      try { localStorage.setItem('nb.width', picked); } catch (e) { /* private window */ }
+      W.apply();
+      if (page) page.render();
+    };
+    W.toggle = function () { W.set(W.mode() === 'wide' ? 'normal' : 'wide'); };
+
+    // A chart whose cell sets no width= is drawn at the width its box has when the page is wide,
+    // never narrower than the width it was compiled for (a phone keeps the scaled-down chart). The
+    // page builds a cell detached, so NB.chart draws it at its compiled width and fit() draws it again
+    // once it is in the page, before the pen is handed the piece.
+    W.track = function (container, chart, opts) {
+      if (!W.wide() || !opts || !opts.fluid || !chart || chart.error) return;
+      // Values, tables and round charts look the same at any width.
+      if (['kpi', 'gauge', 'table', 'pivot', 'chord', 'sunburst'].indexOf((chart.render || {}).kind) >= 0) return;
+      charts.set(container, { chart: chart, opts: opts });
+      container.setAttribute('data-nb-fluid', '');
+    };
+    W.fit = function (scope) {
+      if (!W.wide() || !scope) return;
+      var list = scope.matches && scope.matches('[data-nb-fluid]') ? [scope] : [];
+      list = list.concat(Array.prototype.slice.call(scope.querySelectorAll('[data-nb-fluid]')));
+      list.forEach(function (box) {
+        // Less room for the last tick's label, which hangs past the plot (outputs clip overflow).
+        var entry = charts.get(box), w = Math.floor(box.clientWidth) - OVERHANG;
+        if (!entry || !w) return;
+        var base = (entry.chart.render && entry.chart.render.width) || 640;
+        if (w <= base) return;
+        NB.chart(box, entry.chart, Object.assign({}, entry.opts, { width: w }));
+      });
+    };
+    // The page's render function, redrawn when the setting changes, when a wide window is resized
+    // (charts take the new width) and around printing (paper gets the normal page).
+    W.start = function (p) {
+      page = p;
+      W.apply();
+      var timer = null, last = window.innerWidth;
+      window.addEventListener('resize', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () {
+          if (window.innerWidth === last) return;
+          last = window.innerWidth;
+          if (W.wide() && page) page.render();
+        }, 200);
+      });
+      window.addEventListener('beforeprint', function () {
+        printing = true;
+        if (document.documentElement.getAttribute('data-width') === 'wide') { W.apply(); if (page) page.render(); }
+      });
+      window.addEventListener('afterprint', function () {
+        printing = false;
+        if (W.mode() === 'wide') { W.apply(); if (page) page.render(); }
+      });
+    };
+    return W;
+  })();
+
   return NB;
 })();
