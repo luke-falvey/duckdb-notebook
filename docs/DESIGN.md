@@ -768,8 +768,8 @@ what was built). It is a renderer concern like the look itself: nothing in the f
 
 ## 16. Charts that say "compared with what"
 
-Five additions after the first implementation, each kept inside the sketchbook: nothing here added a
-toolbar, a panel or a library.
+Two additions to grammar charts, kept inside the sketchbook: nothing here added a toolbar, a panel or
+a library.
 
 ### Rules and bands
 
