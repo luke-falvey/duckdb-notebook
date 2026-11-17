@@ -568,6 +568,8 @@ static void TestTimingSetting() {
 	CHECK(HasMessage(nb.cells[0].errors, "timing: sometimes is not valid"));
 }
 
+#include "cache_test.hpp"
+
 int main() {
 	TestSplitStatements();
 	TestIsQueryStatement();
@@ -589,6 +591,7 @@ int main() {
 	TestCellOptions();
 	TestQueryCharts();
 	TestTimingSetting();
+	TestCache();
 	if (failures) {
 		std::cerr << failures << " check(s) failed" << std::endl;
 		return 1;

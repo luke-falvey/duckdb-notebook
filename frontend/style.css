@@ -148,6 +148,9 @@ textarea.nb-code-over::selection { color: transparent; background: rgba(103, 65,
 .nb-meta:empty { display: none; }
 /* How long the cell took, in the bottom right corner of its box. */
 .nb-foot { text-align: right; color: var(--nb-faint); font-size: 13px; line-height: 1.2; margin: 6px -6px -6px 0; }
+/* A result from an earlier run whose inputs have changed since: fainter ink and a note, until the cell runs. */
+.nb-cell.outdated .nb-output, .nb-cell.outdated .nb-foot > :not(.nb-outdated) { opacity: .45; }
+.nb-foot .nb-outdated { color: var(--nb-stale); }
 button.nb-pick-chart { display: block; margin-top: 4px; }
 .nb-error { color: var(--nb-error); white-space: pre-wrap; font-family: var(--nb-mono); font-size: 12.5px; padding: 4px 0; }
 .nb-warning { color: var(--nb-warn); font-size: 14px; }

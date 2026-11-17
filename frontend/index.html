@@ -24,6 +24,11 @@
         <button id="save" title="Save (Ctrl+S)">Save</button>
         <label title="Re-run query, markdown and chart cells when something they read changes"><input type="checkbox" id="autorun" checked> auto-run</label>
       </div>
+      <div class="row">
+        <label title="Keep each cell's last result beside the notebook, so it opens showing them without running anything (cache: in the [notebook] cell, saved with the notebook)"><input type="checkbox" id="keep-results" checked> keep results</label>
+        <span class="grow"></span>
+        <button id="forget-results" title="Forget the results kept for this notebook. Nothing else is lost: running it brings them back.">Forget</button>
+      </div>
 
       <h4>view</h4>
       <div class="row">

@@ -1,4 +1,4 @@
-// Presenting: a notebook shown one screen at a time (docs/DESIGN.md §17). Shared by the editor
+// Presenting: a notebook shown one screen at a time (docs/DESIGN.md §18). Shared by the editor
 // (app.js) and exported pages (viewer.js), which stay in charge of drawing cells:
 //
 //   Present.start({ render, enter, leave })   once the page can draw; opens presenting if the URL asks
