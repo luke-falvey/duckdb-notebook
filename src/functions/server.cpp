@@ -9,6 +9,7 @@
 #include "notebook/chart.hpp"
 #include "notebook/functions.hpp"
 #include "notebook/graph.hpp"
+#include "notebook/result_cache.hpp"
 #include "notebook/script.hpp"
 #include "notebook/session.hpp"
 
@@ -44,9 +45,13 @@ struct Session {
 	std::mutex lock;
 	std::mutex running_lock;
 	shared_ptr<ClientContext> running;
+	//! The last result of each cell (FORMAT §8): shown when the notebook is opened, kept as cells run.
+	ResultCache cache;
+	//! True once the session has run a cell. Until then the page shows the last results only.
+	bool ran = false;
 	//! Trust (DESIGN section 3): true once the reader has run something. Until then, and again
 	//! after the text is replaced by the file on disk, nothing runs by itself: no peeks.
-	std::atomic<bool> ran {false};
+	std::atomic<bool> trusted {false};
 	//! Counts peeks as they arrive; one that is no longer the latest gives up. The peek that is
 	//! running (guarded by running_lock) is interrupted by a newer one and by a run.
 	std::atomic<uint64_t> peeks {0};
@@ -125,18 +130,29 @@ Json CellsJson(const notebook::Notebook &notebook) {
 	return cells;
 }
 
-Json NotebookJson(DatabaseInstance &db, Session &session) {
+//! The notebook as the editor shows it. With `results`, also the cached result of every cell that has
+//! one and the input values that go with them: sent when a notebook is opened, not on every edit.
+Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) {
 	auto notebook = Analyze(db, session.text);
-	return Json::Object()
-	    .Set("source", Json::String(session.source))
-	    .Set("text", Json::String(session.text))
-	    .Set("preamble", Json::String(notebook.preamble))
-	    .Set("title", Json::String(NotebookTitle(notebook, session.source)))
-	    .Set("cells", CellsJson(notebook))
-	    .Set("sql_words", [&]() {
-		    Connection connection(db);
-		    return SqlWords(connection);
-	    }());
+	auto json = Json::Object()
+	                .Set("source", Json::String(session.source))
+	                .Set("text", Json::String(session.text))
+	                .Set("preamble", Json::String(notebook.preamble))
+	                .Set("title", Json::String(NotebookTitle(notebook, session.source)))
+	                .Set("cells", CellsJson(notebook))
+	                .Set("sql_words", [&]() {
+		                Connection connection(db);
+		                return SqlWords(connection);
+	                }());
+	if (!notebook::CacheEnabled(notebook)) {
+		// Switched off in the [notebook] cell: whatever was kept goes at once.
+		session.cache.Record(db, session.source, notebook, session.state, {});
+	} else if (results) {
+		json.Set("cached", session.cache.CachedJson(notebook, session.state))
+		    .Set("variables", session.cache.ShownJson(notebook))
+		    .Set("ran", Json::Bool(session.ran));
+	}
+	return json;
 }
 
 shared_ptr<Session> GetSession(ServerState &state, const string &source) {
@@ -154,6 +170,10 @@ shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	bool exists = source.compare(0, 3, "db:") == 0 || FileSystem::GetFileSystem(*db).FileExists(source);
 	if (exists) {
 		session->text = ReadNotebookText(*db, source);
+		// The last results and input values, to show without running anything.
+		auto notebook = notebook::ParseNotebook(session->text);
+		session->cache.Load(*db, source, notebook);
+		session->cache.RestoreVariables(*db, notebook, session->state);
 	} else {
 		// A new notebook: it becomes a file when first saved.
 		session->text = "-- %% [markdown]\n/*\n# Untitled\n*/\n\n-- %%\nSELECT 42 AS answer;\n";
@@ -280,7 +300,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto session = GetSession(state, Param(req, "nb"));
 		           std::lock_guard<std::mutex> guard(session->lock);
 		           auto db = Database(state);
-		           SendJson(res, NotebookJson(*db, *session));
+		           SendJson(res, NotebookJson(*db, *session, true));
 	           }));
 
 	// Update the session's text (and optionally save it). Returns the analysis of the new text.
@@ -294,7 +314,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            }
 		            if (body.Get("reload") && body.Get("reload")->Truthy()) {
 			            // The text now comes from the file, not from the reader: it is inert again.
-			            session->ran = false;
+			            session->trusted = false;
 		            }
 		            string note;
 		            if (body.Get("save") && body.Get("save")->Truthy()) {
@@ -312,108 +332,95 @@ void Routes(shared_ptr<ServerState> &shared) {
 				            note = "Saved " + session->source;
 			            }
 		            }
-		            auto json = NotebookJson(*db, *session);
+		            auto json = NotebookJson(*db, *session, body.Get("reload") && body.Get("reload")->Truthy());
 		            json.Set("note", Json::String(note));
 		            SendJson(res, json);
 	            }));
 
-	server.Post(
-	    "/api/run", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
-		    auto body = Body(req);
-		    auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
-		    // A run does not wait for a peek.
-		    session->peeks++;
-		    session->InterruptPeek();
-		    std::lock_guard<std::mutex> guard(session->lock);
-		    session->ran = true;
-		    if (auto text = body.Get("text")) {
-			    if (text->GetType() == Json::Type::STRING) {
-				    session->text = text->Str();
-			    }
-		    }
-		    auto db = Database(state);
-		    Runner runner(*db, session->state);
-		    RunningGuard running(*session, runner);
-		    auto notebook = AnalyzeText(*runner.Conn().context, session->text);
-		    runner.ApplyMetadata(notebook, session->source);
-		    runner.InitializeVariables(notebook, {});
-		    RunnerOptions options;
-		    options.charts = true;
-		    options.mark_values = true;
-		    options.page_rows = body.Get("page_rows") ? static_cast<idx_t>(body.Get("page_rows")->Num()) : 100;
-		    std::set<int> wanted, redraw;
-		    auto cells = body.Get("cells");
-		    bool all = !cells || cells->IsNull();
-		    if (!all) {
-			    for (auto &item : cells->Items()) {
-				    wanted.insert(static_cast<int>(item.Num()));
-			    }
-		    }
-		    // Cells whose charts are drawn again without running their SQL: a chart spec changed, or a
-		    // selection their charts filter on.
-		    if (auto list = body.Get("redraw")) {
-			    for (auto &item : list->Items()) {
-				    redraw.insert(static_cast<int>(item.Num()));
-			    }
-		    }
-		    auto results = Json::Array();
-		    for (auto index : notebook::RunOrder(notebook)) {
-			    bool redrawing = redraw.count(index) && !all && !wanted.count(index);
-			    if (!all && !wanted.count(index) && !redrawing) {
-				    continue;
-			    }
-			    auto &cell = notebook.cells[NumericCast<idx_t>(index)];
-			    auto result = Json::Object().Set("idx", Json::Number(index));
-			    if (!cell.errors.empty()) {
-				    result.Set("status", Json::String("error")).Set("error", Json::String(cell.errors[0]));
-				    results.Push(result);
-				    continue;
-			    }
-			    if (redrawing && cell.kind == notebook::CellKind::SQL) {
-				    string error;
-				    auto charts = runner.Charts(notebook, cell, error);
-				    result.Set("redraw", Json::Bool(true)).Set("charts", charts);
-				    result.Set("status", Json::String(error.empty() ? "ok" : "error"));
-				    result.Set("error", error.empty() ? Json() : Json::String(error));
-				    results.Push(result);
-				    continue;
-			    }
-			    Json data;
-			    auto outcome = runner.Run(notebook, cell, options, &data);
-			    result.Set("status", Json::String(outcome.status));
-			    result.Set("error", outcome.status == "error" ? Json::String(outcome.error) : Json());
-			    result.Set("row_count",
-			               outcome.row_count >= 0 ? Json::Number(static_cast<double>(outcome.row_count)) : Json());
-			    result.Set("elapsed_ms", outcome.elapsed_ms >= 0 ? Json::Number(outcome.elapsed_ms) : Json());
-			    if (outcome.has_output) {
-				    result.Set("output", Json::String(outcome.output));
-			    }
-			    if (!data.IsNull()) {
-				    result.Set("data", data);
-			    }
-			    if (!outcome.charts.IsNull()) {
-				    result.Set("charts", outcome.charts);
-			    }
-			    if (cell.kind == notebook::CellKind::INPUT) {
-				    auto value = runner.Conn().Query("SELECT getvariable(" + notebook::QuoteString(cell.name) + ")");
-				    if (!value->HasError()) {
-					    if (auto chunk = value->Fetch()) {
-						    result.Set("value", ValueToJson(chunk->GetValue(0, 0)));
-					    }
-				    }
-			    }
-			    if (cell.kind == notebook::CellKind::INPUT &&
-			        (cell.widget == "select" || cell.widget == "multiselect")) {
-				    auto choices = Json::Array();
-				    for (auto &choice : InputChoices(runner.Conn(), cell, 1000)) {
-					    choices.Push(ValueToJson(choice));
-				    }
-				    result.Set("choices", choices);
-			    }
-			    results.Push(result);
-		    }
-		    SendJson(res, Json::Object().Set("results", results).Set("cells", CellsJson(notebook)));
-	    }));
+	server.Post("/api/run", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
+		            auto body = Body(req);
+		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            // A run does not wait for a peek.
+		            session->peeks++;
+		            session->InterruptPeek();
+		            std::lock_guard<std::mutex> guard(session->lock);
+		            session->trusted = true;
+		            if (auto text = body.Get("text")) {
+			            if (text->GetType() == Json::Type::STRING) {
+				            session->text = text->Str();
+			            }
+		            }
+		            auto db = Database(state);
+		            Runner runner(*db, session->state);
+		            RunningGuard running(*session, runner);
+		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		            runner.ApplyMetadata(notebook, session->source);
+		            runner.InitializeVariables(notebook, {});
+		            RunnerOptions options;
+		            options.charts = true;
+		            options.mark_values = true;
+		            options.page_rows = body.Get("page_rows") ? static_cast<idx_t>(body.Get("page_rows")->Num()) : 100;
+		            std::set<int> wanted, redraw;
+		            vector<RanCell> ran;
+		            auto cells = body.Get("cells");
+		            bool all = !cells || cells->IsNull();
+		            if (!all) {
+			            for (auto &item : cells->Items()) {
+				            wanted.insert(static_cast<int>(item.Num()));
+			            }
+		            }
+		            // Cells whose charts are drawn again without running their SQL: a chart spec changed, or a
+		            // selection their charts filter on.
+		            if (auto list = body.Get("redraw")) {
+			            for (auto &item : list->Items()) {
+				            redraw.insert(static_cast<int>(item.Num()));
+			            }
+		            }
+		            auto results = Json::Array();
+		            for (auto index : notebook::RunOrder(notebook)) {
+			            bool redrawing = redraw.count(index) && !all && !wanted.count(index);
+			            if (!all && !wanted.count(index) && !redrawing) {
+				            continue;
+			            }
+			            auto &cell = notebook.cells[NumericCast<idx_t>(index)];
+			            auto result = Json::Object().Set("idx", Json::Number(index));
+			            if (!cell.errors.empty()) {
+				            result.Set("status", Json::String("error")).Set("error", Json::String(cell.errors[0]));
+				            results.Push(result);
+				            continue;
+			            }
+			            if (redrawing && cell.kind == notebook::CellKind::SQL) {
+				            string error;
+				            auto charts = runner.Charts(notebook, cell, error);
+				            result.Set("redraw", Json::Bool(true)).Set("charts", charts);
+				            result.Set("status", Json::String(error.empty() ? "ok" : "error"));
+				            result.Set("error", error.empty() ? Json() : Json::String(error));
+				            RanCell drawn;
+				            drawn.index = index;
+				            drawn.redraw = Json::Object()
+				                               .Set("charts", charts)
+				                               .Set("status", *result.Get("status"))
+				                               .Set("error", *result.Get("error"));
+				            ran.push_back(std::move(drawn));
+				            results.Push(result);
+				            continue;
+			            }
+			            RanCell done;
+			            done.index = index;
+			            done.status = RunForEditor(runner, notebook, cell, options, result).status;
+			            if (auto value = result.Get("value")) {
+				            done.value = *value;
+			            }
+			            // Serialised once, for the response and for the cache.
+			            done.result = result.Dump();
+			            results.Push(Json::Raw(done.result));
+			            ran.push_back(std::move(done));
+		            }
+		            session->ran = true;
+		            runner.Save();
+		            session->cache.Record(*db, session->source, notebook, session->state, ran);
+		            SendJson(res, Json::Object().Set("results", results).Set("cells", CellsJson(notebook)));
+	            }));
 
 	server.Post("/api/variable", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
@@ -441,10 +448,15 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            if (result->HasError()) {
 			            throw InvalidInputException("%s", result->GetError());
 		            }
+		            result.reset();
+		            // The value goes with the cached results, so a reopened notebook shows the same input.
+		            runner.Save();
+		            session->cache.SetShown(name, value);
+		            session->cache.Record(*db, session->source, notebook, session->state, {});
 		            SendJson(res, Json::Object().Set("ok", Json::Bool(true)).Set("sql", Json::String(sql)));
 	            }));
 
-	// Peek under the pen: the first rows of the CTE or sub-query under the caret (DESIGN section 17).
+	// Peek under the pen: the first rows of the CTE or sub-query under the caret (DESIGN section 19).
 	// `sql` is the text being edited, which may be newer than the session's; `cursor` is a byte offset
 	// into it. Answers `{reason}` instead of an error when there is nothing to show.
 	server.Post("/api/peek", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
@@ -453,7 +465,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            auto nothing = [&](const string &reason) {
 			            SendJson(res, Json::Object().Set("reason", Json::String(reason)));
 		            };
-		            if (!session->ran) {
+		            if (!session->trusted) {
 			            nothing("nothing has been run yet");
 			            return;
 		            }
@@ -469,7 +481,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            auto ticket = ++session->peeks;
 		            session->InterruptPeek();
 		            std::lock_guard<std::mutex> guard(session->lock);
-		            if (session->peeks != ticket || !session->ran) {
+		            if (session->peeks != ticket || !session->trusted) {
 			            nothing("superseded");
 			            return;
 		            }
@@ -593,6 +605,17 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           }
 		           SendJson(res, Json::Object().Set("files", files).Set("stored", stored).Set("open", open));
 	           }));
+
+	// Forgets the notebook's cached results. What the page shows from this session is untouched.
+	server.Post("/api/cache/clear",
+	            Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
+		            auto body = Body(req);
+		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            std::lock_guard<std::mutex> guard(session->lock);
+		            auto db = Database(state);
+		            auto removed = session->cache.Clear(*db, session->source);
+		            SendJson(res, Json::Object().Set("ok", Json::Bool(true)).Set("removed", Json::Number(removed)));
+	            }));
 
 	server.Post("/api/interrupt", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);

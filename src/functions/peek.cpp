@@ -16,7 +16,7 @@
 #include "duckdb/parser/tableref/list.hpp"
 #include "notebook/sql_lexer.hpp"
 
-// "Peek under the pen" (docs/DESIGN.md section 17): finds the innermost CTE or sub-query under a
+// "Peek under the pen" (docs/DESIGN.md section 19): finds the innermost CTE or sub-query under a
 // cursor position and builds the statement that selects from it alone.
 //
 // The parts, their names and their scopes come from DuckDB's parse tree. The tree records where

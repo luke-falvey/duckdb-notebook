@@ -17,7 +17,8 @@ taught us and where it departs from the design.
 | `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
 | `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
 | `notebook_start`, `notebook_stop` | The HTTP server and browser UI | `src/functions/server.cpp` |
-| `notebook_peek(sql, cursor)` | The CTE or sub-query at a byte offset and the query that selects from it (DESIGN §17) | `src/functions/peek.cpp` |
+| `notebook_peek(sql, cursor)` | The CTE or sub-query at a byte offset and the query that selects from it (DESIGN §19) | `src/functions/peek.cpp` |
+| `notebook_cache`, `notebook_cache_clear` | The result cache: what is kept, fresh or stale; clearing it | `src/functions/result_cache.cpp` |
 
 Every path argument also accepts `db:<name>[@version]` for a stored notebook.
 
@@ -34,7 +35,12 @@ Every piece of the page is written by a pen as it appears (`frontend/render-ink.
 `docs/HANDWRITING.md`). The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
 into `frontend/ink-strokes.js`.
 
-Not built: the result cache (FORMAT §8), a CodeMirror editor, charting libraries (see DESIGN §6).
+The result cache (FORMAT §8, DESIGN §17) keeps each cell's last `/api/run` result beside the notebook
+(`.duckdb-notebook/`) or in `_notebook.cache`. Keys and the fresh/stale decision are in
+`src/core/cache.cpp`; the store and the session's copy in `src/functions/result_cache.cpp`. The editor
+reads it on open and writes it after every run; `notebook_run` writes it only with `cache := true`.
+
+Not built: a CodeMirror editor, charting libraries (see DESIGN §6).
 
 ## Layout
 
@@ -214,15 +220,19 @@ create, because all test files share one database.
   `duckdb/AGENTS.md` and copy from `duckdb/src/function/table/system/` when unsure.
 - sqllogictest expected results cannot contain blank lines or multi-line values. Flatten them in the
   query, as `test/sql/notebook_sql.test` does.
+- The result cache must never fail anything: every store operation catches and gives up quietly.
+  Opening a notebook must run no SQL, so cached variables are restored by casting text to their
+  recorded type, not by `SET VARIABLE`. A change to what a cache key covers or to the entry layout
+  raises `CACHE_FORMAT` in `src/core/cache.cpp`.
 - `to` is a reserved word: a table function cannot take `to :=`. Output paths are `file :=`.
 - `ExtensionCallback::OnConnectionClosed` runs with DuckDB's connection-manager lock held. Do not
   create or destroy connections from it.
 - Variables set from the browser arrive as JSON. Give them the SQL type of what produced them
   (`VariableSqlType`), or a brush on a timestamp axis compares text with timestamps.
-- Peek under the pen (`frontend/app-peek.js`, `POST /api/peek`, DESIGN §17): cursor positions sent to the
+- Peek under the pen (`frontend/app-peek.js`, `POST /api/peek`, DESIGN §19): cursor positions sent to the
   server are byte offsets, not JavaScript string indexes. A peek runs on a copy of the session's state,
   in a read-only transaction with `max_execution_time`; keep all three if you change `Runner::Peek`.
-  The server refuses to peek until the reader has run something (`Session::ran`).
+  The server refuses to peek until the reader has run something (`Session::trusted`, set by a run and cleared when the text is reloaded from disk; separate from the cache's `Session::ran`).
 - The html-wasm export runs on DuckDB-WASM 1.5: `$name` is rewritten to `getvariable('name')`, data
   is written with `STORAGE_VERSION 'v1.5.0'`, and selection variables start as typed NULLs.
 - clang-format re-indents lambdas inside `server.cpp` with mixed tabs and spaces; match on content,

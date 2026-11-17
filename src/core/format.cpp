@@ -252,6 +252,10 @@ void CheckBody(Cell &cell) {
 			if (timing && (!timing->IsScalar() || (timing->scalar != "true" && timing->scalar != "false"))) {
 				cell.errors.push_back("timing: " + timing->scalar + " is not valid; use timing: true or timing: false");
 			}
+			auto cache = meta.Get("cache");
+			if (cache && (!cache->IsScalar() || (cache->scalar != "true" && cache->scalar != "false"))) {
+				cell.errors.push_back("cache: " + cache->scalar + " is not valid; use cache: true or cache: false");
+			}
 		}
 		break;
 	case CellKind::INPUT: {
