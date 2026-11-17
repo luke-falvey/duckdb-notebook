@@ -35,6 +35,10 @@ Every piece of the page is written by a pen as it appears (`frontend/render-ink.
 `docs/HANDWRITING.md`). The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
 into `frontend/ink-strokes.js`.
 
+Presenting (DESIGN §18) is `frontend/render-present.js` (`Present`), shared by the editor and exports:
+it decides which cells make the current screen and scales them to the window; `app.js` and `viewer.js`
+still build the cells.
+
 The result cache (FORMAT §8, DESIGN §17) keeps each cell's last `/api/run` result beside the notebook
 (`.duckdb-notebook/`) or in `_notebook.cache`. Keys and the fresh/stale decision are in
 `src/core/cache.cpp`; the store and the session's copy in `src/functions/result_cache.cpp`. The editor
@@ -198,6 +202,13 @@ create, because all test files share one database.
   shells and stop everything you started before finishing a turn; stop servers by PID. Leftover
   detached shells piled up and got in the way of approval prompts.
 
+- While presenting, only the cells of the current screen are in the page, inside a grid scaled by a CSS
+  transform. Anything that measures the page there must allow for the scale (`getBoundingClientRect`
+  is scaled, `offsetWidth` is not; Ink's `layers()` shows how), and anything fixed to the window must
+  not rely on the page scrolling. A cell's place in a presentation is decided before it is built
+  (`A.presentable` in `app.js`, `parts` in `viewer.js`): keep those in step with what the cell shows.
+  A new control inside a cell must be matched by `ACTS` in `render-present.js`, or a click on it moves
+  to the next screen. Test with `#present=N` in the URL; `ink=off` goes in the query string.
 - A SQL cell's `body` is its full text, chart comments included; what runs is `Cell::sql`, and its charts
   are `Cell::charts`. Use `sql` for anything that executes or analyses SQL, and `ChartFrom` for the
   relation a cell's charts read. The editor edits `sql` and the specs separately and rebuilds `body`.

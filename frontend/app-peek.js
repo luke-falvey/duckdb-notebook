@@ -40,7 +40,7 @@ var AppPeek = (function () {
   // The caret moved or the text changed: ask again once it has rested.
   P.moved = function (ta) {
     clearTimeout(timer);
-    if (!P.enabled || !editor(ta) || App.running || App.reading) { P.hide(); return; }
+    if (!P.enabled || !editor(ta) || App.running || App.reading || document.body.classList.contains('presenting')) { P.hide(); return; }
     if (ta.selectionStart !== ta.selectionEnd) { P.hide(); return; }
     if (note) place(ta);
     timer = setTimeout(function () { ask(ta); }, P.delay);

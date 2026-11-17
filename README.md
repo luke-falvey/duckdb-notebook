@@ -102,6 +102,13 @@ FROM notebook_export('examples/revenue.sql', format := 'html-wasm', wasm_runtime
 
 [examples/charts.sql](examples/charts.sql) shows every chart type.
 
+**Presenting.** The editor's gear menu has **Present**, and every HTML export has a quiet `present`
+control: the notebook is shown one screen at a time, large and centred, each screen written by the pen
+as it arrives. Arrows, Space, Page Up/Down or a click move; Home and End jump; F is full screen; Escape
+leaves. Inputs and chart brushing keep working. Add `#present` to an export's address to open it
+presenting (`revenue.html#present=3` for the third screen). A screen is a row of the reading layout;
+`screen=new`, `screen=join` and `screen=skip` on a cell change that ([docs/FORMAT.md](docs/FORMAT.md) §1).
+
 Not yet built: a CodeMirror editor (the editor is a text area with SQL
 highlighting and completion), and charting libraries for zoomable maps and GPU-scale networks (the built-in SVG
 renderers draw every chart type, simply). [docs/DESIGN.md](docs/DESIGN.md) §9 and §12 have the

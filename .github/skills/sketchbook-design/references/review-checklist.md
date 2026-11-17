@@ -48,4 +48,7 @@ the `.sql` file, re-run, and look again. Each item names the setting that fixes 
 - [ ] HTML export opens offline with the same look; `hide := 'code'` export reads as a report.
 - [ ] Inputs in a static export are frozen; use `interactive := 'precomputed'` or `html-wasm` if
       readers must change them.
+- [ ] If it will be presented: step through it (gear menu → Present, or the export with `#present`) at
+      1366 x 768. Each screen holds one idea and fits without scrolling; inputs sit with what they
+      change; working tables are `screen=skip`.
 - [ ] `.github/skills/sketchbook-authoring/scripts/check.sh <file>` reports no problems.

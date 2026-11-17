@@ -293,6 +293,9 @@ var NB = (function () {
     function fitColumns() {
       var avail = wrap.clientWidth, heads = table.querySelectorAll('thead th');
       if (!avail || heads.length < 2) return;
+      // Everything fits when the table is no wider than its box. Adding up the columns' rounded widths
+      // can say otherwise by a pixel when the table fills its box exactly (a presented screen does).
+      if (!data.__nbColumn && table.offsetWidth <= avail) return;
       var first = Math.min(data.__nbColumn || 0, cols.length - 1), used = heads[0].offsetWidth, last = first;
       for (var k = first; k < cols.length; k++) {
         var w = heads[k + 1].offsetWidth;
