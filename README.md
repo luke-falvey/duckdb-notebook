@@ -2,6 +2,9 @@
 
 A notebook environment for DuckDB where the notebook is a plain `.sql` file.
 
+**Documentation: https://luke-falvey.github.io/duckdb-notebook/**: install, a first notebook in
+five minutes, guides, the full reference, and live exports of the examples.
+
 **Status: early, but every part of the design has a first implementation.** A DuckDB extension
 parses notebooks, works out the dependencies between cells, runs them, serves an editor in your
 browser, draws charts, stores notebooks in the database, and exports them to HTML, PDF, Markdown,
@@ -118,6 +121,8 @@ details.
 
 ## Documents
 
+- [The documentation site](https://luke-falvey.github.io/duckdb-notebook/), built from
+  [site/](site/): for people using the extension.
 - [docs/DESIGN.md](docs/DESIGN.md): architecture, execution model, storage, visualisation, export,
   risks and roadmap.
 - [docs/FORMAT.md](docs/FORMAT.md): the notebook file format and chart spec.

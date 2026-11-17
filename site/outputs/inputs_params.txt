@@ -1,0 +1,8 @@
+┌─────────┬─────────┬───────────┐
+│  name   │ status  │ row_count │
+│ varchar │ varchar │   int64   │
+├─────────┼─────────┼───────────┤
+│ sales   │ ok      │      NULL │
+│ regions │ ok      │         4 │
+│ picked  │ ok      │         3 │
+└─────────┴─────────┴───────────┘

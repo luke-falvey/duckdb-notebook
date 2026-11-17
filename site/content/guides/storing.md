@@ -1,0 +1,77 @@
+# Storing notebooks in a database
+
+A notebook can live inside a DuckDB database as well as in a file. The stored text is byte for byte
+the same as the file, with every saved version kept. That suits notebooks that belong with their
+data: ship one `.duckdb` file and the reports come with it.
+
+Use a file-backed database. Notebooks saved into `:memory:` are gone when DuckDB exits.
+
+## Save a version
+
+```sql
+--8<-- "site/outputs/storing.sql"
+```
+
+```text
+--8<-- "site/outputs/storing.txt"
+```
+
+- `notebook_save(path)` reads the notebook at `path` and stores it as a new version. The name
+  defaults to the file name without its extension; pass `name :=` to choose another.
+- `message :=` records why, like a commit message.
+- Saving text identical to the latest version stores nothing (`saved` is false).
+- Saving text identical to an **older** version is refused, because it would bury newer work. Check
+  out the newer version first, or pass `force := true`.
+
+## Use a stored notebook
+
+Anywhere a function takes a path, `db:<name>` reads the latest stored version and
+`db:<name>@<version>` a particular one:
+
+```sql
+CALL notebook_start('db:revenue');
+SELECT name, status FROM notebook_run('db:revenue@1');
+FROM notebook_export('db:revenue', file := 'revenue.html');
+```
+
+In the editor, saving a `db:` notebook adds a version. The ⚙ menu's notebook list shows stored
+notebooks next to the files in the working directory.
+
+## Get a file back
+
+```sql
+FROM notebook_checkout('revenue', file := 'revenue_copy.sql');
+FROM notebook_checkout('revenue', version := 1, file := 'revenue_v1.sql');
+```
+
+`notebook_checkout` returns the text, and with `file :=` also writes it. It refuses to overwrite a
+file whose text is not one of the stored versions of that notebook, so unsaved work is never lost;
+pass `force := true` to overwrite anyway. Without `file :=` it only returns the content.
+
+## Another attached database
+
+Both functions take `database :=` to use the `_notebook` schema of another attached database:
+
+```sql
+ATTACH 'reports.duckdb' AS reports;
+FROM notebook_save('revenue.sql', database := 'reports');
+FROM notebook_checkout('revenue', database := 'reports', file := 'revenue.sql');
+```
+
+## The tables
+
+The first save creates a `_notebook` schema:
+
+| Object | Columns |
+|---|---|
+| `_notebook.notebooks` | `name` (primary key), `created_at` |
+| `_notebook.versions` | `name`, `version`, `content`, `content_hash` (sha256), `saved_at`, `message`; primary key `(name, version)` |
+| `_notebook.current` | A view: the latest version of each notebook |
+| `_notebook.cache` | Results the editor keeps for stored notebooks: `name`, `cell`, `format`, `key`, `saved_at`, `result`. Created on first use; see [keeping results](cache.md) |
+
+They are ordinary tables, so you can query history with SQL:
+
+```sql
+SELECT name, max(version) AS versions, max(saved_at) AS last_saved
+FROM _notebook.versions GROUP BY name;
+```
