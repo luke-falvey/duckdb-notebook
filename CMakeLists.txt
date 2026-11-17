@@ -48,6 +48,9 @@ set(EXTENSION_SOURCES
     src/core/json.cpp
     src/core/yaml.cpp
     src/core/chart.cpp
+    src/core/chart_grammar.cpp
+    src/core/chart_references.cpp
+    src/core/chart_typed.cpp
     src/core/cache.cpp
     src/core/document.cpp
     src/functions/common.cpp

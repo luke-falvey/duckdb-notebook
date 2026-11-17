@@ -36,12 +36,12 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | C3 | Pure logic in `src/functions` that belongs in `src/core` | Safe | low | ~300 moved | done in part: Markdown export and title (`document.cpp`), `ReplaySql` and `DisplaySql` (`script.cpp`), all with tests. Deferred: `VariableSqlType`'s type building, the `{{ }}` splice, the ATTACH SQL and the precomputed input space, which each need a callback threaded through for a few lines |
 | C4 | Chart YAML parsed repeatedly; selection map rebuilt per chart | Safe | low | small | done: one parse in `CompileChart`, `NotebookSelections` (tested). Still built once per chart: caching it would tie a Runner to one notebook |
 | T1 | Browser test start/stop repeated, shells leak on failure | Safe | low | −40 | done: `serve()`/`stop()`, same 280 checks |
-| C5 | `chart.cpp` does too much (now ~1370 lines) | Safe | med | ±0 | todo |
+| C5 | `chart.cpp` does too much (now ~1370 lines) | Safe | med | ±0 | done: a pure move into `chart.cpp` (513 lines), `chart_grammar.cpp`, `chart_references.cpp`, `chart_typed.cpp`, with the class in `chart_compiler.hpp`. The table of typed-chart handlers was not made: it would reword errors |
 | C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | deferred: one `NotebookMeta` touches the parser, the runner, the cache, the title and a regular expression in `app.js`; more than a structural change should, so left for its own PR |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
 | B1–B31 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
 | DOC1–DOC11 | Docs that disagree with the code | Docs | none | small | done, except DOC1 (`display=`), which is B15 |
-| N1 | Chart rules, bands and notes repeat their checks | Safe | low | −30 | with C5 |
+| N1 | Chart rules, bands and notes repeat their checks | Safe | low | −30 | deferred: C5 was kept a pure move so it can be reviewed as one; N1 is easy on top of it, alongside B28 in the same code |
 | N2 | Editor result handling repeated | Safe | low | −20 | done: `show()`, `dropKept()` |
 | N3 | Smaller server and cache items | Safe | low | small | rejected: `ParseOneQuery` would narrow what peek's `try` covers; the Value-to-text pair in `result_cache.cpp` is two short lines; moving `cache.Record` out of `NotebookJson` changes when the store is written |
 | T2 | Small test findings | Safe | low | small | done: `revenue.expanded.sql` regenerated (one line had drifted) and tested; the authoring template runs in `notebook_run.test`. The duplicate `CHECK` is gone since the feature merges |

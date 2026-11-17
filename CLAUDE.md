@@ -28,7 +28,9 @@ run order). `ReadNotebook` runs both, so every function sees an analysed noteboo
 
 Running cells goes through one place, `Runner` in `src/functions/session.cpp`, used by `notebook_run`,
 the exports and the server: `Runner::Prepare` before the first cell, `Runner::RunAll` for every cell,
-`RunForEditor` for one cell with the result the editor is sent. The chart compiler is `src/core/chart.cpp`; the browser draws its output
+`RunForEditor` for one cell with the result the editor is sent. The chart compiler is
+`src/core/chart*.cpp`: the `Compiler` class in `chart_compiler.hpp`, with grammar layers, rules and
+notes, and typed charts each in a file of their own. The browser draws its output
 with `frontend/render-*.js`, all of it hand-drawn through the primitives in
 `frontend/render-sketch.js` (the "sketchbook" look, DESIGN §6 Themes).
 
