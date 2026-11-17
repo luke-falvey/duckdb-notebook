@@ -413,14 +413,16 @@ void StartAtNames(const string &sql, idx_t statement_start, vector<Part> &parts)
 	}
 }
 
-//! Table functions that change something: this extension's, and DuckDB's own. DuckDB records no
-//! such property for table functions, so ones from other extensions cannot be judged. Scalar
-//! functions are judged by their stability instead.
+//! Table functions that change something: DuckDB's own, and every one of this extension's (notebook_*) but
+//! those that only read, so a new one is refused until it is known to be safe. DuckDB records no such property
+//! for table functions, so ones from other extensions cannot be judged. Scalar functions are judged by their
+//! stability instead.
 const char *const CHANGING_TABLE_FUNCTIONS[] = {
-    "notebook_run",    "notebook_export",      "notebook_save",           "notebook_checkout", "notebook_start",
-    "notebook_stop",   "checkpoint",           "force_checkpoint",        "copy_database",     "import_database",
+    "checkpoint",      "force_checkpoint",     "copy_database",           "import_database",
     "export_database", "truncate_duckdb_logs", "create_external_resource"};
-const char *const CHANGING_PREFIXES[] = {"enable_", "disable_"};
+const char *const CHANGING_PREFIXES[] = {"enable_", "disable_", "notebook_"};
+const char *const READ_ONLY_NOTEBOOK_FUNCTIONS[] = {"notebook_cells", "notebook_sql", "notebook_chart_query",
+                                                    "notebook_peek", "notebook_cache"};
 
 //! Volatile functions that only compute a value.
 const char *const HARMLESS_VOLATILE[] = {"random", "uuid", "gen_random_uuid", "uuidv4", "uuidv7"};
@@ -433,8 +435,12 @@ string SideEffect(ClientContext &context, const Reads &reads) {
 		}
 	}
 	for (auto &name : reads.functions) {
+		bool read_only = false;
+		for (auto safe : READ_ONLY_NOTEBOOK_FUNCTIONS) {
+			read_only = read_only || name == safe;
+		}
 		for (auto prefix : CHANGING_PREFIXES) {
-			if (StringUtil::StartsWith(name, prefix)) {
+			if (!read_only && StringUtil::StartsWith(name, prefix)) {
 				return name;
 			}
 		}

@@ -203,6 +203,18 @@ SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT * FROM notebook_run(''x.s
 ----
 it calls notebook_run(), which may have side effects
 
+# B23: every notebook_* function that changes something is refused, notebook_cache_clear included; the
+# read-only ones are not
+query I
+SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT * FROM notebook_cache_clear(''x.sql'')) q', 'notebook_cache_clear') p
+----
+it calls notebook_cache_clear(), which may have side effects
+
+query I
+SELECT p.reason IS NULL OR p.reason NOT LIKE '%side effects%' FROM nb_peek_at('SELECT * FROM (SELECT * FROM notebook_cells(''x.sql'')) q', 'notebook_cells') p
+----
+true
+
 query I
 SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT * FROM checkpoint()) q', 'checkpoint') p
 ----
