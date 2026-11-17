@@ -1,0 +1,14 @@
+┌──────────────────────┐
+│    function_name     │
+│       varchar        │
+├──────────────────────┤
+│ notebook_cells       │
+│ notebook_chart_query │
+│ notebook_checkout    │
+│ notebook_export      │
+│ notebook_run         │
+│ notebook_save        │
+│ notebook_sql         │
+│ notebook_start       │
+│ notebook_stop        │
+└──────────────────────┘

@@ -57,6 +57,8 @@ duckdb/            Submodule, pinned to the DuckDB release we build against (v2.
 extension-ci-tools/ Submodule: DuckDB's shared build and CI scripts.
 third_party/       Licences of bundled assets (fonts).
 spikes/            Throwaway experiments kept as evidence. Not built or tested by CI.
+site/              The user documentation, published to GitHub Pages: MkDocs sources, theme, the
+                   notebooks the docs show, generated outputs, screenshots and exports.
 ```
 
 ## Build and test
@@ -124,6 +126,33 @@ Needs `pip install playwright` and `playwright install chromium`. Set
 `NOTEBOOK_WASM_RUNTIME=$PWD/wasm/dist` after `make wasm_runtime` (Node and npm) to include the
 html-wasm export. On a machine without Chromium's system libraries, `apt-get download` the missing
 packages, `dpkg -x` them into a directory and point `LD_LIBRARY_PATH` at its `usr/lib/x86_64-linux-gnu`.
+
+## The documentation site
+
+`site/` is the user documentation, published at https://luke-falvey.github.io/duckdb-notebook/ by
+`.github/workflows/docs.yml` (builds on every pull request, deploys from `main`). It is MkDocs with a
+small theme of its own (`site/theme/`); the toolchain is `site/requirements.txt`.
+
+```bash
+pip install -r site/requirements.txt
+mkdocs build --strict -f site/mkdocs.yml && python3 site/tools/check_links.py   # into build/site
+mkdocs serve -f site/mkdocs.yml        # preview at http://127.0.0.1:8000; stop it when done
+```
+
+- `site/content/reference/format.md` is `docs/FORMAT.md`, rendered by `site/hooks.py`: there is one
+  specification, and it is `docs/FORMAT.md`.
+- Pages include files rather than copying them: notebooks with `--8<-- "path"` and single cells with
+  `<!-- cell NAME in PATH -->` (default `examples/charts.sql`; the chart reference is built this way).
+- Queries the docs show live in `site/outputs/<name>.sql`; `python3 site/tools/outputs.py` runs them
+  with the release build and writes `<name>.txt`. Screenshots (WebP), the live exports in
+  `site/content/examples/` and the Markdown sample come from `python3 site/tools/assets.py` (needs
+  Playwright and Pillow; it starts one notebook server and stops it). Both are committed, so the
+  docs workflow never builds DuckDB. Rerun them when output or the look changes.
+- The notebooks in `site/notebooks/` are run by `test/sql/docs_notebooks.test`; add new ones there.
+
+**A change to the format, a chart key, an SQL function (arguments, defaults, columns) or a setting
+needs the matching change in the site** (the guide that explains it and the reference page that
+lists it), in the same pull request, as it does in `docs/FORMAT.md`.
 
 ## Conventions
 

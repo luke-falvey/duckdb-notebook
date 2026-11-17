@@ -1,0 +1,53 @@
+# name: test/sql/docs_notebooks.test
+# description: the notebooks the documentation site shows (site/notebooks) parse and run without errors
+# group: [notebook]
+
+require notebook
+
+# A new notebook in site/notebooks must be added below.
+query I
+SELECT count(*) FROM glob('site/notebooks/*.sql')
+----
+3
+
+query I
+SELECT count(*) FROM notebook_cells('site/notebooks/hello.sql') WHERE len(errors) > 0
+----
+0
+
+query I
+SELECT count(*) FROM notebook_run('site/notebooks/hello.sql') WHERE status = 'error'
+----
+0
+
+query I
+SELECT count(*) FROM notebook_cells('site/notebooks/inputs.sql') WHERE len(errors) > 0
+----
+0
+
+query I
+SELECT count(*) FROM notebook_run('site/notebooks/inputs.sql') WHERE status = 'error'
+----
+0
+
+query I
+SELECT count(*) FROM notebook_cells('site/notebooks/charts_guide.sql') WHERE len(errors) > 0
+----
+0
+
+query I
+SELECT count(*) FROM notebook_run('site/notebooks/charts_guide.sql') WHERE status = 'error'
+----
+0
+
+# The notebooks the site renders straight from the repository.
+query I
+SELECT count(*) FROM notebook_cells('.github/skills/sketchbook-authoring/assets/template.sql') WHERE len(errors) > 0
+----
+0
+
+statement ok
+DROP TABLE sales
+
+statement ok
+DROP TABLE orders

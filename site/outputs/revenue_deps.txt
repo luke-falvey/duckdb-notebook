@@ -1,0 +1,17 @@
+┌───────┬─────────────┬───────────────────────────┬────────────────────────────────┬────────────┐
+│  idx  │    name     │          defines          │             reads              │ depends_on │
+│ int32 │   varchar   │         varchar[]         │           varchar[]            │  int32[]   │
+├───────┼─────────────┼───────────────────────────┼────────────────────────────────┼────────────┤
+│     0 │ NULL        │ []                        │ []                             │ []         │
+│     1 │ NULL        │ []                        │ [$region, monthly]             │ [4, 7]     │
+│     2 │ orders      │ [orders]                  │ []                             │ []         │
+│     3 │ regions     │ [regions]                 │ [orders]                       │ [2]        │
+│     4 │ region      │ [$region]                 │ [regions]                      │ [3]        │
+│     5 │ min_amount  │ [$min_amount]             │ []                             │ []         │
+│     6 │ filtered    │ [filtered]                │ [$region, $min_amount, orders] │ [2, 4, 5]  │
+│     7 │ monthly     │ [monthly, $picked_months] │ [filtered]                     │ [6]        │
+│     8 │ headline    │ []                        │ [monthly]                      │ [7]        │
+│     9 │ order_sizes │ []                        │ [filtered]                     │ [6]        │
+│    10 │ top_orders  │ [top_orders]              │ [$picked_months, filtered]     │ [6, 7]     │
+└───────┴─────────────┴───────────────────────────┴────────────────────────────────┴────────────┘
+  11 rows                                                                             5 columns
