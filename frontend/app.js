@@ -63,6 +63,8 @@ var App = (function () {
     A.cells = [];
     A.merge(data.cells);
     A.kept(data);
+    // Whether the server will answer peeks: a cached result shown on opening is not a run.
+    A.trusted = !!data.trusted;
     A.lastText = data.text;
     A.dirty = false;
     // Code is written when a notebook is opened or reloaded from disk, never while it is typed.
@@ -173,6 +175,7 @@ var App = (function () {
     if (A.running) return Promise.resolve();
     A.running = true;
     A.live = true;
+    A.trusted = true;
     $('interrupt').hidden = false;
     (indexes || A.cells.map(function (_, i) { return i; })).concat(redraw || []).forEach(function (i) { if (A.cells[i]) A.cells[i].state = 'running'; });
     A.render();

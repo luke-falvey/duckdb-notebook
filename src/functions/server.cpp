@@ -135,6 +135,7 @@ Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) 
 	                .Set("text", Json::String(session.text))
 	                .Set("preamble", Json::String(notebook.preamble))
 	                .Set("title", Json::String(notebook::NotebookTitle(notebook, session.source)))
+	                .Set("trusted", Json::Bool(session.trusted))
 	                .Set("cells", CellsJson(notebook))
 	                .Set("sql_words", [&]() {
 		                Connection connection(db);

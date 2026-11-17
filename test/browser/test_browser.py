@@ -1933,11 +1933,14 @@ def test_peek_cached(browser, work):
         errors = watch(page)
         page.goto(still(url))
         page.wait_for_function("document.querySelectorAll(\".nb-cell[data-idx='3'] table.nb-grid tbody tr\").length === 4", timeout=10000)
+        peeks = []
+        page.on("request", lambda r: peeks.append(r.url) if "/api/peek" in r.url else None)
         area = page.locator(".nb-cell[data-idx='3'] textarea.nb-code-over")
         area.click()
         area.evaluate("e => { const i = e.value.indexOf('count(*)') - 1; e.setSelectionRange(i, i); }")
         page.keyboard.press("ArrowRight")
         page.wait_for_timeout(900)
+        check(not peeks, f"the editor does not ask for peeks the server would refuse ({len(peeks)} sent)")
         refused = page.evaluate(probe)
         check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
               f"a notebook reopened with its cached results is not peeked at until it is run ({refused})")

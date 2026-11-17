@@ -24,10 +24,9 @@ var AppPeek = (function () {
   function cellOf(ta) { return +ta.closest('.nb-cell').getAttribute('data-idx'); }
   // The server counts bytes; the textarea counts UTF-16 units.
   function bytes(text, chars) { return new TextEncoder().encode(text.slice(0, chars)).length; }
-  // Opening a notebook does not run it: there is nothing to peek at until the reader has run something.
-  function trusted() {
-    return App.cells.some(function (c) { return c.result && c.result.status && c.result.status !== 'skipped'; });
-  }
+  // Opening a notebook does not run it: there is nothing to peek at until the reader has run something in
+  // this server. Results remembered from an earlier run do not count (the server says, App.trusted).
+  function trusted() { return !!App.trusted; }
 
   P.hide = function () {
     clearTimeout(timer);
