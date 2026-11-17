@@ -50,6 +50,8 @@ cell's own `hide=`. Prose and inputs are always kept. A results-only report is `
 
 Add `#present` to an exported page's address to [present](reading.md#presenting) it one screen
 at a time.
+Its **wide** control, or `?width=wide` in the address, lets it use the whole window
+([wide pages](reading.md#wide-pages)). A PDF is always printed at the normal width.
 
 Tables keep `page_rows` rows per query cell (default 100, and at least the cell's `rows=`), and the
 page lets readers page through them.

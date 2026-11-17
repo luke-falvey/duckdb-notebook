@@ -254,6 +254,9 @@ create, because all test files share one database.
   ends identical to `ink=off`. Its times are on the pen clock (`Ink.penNow()`), which `Ink.advance(ms)`
   moves at the reader's speed; `test_ink_watch` shows how to drive it. A piece is taken apart only when
   the pen reaches it, so a component that changes size or content while waiting needs nothing special.
+- Chromium writes `el.style` changes into the `style` attribute lazily: `removeAttribute('style')` after an
+  `el.style` write that nothing has read since leaves `style=""` behind. Ink's `restore()` reads the
+  attribute first; do the same anywhere that puts an element's attribute back.
 - Browser tests start a server with `serve()` and stop it with `stop()` (`test/browser/test_browser.py`),
   which make sure no DuckDB shell is left running when a check fails.
 - Browser tests check the finished page and load every page with `ink=off` (`still()` in
