@@ -700,6 +700,320 @@ def test_ink_editor(browser, work):
         shell.communicate(timeout=30)
 
 
+# ---- Presenting (frontend/render-present.js, docs/DESIGN.md §16) ---------------------------------
+
+PRESENT_NOTEBOOK = """-- %% [markdown]
+/*
+# Screens
+*/
+
+-- %% numbers hide=code
+SELECT range AS n, range * range AS square FROM range(6);
+
+-- %% [markdown] screen=join
+/*
+A note that stays with the table above it.
+*/
+
+-- %% secret hide=all
+SELECT 'never shown' AS note;
+
+-- %% chart left from=numbers span=6
+/*
+mark: bar
+x: {field: n, type: ordinal}
+y: square
+*/
+
+-- %% chart right from=numbers span=6
+/*
+mark: line
+x: n
+y: square
+*/
+
+-- %% chart alone from=numbers span=6 screen=new
+/*
+mark: point
+x: n
+y: square
+*/
+
+-- %% skipped screen=skip
+SELECT 'left out of the presentation' AS note;
+
+-- %% [markdown]
+/*
+""" + "\n\n".join(f"Line {i} of a screen that is taller than any window." for i in range(60)) + """
+*/
+"""
+
+PRESENT_STATE = """() => ({
+    on: document.body.classList.contains('presenting'),
+    page: (document.querySelector('.nb-present-page') || {}).textContent || '',
+    cells: [...document.querySelectorAll('.nb-cell')].map(c => +c.dataset.idx),
+    hash: location.hash, scale: Present.scale })"""
+
+
+def present_state(page):
+    return page.evaluate(PRESENT_STATE)
+
+
+def test_present(browser, work):
+    db = os.path.join(work, "present.duckdb")
+    notebook = os.path.join(work, "screens.sql")
+    with open(notebook, "w") as f:
+        f.write(PRESENT_NOTEBOOK)
+    screens, pre = os.path.join(work, "screens.html"), os.path.join(work, "present_pre.html")
+    revenue = os.path.join(ROOT, "examples", "revenue.sql")
+    sql(db, f"FROM notebook_export('{notebook}', file := '{screens}')",
+        f"FROM notebook_export('{revenue}', file := '{pre}', interactive := 'precomputed')")
+    viewport = {"width": 1366, "height": 768}
+
+    # How screens are formed, as a function of the cells alone.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.goto(still("file://" + screens))
+    page.wait_for_function("window.__NB_READY === true")
+    formed = page.evaluate("""() => {
+      const cell = (kind, span, screen, visible) => ({ kind, span, screen, visible: visible !== false });
+      return JSON.stringify([
+        Present.screens([cell('markdown'), cell('sql'), cell('chart', 6), cell('chart', 6), cell('chart', 6)]),
+        Present.screens([cell('input', 6), cell('input', 6), cell('chart', 4), cell('chart', 4), cell('chart', 4), cell('sql')]),
+        Present.screens([cell('sql'), cell('markdown', 12, 'join'), cell('chart', 6), cell('chart', 6, 'new'), cell('sql', 12, 'skip'), cell('sql', 12, null, false)])
+      ]);
+    }""")
+    check(formed == "[[[0],[1],[2,3],[4]],[[0,1,2,3,4],[5]],[[0,1],[2],[3]]]",
+          f"a screen is a row of the reading layout; inputs go with what follows; screen= joins, splits and skips ({formed})")
+
+    # Entering from an export's quiet control; code is hidden as in the reading view.
+    check(page.locator("pre.nb-source").count() > 0 and not present_state(page)["on"], "an export opens as a page, with its code")
+    start = page.locator("button.nb-present-start")
+    check(start.is_visible() and start.evaluate("e => getComputedStyle(e).borderTopWidth") == "0px", "an export has a quiet control to present it")
+    start.click()
+    st = present_state(page)
+    check(st["on"] and st["page"] == "1 / 5" and st["cells"] == [0] and st["hash"] == "#present",
+          f"the control opens presenting on the first screen, with a page indicator ({st})")
+    mark = page.locator(".nb-present-page")
+    check(mark.evaluate("e => getComputedStyle(e).color") == "rgb(134, 142, 150)" and "Excalifont" in mark.evaluate("e => getComputedStyle(e).fontFamily")
+          and not page.locator(".nb-viewer-header").is_visible(),
+          "the indicator is in the handwriting, in the muted ink, and nothing else is on the page")
+    grid = page.locator(".nb-cells").bounding_box()
+    check(st["scale"] > 1.1 and abs(grid["x"] - (1366 - grid["x"] - grid["width"])) < 2 and grid["x"] > 60
+          and abs(grid["y"] - (768 - grid["y"] - grid["height"])) < 2,
+          f"a screen is drawn larger than the page and centred, with margins (scale {st['scale']:.2f})")
+
+    # Moving: keys, and clicks on the page.
+    def moves(action, expect_page, expect_cells, message):
+        action()
+        st = present_state(page)
+        check(st["page"] == expect_page and st["cells"] == expect_cells, f"{message} ({st['page']}, cells {st['cells']})")
+    moves(lambda: page.keyboard.press("ArrowRight"), "2 / 5", [1, 2], "Right arrow moves on; screen=join keeps a cell with the one before it")
+    check(page.locator("pre.nb-source").count() == 0 and page.locator(".nb-cell[data-idx='1'] table.nb-grid").count() == 1,
+          "presenting shows results, not code")
+    moves(lambda: page.keyboard.press(" "), "3 / 5", [4, 5], "Space moves on; cells that share a row share a screen, and hide=all has none")
+    moves(lambda: page.keyboard.press("PageDown"), "4 / 5", [6], "Page Down moves on; screen=new starts a screen")
+    alone = page.locator(".nb-cells").bounding_box()
+    check(abs(alone["x"] - (1366 - alone["x"] - alone["width"])) < 2, "a cell narrower than the page is centred on its screen")
+    moves(lambda: page.keyboard.press("ArrowLeft"), "3 / 5", [4, 5], "Left arrow goes back")
+    moves(lambda: page.keyboard.press("PageUp"), "2 / 5", [1, 2], "Page Up goes back")
+    moves(lambda: page.keyboard.press("End"), "5 / 5", [8], "End jumps to the last screen; screen=skip has none")
+    st = present_state(page)
+    tall = page.evaluate("(() => { const r = document.getElementById('nb-root'); return [r.scrollHeight, r.clientHeight]; })()")
+    check(abs(st["scale"] - 0.8) < 0.01 and tall[0] > tall[1] + 500,
+          f"a screen far taller than the window is drawn a little smaller than the reading view, no further, and scrolls (scale {st['scale']:.2f}, {tall[0]} > {tall[1]})")
+    moves(lambda: page.keyboard.press("ArrowRight"), "5 / 5", [8], "there is nothing after the last screen")
+    moves(lambda: page.keyboard.press("Home"), "1 / 5", [0], "Home jumps to the first screen")
+    moves(lambda: page.mouse.click(40, 400), "2 / 5", [1, 2], "a click on the page moves on")
+    moves(lambda: page.locator(".nb-cell[data-idx='1'] td").first.click(), "3 / 5", [4, 5], "so does a click on a table")
+    page.keyboard.press("ArrowLeft")
+    moves(lambda: page.locator(".nb-cell[data-idx='2'] .nb-md").click(), "3 / 5", [4, 5], "and a click on text")
+    page.keyboard.press("ArrowRight")
+    moves(lambda: page.locator("svg.nb-chart-svg").click(), "4 / 5", [6], "a click on a chart does not move on")
+    check(present_state(page)["hash"] == "#present=4", "the screen is kept in the URL hash")
+    page.reload()
+    page.wait_for_function("window.__NB_READY === true")
+    moves(lambda: None, "4 / 5", [6], "a reload comes back to the same screen")
+
+    # Leaving.
+    page.keyboard.press("Escape")
+    st = present_state(page)
+    check(not st["on"] and st["cells"] == [0, 1, 2, 4, 5, 6, 7, 8] and st["hash"] == "" and page.locator("pre.nb-source").count() > 0
+          and page.locator(".nb-present-mark").count() == 0 and page.locator(".nb-cells").evaluate("e => e.getAttribute('style') || ''") == "",
+          f"Escape leaves: the whole page is back, code and all, with nothing left behind ({st})")
+    box = page.locator(".nb-cell[data-idx='6']").bounding_box()
+    check(0 <= box["y"] < 768, "leaving lands on the cell that was being presented")
+    page.locator("button.nb-present-start").click()
+    page.locator("button.nb-present-leave").click()
+    check(not present_state(page)["on"], "the faint ✕ beside the page number leaves too")
+
+    # A link can open straight into presenting. Print gets the whole notebook.
+    page.goto("file://" + screens + "?ink=off#present=3")
+    page.wait_for_function("window.__NB_READY === true")
+    moves(lambda: None, "3 / 5", [4, 5], "#present=3 in a link opens the third screen")
+    page.evaluate("window.dispatchEvent(new Event('beforeprint'))")
+    st = present_state(page)
+    check(not st["on"] and len(st["cells"]) == 8, "printing leaves presenting, so paper gets the whole notebook")
+    page.emulate_media(media="print")
+    check(not page.locator("button.nb-present-start").is_visible(), "the control is not printed")
+    page.emulate_media(media="screen")
+    for width, height in ((1920, 1080), (700, 500)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.goto("file://" + screens + f"?ink=off&v={width}#present=3")
+        page.wait_for_function("window.__NB_READY === true")
+        page.wait_for_timeout(200)
+        g, st = page.locator(".nb-cells").bounding_box(), present_state(page)
+        check(g["x"] >= 20 and g["x"] + g["width"] <= width - 20 and g["y"] >= 20 and g["y"] + g["height"] <= height - 20
+              and page.evaluate("document.documentElement.scrollWidth <= innerWidth"),
+              f"at {width}x{height} the screen fits the window with margins (scale {st['scale']:.2f})")
+    check(not errors, f"no browser errors presenting an export {errors[:3]}")
+
+    # Inputs stay live: a precomputed export switches results without moving on.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.goto("file://" + pre + "?ink=off#present=3")
+    page.wait_for_function("window.__NB_READY === true")
+    st = present_state(page)
+    check(st["cells"] == [4, 5, 6], f"inputs are presented with the cell that follows them ({st})")
+    regions = "() => [...new Set([...document.querySelectorAll(\".nb-cell[data-idx='6'] tbody td:nth-child(4)\")].map(e => e.textContent))].join()"
+    before = page.evaluate(regions)
+    page.locator(".nb-input select").first.select_option(label="US")
+    page.wait_for_function(f"({regions})() === 'US'")
+    st = present_state(page)
+    check(before != "US" and st["page"].startswith("3 /") and st["cells"] == [4, 5, 6], f"an input changes what depends on it and stays on its screen ({before} -> US, {st['page']})")
+    page.keyboard.press("ArrowRight")
+    check(present_state(page)["page"].startswith("4 /"), "after a value is picked, the arrow keys move between screens again")
+    page.keyboard.press("Home")
+    check("US" in page.locator(".nb-md").first.text_content(), "the other screens show the new value")
+    check(not errors, f"no browser errors presenting a precomputed export {errors[:3]}")
+
+    # The pen. Each screen is written as it arrives, scaled with it; one already shown is not written again.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.add_init_script("window.__INK_PAUSE = true")
+    page.goto("file://" + screens + "#present")
+    page.wait_for_function("window.__NB_READY === true && document.fonts.status === 'loaded'")
+    frames(page, 3)
+    page.evaluate("Ink.advance(300)")
+    frames(page, 2)
+    state = page.evaluate(INK_STATE)
+    check(state["canvases"] > 0 and state["hidden"] > 0 and page.locator(".nb-cells").inner_text().strip() == "Screens",
+          f"a screen is written as it arrives: part-way through, a canvas writes text that is already in the DOM ({state})")
+    job = page.evaluate("(() => { const j = Ink.jobs().filter(j => j.state === 'running' && j.textRoot && /^p1cell/.test(j.key)).sort((a, b) => b.start + b.end - a.start - a.end)[0]; return { start: j.start, end: j.end, now: Ink.now(), z: j.z }; })()")
+    page.evaluate(f"Ink.advance({job['start'] + job['end'] - job['now'] - 0.5})")
+    frames(page, 2)
+    heading = page.locator(".nb-cells")
+    last_frame = heading.screenshot()
+    writing = page.evaluate(INK_STATE)["canvases"] > 0
+    page.evaluate("Ink.advance(5)")
+    frames(page, 2)
+    diff = pixel_diff(page, last_frame, heading.screenshot())
+    check(writing and job["z"] > 1.1 and diff["ink"] > 1000 and diff["differ"] < diff["ink"] * 0.02,
+          f"on a scaled screen the pen's last frame matches the text it hands over to (scale {job['z']:.2f}, {diff['differ']} of {diff['ink']} inked pixels differ)")
+    page.keyboard.press("ArrowRight")
+    frames(page, 3)
+    plan = page.evaluate("Ink.plans.filter(p => /^p1cell1\\//.test(p.key)).pop()")
+    check(page.evaluate(INK_STATE)["running"] > 0 and plan and plan["dur"] > 200,
+          f"moving on writes the next screen at the pen's own pace, not as a quick update ({plan})")
+    page.evaluate("Ink.advance(60000)")
+    frames(page, 3)
+    written = page.evaluate(INK_STATE)["jobs"]
+    page.keyboard.press("ArrowLeft")
+    frames(page, 3)
+    back = page.evaluate(INK_STATE)
+    # Only the page number is new.
+    check(back["jobs"] == written + 1 and page.evaluate("Ink.jobs().every(j => j.key === 'present/mark')"),
+          f"going back to a screen already shown writes nothing: it is there at once ({written} -> {back['jobs']} jobs)")
+    page.evaluate("Ink.advance(60000)")
+    frames(page, 3)
+    page.keyboard.press("Escape")
+    page.evaluate("Ink.advance(60000); Ink.finishAll()")
+    settle(page)
+    done = page.evaluate(INK_STATE)
+    off = browser.new_page(viewport=viewport)
+    off.goto(still("file://" + screens))
+    off.wait_for_function("window.__NB_READY === true && document.fonts.status === 'loaded'")
+    settle(off)
+    check(done["canvases"] == 0 and done["hidden"] == 0 and done["styled"] == 0 and html_of(page, "#nb-root") == html_of(off, "#nb-root"),
+          f"no trace: after presenting, the page is exactly the page drawn without it ({done})")
+    check(not errors, f"no browser errors while a presentation is written {errors[:3]}")
+
+
+def test_present_editor(browser, work):
+    notebook = os.path.join(work, "present_editor.sql")
+    shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
+    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    url = shell.stdout.readline().strip()
+    try:
+        page = browser.new_page(viewport={"width": 1366, "height": 768})
+        errors = watch(page)
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.click("#gear")
+        check(page.locator("#view-present").is_visible(), "the gear menu has Present")
+        page.click("#view-present")
+        # Nothing had run: presenting runs the notebook first.
+        page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent === '1 / 7'", timeout=30000)
+        st = present_state(page)
+        check(st["on"] and st["cells"] == [1] and not page.locator(".nb-toolbar").is_visible() and not page.locator("#menu").is_visible()
+              and page.locator("textarea:visible").count() == 0 and page.locator(".nb-tools:visible, .nb-margin:visible, .nb-add:visible").count() == 0,
+              f"Present shows the first screen alone: no toolbar, no code, no cell chrome ({st})")
+        check("EU" in page.locator(".nb-md").text_content() and st["scale"] > 1.1, "a notebook that had not run is run before it is presented")
+        page.keyboard.press("ArrowRight")
+        page.keyboard.press("ArrowRight")
+        st = present_state(page)
+        check(st["page"] == "3 / 7" and st["cells"] == [4, 5, 6] and st["hash"] == "#present=3", f"the inputs share a screen with the query after them ({st})")
+
+        # Inputs work, and do not move on.
+        regions = "() => [...new Set([...document.querySelectorAll(\".nb-cell[data-idx='6'] tbody td:nth-child(4)\")].map(e => e.textContent))].join()"
+        page.locator(".nb-input select").first.select_option(label="US")
+        page.wait_for_function(f"({regions})() === 'US'", timeout=30000)
+        st = present_state(page)
+        check(st["page"] == "3 / 7" and st["cells"] == [4, 5, 6], f"an input re-runs what reads it and stays on its screen ({st['page']})")
+        slider = page.locator(".nb-input input[type=range]")
+        slider.fill("300")
+        slider.dispatch_event("change")
+        page.wait_for_function("[...document.querySelectorAll(\".nb-cell[data-idx='6'] tbody td:nth-child(6)\")].every(e => parseFloat(e.textContent.replace(/,/g, '')) >= 300)", timeout=30000)
+        check(present_state(page)["page"] == "3 / 7", "so does a slider")
+
+        # Brushing a chart filters what depends on it, without moving on.
+        page.keyboard.press("ArrowRight")
+        overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
+        box = overlay.bounding_box()
+        page.evaluate("App.status('')")
+        page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + 20)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] * 0.3, box["y"] + 40, steps=5)
+        page.mouse.up()
+        page.wait_for_function("!App.running && document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        check(present_state(page)["page"] == "4 / 7" and page.locator(".nb-cell[data-idx='7'] .nb-brush").count() >= 1, "brushing a chart does not move on")
+        page.keyboard.press("End")
+        st = present_state(page)
+        months = page.locator(".nb-cell[data-idx='10'] table.nb-grid tbody tr td:nth-child(3)").all_text_contents()
+        check(st["page"] == "7 / 7" and len(months) > 0 and all(m[5:7] in ("03", "04") for m in months),
+              f"the brush has filtered a later screen ({sorted(set(m[:7] for m in months))})")
+
+        # A reload stays in the presentation, and Escape gives the editor back as it was.
+        page.reload()
+        page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent === '7 / 7'", timeout=30000)
+        check(present_state(page)["cells"] == [10], "a reload comes back to the same screen")
+        page.keyboard.press("Escape")
+        st = present_state(page)
+        check(not st["on"] and len(st["cells"]) == 11 and page.locator(".nb-toolbar").is_visible() and page.locator("textarea:visible").count() > 3
+              and not page.evaluate("App.reading") and st["hash"] == "",
+              f"Escape leaves presenting for the editor as it was ({st})")
+        check(page.locator("#cells").evaluate("e => e.getAttribute('style') || ''") == "" and page.locator(".nb-present-mark").count() == 0,
+              "nothing of the presentation is left on the page")
+        check(not errors, f"no browser errors presenting in the editor {errors[:3]}")
+    finally:
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -714,6 +1028,8 @@ def main():
             test_exports(browser, work, chromium)
             test_ink(browser, work, chromium)
             test_ink_editor(browser, work)
+            test_present(browser, work)
+            test_present_editor(browser, work)
         finally:
             browser.close()
     shutil.rmtree(work, ignore_errors=True)

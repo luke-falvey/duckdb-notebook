@@ -496,6 +496,31 @@ var App = (function () {
     return cell ? +cell.getAttribute('data-idx') : -1;
   }
 
+  // ---- Presenting (render-present.js) ---------------------------------------------------------
+  // What the reading view shows of a cell, as presenting needs to know it before the cell is built:
+  // prose, inputs, charts and query results, unless hidden. hide=all leaves a cell without a screen.
+  A.presentable = function (cell) {
+    var hidden = A.hidden(cell), r = cell.result;
+    if (cell.kind === 'notebook' || (hidden.code && hidden.output)) return false;
+    if (cell.kind === 'input') return true;
+    if (hidden.output) return false;
+    if (cell.kind === 'markdown') return true;
+    return !!(r && (r.data || r.status === 'error'));
+  };
+  var wasReading = false;
+  A.present = {
+    render: function () { A.render(); },
+    // Presenting is the reading view, a screen at a time. A notebook that has not run has nothing to
+    // show, so it runs first.
+    enter: function () {
+      wasReading = A.reading;
+      A.reading = true;
+      A.menu(false);
+      if (!A.running && !A.cells.some(function (c) { return c.result; })) A.run(null);
+    },
+    leave: function () { A.reading = wasReading; }
+  };
+
   A.render = function () {
     var root = $('cells'), pointed = pointedIndex();
     // Rebuilding the cells empties the page for a moment; keep the reader where they were.
@@ -507,7 +532,14 @@ var App = (function () {
     }
     root.innerHTML = '';
     document.getElementById('app').classList.toggle('reading', A.reading);
+    var screen = null;
+    if (Present.on) {
+      screen = Present.begin(A.cells.map(function (c, i) {
+        return { id: i, span: c.options && c.options.span, kind: c.kind, screen: c.options && c.options.screen, visible: A.presentable(c) };
+      }), root, main);
+    } else Present.reset(root);
     A.cells.forEach(function (cell, i) {
+      if (screen && !screen[i]) return;
       if (!A.reading) root.appendChild(addBar(i));
       var hidden = A.hidden(cell);
       var hideCode = hidden.code && !(cell.peekCode && !A.reading);
@@ -582,6 +614,7 @@ var App = (function () {
     }
     if (window.AppExtra) AppExtra.graph();
     main.scrollTop = scrollTop;
+    if (Present.on) Present.finish(main, root, A.running ? 'Running…' : 'Nothing to show yet: leave (Esc) and run the notebook.');
     var timing = $('show-timing');
     if (timing) timing.checked = A.timing();
   };
@@ -593,7 +626,8 @@ var App = (function () {
   function write(box, cell) {
     // Keyed by the cell itself, not its position: moving or inserting a cell does not rewrite the others.
     if (!cellIds.has(cell)) cellIds.set(cell, ++nextCellId);
-    var id = 'cell' + cellIds.get(cell) + '/';
+    // A presentation writes its screens afresh, whatever the editor has already written.
+    var id = Present.prefix() + 'cell' + cellIds.get(cell) + '/';
     Array.prototype.forEach.call(box.children, function (part) {
       var c = part.getAttribute('class') || '';
       if (c.indexOf('sk-outline') >= 0) Ink.present(part, id + 'outline', cell.kind + (cell.name || ''), Ink.bracket(box));
@@ -690,6 +724,7 @@ var App = (function () {
     $('autorun').onchange = function (e) { A.autorun = e.target.checked; };
     $('save').onclick = A.save;
     $('view-reading').onclick = function () { A.reading = !A.reading; $('view-reading').classList.toggle('primary', A.reading); A.render(); };
+    $('view-present').onclick = function () { Present.enter(0); };
     $('view-graph').onclick = function () { A.graph = !A.graph; $('view-graph').classList.toggle('primary', A.graph); A.render(); };
     $('view-sidebar').onclick = function () { $('app').classList.toggle('with-sidebar'); $('view-sidebar').classList.toggle('primary'); };
     var theme = localStorage.getItem('nb.theme');
@@ -735,6 +770,7 @@ var App = (function () {
     } else $('ink').disabled = true;
     A.api('GET', '/api/notebook').then(function (data) {
       A.load(data);
+      Present.start(A.present);
       A.watch();
       if (window.AppExtra) { AppExtra.catalog(); AppExtra.picker(); }
       A.status('Opened. Nothing has run yet: press Run all.');

@@ -399,3 +399,13 @@ In the editor, opening `revenue.sql` settles in 2.2 s and a Run all in 1.7 s.
   the notebook, and appear as before.
 - The few pixels by which a moving glyph's mask can reveal a moving neighbour (above).
 - Taking a very large chart apart still costs one long frame when it scrolls into view.
+
+**Presenting scales the page, and the writer follows.** A presented screen (DESIGN §16) is the reading
+layout under one CSS transform. A piece's canvases sit inside that transform, so `layers()` measures
+the scale of their host (its on-screen width over its layout width) and positions, sizes and draws in
+the host's own px, with a backing store denser by the same factor. Characters measured from the
+browser's layout are divided by the scale; SVG text already carries it in its screen matrix, which is
+divided too. A presentation's pieces have their own keys, so each screen is written when it first
+arrives and never again; moving to it calls `Ink.fresh` so the key press does not make it a quick
+update. The glyph-alignment test is repeated on a scaled screen.
+
