@@ -64,11 +64,11 @@ set(EXTENSION_SOURCES
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-# Size (docs/DESIGN.md section 16). A loadable extension statically links all of DuckDB (about
-# 97% of its bytes), so what is left to trim is the symbol table: strip it at link time, before
-# DuckDB's metadata footer is appended (and long before signing). Only the entry point needs to be
-# visible, and it is in the dynamic symbol table, which stripping keeps. MSVC keeps symbols in a
-# separate PDB, so the DLL has nothing to strip.
+# Size (docs/DESIGN.md, "Building for every platform"). A loadable extension statically links
+# all of DuckDB (about 97% of its bytes), so what is left to trim is the symbol table: strip it at
+# link time, before DuckDB's metadata footer is appended. The entry point is in the dynamic symbol
+# table, which stripping keeps. MSVC keeps symbols in a separate PDB: nothing to strip. Emscripten
+# is left alone (its -s means something else).
 if(APPLE)
   target_link_options(${LOADABLE_EXTENSION_NAME} PRIVATE -Wl,-x)
 elseif(NOT MSVC AND NOT EMSCRIPTEN)

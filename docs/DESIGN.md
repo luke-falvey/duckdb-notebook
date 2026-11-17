@@ -812,3 +812,55 @@ or a bracket (FORMAT §5.1).
 - **The pen needed nothing.** Notes are `Sketch` shapes and SVG text appended after the marks, so they
   are written after the marks with no animation code. A note in a query cell whose answer depends on
   an input can point at the wrong thing; that is the author's to judge, and the skill says so.
+
+## 17. Building for every platform
+
+The extension is built by DuckDB's shared pipeline (`extension-ci-tools`) for every native platform
+DuckDB distributes for: Linux amd64 and arm64 (glibc and musl), macOS amd64 and arm64, Windows amd64
+and arm64 (MSVC) and amd64 with MinGW. The community extension repository requires all of them. The
+WebAssembly builds are handled separately (they need the server to be optional).
+
+### What the binary is made of
+
+The loadable extension on linux_amd64 was 49.0 MB. Measured, not guessed:
+
+- **DuckDB is about 97% of it.** DuckDB 2.0 distributes C++ extensions with `EXTENSION_STATIC_BUILD`:
+  each `.duckdb_extension` links `duckdb_static` whole-program, with `--gc-sections` and
+  `--exclude-libs,ALL`, so it does not depend on the host exporting DuckDB's symbols (Python, R and
+  others load DuckDB with `RTLD_LOCAL`). Whatever the extension can reach stays, and an extension that
+  runs SQL through a `Connection` reaches the parser, planner, optimizer, every operator and every
+  built-in function. Built the same way, DuckDB's own `json` extension is 48.8 MB and its
+  `loadable_extension_demo` 47.5 MB; extensions that only register functions are about 13 MB.
+- **Our code is about 1.3 MB**: the frontend assets 0.46 MB, the HTTP server (cpp-httplib) 0.37 MB,
+  the chart compiler 0.19 MB, the rest smaller.
+- **The symbol table was 8.5 MB** (`.symtab` and `.strtab`): the binary was not stripped. Release
+  builds have no debug information, so nothing else was dead weight.
+
+So the one large cut that changes nothing is stripping: the link now passes `-s` (`-Wl,-x` on macOS;
+MSVC keeps symbols in a PDB already). On linux_amd64 that is 49.0 → 40.5 MB, and 16.8 → 15.2 MB as
+gzip, which is how extensions are downloaded. The CI job "Extension sizes" reports every platform.
+
+Considered and not done, with numbers:
+
+- **Identical code folding** (`--icf` in gold or lld) saved another 1–2 MB, but needs a linker that
+  DuckDB's toolchains do not promise on every platform, and folding is only safe when nothing compares
+  function addresses, which DuckDB does when it compares functions.
+- **Compressing the frontend** would save about 250 KB (0.6%): the fonts are already woff2, and the
+  JavaScript and CSS gzip from 360 KB to 110 KB. Not worth a decompressor in the server and exports.
+- **Not linking DuckDB.** The only way to a small binary is an extension against DuckDB's C API, which
+  links nothing (`cpp_api_demo` is 0.5 MB). This extension walks DuckDB's parse tree, uses
+  `ClientContext`, the object cache and C++ table functions, so that is a rewrite, not a build flag.
+  The first versions of this extension were under 1 MB because they were not built the distributed way.
+
+### Platform notes
+
+- **No POSIX in portable code.** `unistd.h`, `getcwd` and `/tmp` broke the MSVC build; DuckDB's
+  `FileSystem` has what is needed (`GetWorkingDirectory`, `IsPathAbsolute`, `JoinPath`,
+  `GetEnvVariable`).
+- **PDF export runs a browser through the shell**, so quoting differs: single quotes for `sh`, double
+  quotes for `cmd.exe`, which also strips the outer pair of a command line that starts with a quote.
+  Chrome and Edge are looked for on `PATH` and in their usual install places on Windows and macOS.
+- **Error messages differ by platform.** A test that expected Linux's "No such file or directory"
+  failed on Windows ("The system cannot find the file specified"). Match the part DuckDB writes.
+- **The pipeline does not test everywhere it builds**: it runs `test/sql` on linux_amd64 (and musl),
+  linux_arm64_musl, osx_arm64 and Windows, not on linux_arm64 or osx_amd64.

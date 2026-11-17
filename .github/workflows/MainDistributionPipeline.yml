@@ -39,7 +39,8 @@ jobs:
       reduced_ci_mode: disabled
 
   # The size of each platform's extension, raw and as distributed (gzip), in the run's summary.
-  # A loadable extension links all of DuckDB statically, so most of it is DuckDB (DESIGN §16).
+  # A loadable extension links all of DuckDB statically, so most of it is DuckDB
+  # (docs/DESIGN.md, "Building for every platform").
   extension-sizes:
     name: Extension sizes
     needs: duckdb-stable-build
