@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make -f core.Makefile core_test
+      - run: make -f core.Makefile frontend_check
 
   # DuckDB's shared extension pipeline: builds the extension and runs test/sql.
   # Only linux_amd64 for now, to keep CI quick while the extension is young. Remove

@@ -10,6 +10,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	RegisterNotebookCells(loader);
 	RegisterNotebookSql(loader);
 	RegisterNotebookRun(loader);
+	RegisterNotebookChartQuery(loader);
+	RegisterNotebookStorage(loader);
+	RegisterNotebookExport(loader);
+	RegisterNotebookServer(loader);
 }
 
 void NotebookExtension::Load(ExtensionLoader &loader) {

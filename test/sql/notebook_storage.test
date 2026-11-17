@@ -1,0 +1,86 @@
+# name: test/sql/notebook_storage.test
+# description: notebook_save and notebook_checkout keep notebooks, with history, inside the database
+# group: [notebook]
+
+require notebook
+
+query IIII
+FROM notebook_save('test/notebooks/basic.sql', message := 'first')
+----
+basic	1	true	first version
+
+# Saving the same text again is a no-op
+query IIII
+FROM notebook_save('test/notebooks/basic.sql')
+----
+basic	1	false	unchanged since version 1
+
+query IIII
+SELECT name, version, content_hash = sha256(content), message FROM _notebook.versions
+----
+basic	1	true	first
+
+# A stored notebook is a source like a file
+query I
+SELECT count(*) FROM notebook_cells('db:basic')
+----
+9
+
+query II
+SELECT version, content = (SELECT content FROM _notebook.current WHERE name = 'basic') FROM notebook_checkout('basic')
+----
+1	true
+
+statement ok
+FROM notebook_checkout('basic', file := '__TEST_DIR__/basic_copy.sql')
+
+query I
+SELECT content = (SELECT content FROM _notebook.versions WHERE version = 1) FROM read_text('__TEST_DIR__/basic_copy.sql')
+----
+true
+
+# A new version, then an attempt to save the older text over it
+query IIII
+FROM notebook_save('test/notebooks/failing.sql', name := 'basic')
+----
+basic	2	true	new version
+
+statement error
+FROM notebook_save('test/notebooks/basic.sql')
+----
+matches version 1 of 'basic', but version 2 is newer
+
+query II
+SELECT version, saved FROM notebook_save('test/notebooks/basic.sql', force := true)
+----
+3	true
+
+query I
+SELECT count(*) FROM notebook_cells('db:basic@2')
+----
+3
+
+# Checkout refuses to overwrite a file with unsaved work
+statement ok
+COPY (SELECT 'SELECT 1; -- local edit' AS line) TO '__TEST_DIR__/edited.sql' (HEADER false, QUOTE '')
+
+statement error
+FROM notebook_checkout('basic', file := '__TEST_DIR__/edited.sql')
+----
+has changes that are not saved in 'basic'
+
+statement ok
+FROM notebook_checkout('basic', file := '__TEST_DIR__/edited.sql', force := true)
+
+statement error
+FROM notebook_checkout('basic', version := 9)
+----
+No stored notebook 'basic' with version 9
+
+statement error
+FROM notebook_checkout('missing')
+----
+No stored notebook 'missing'
+
+statement ok
+DROP SCHEMA _notebook CASCADE

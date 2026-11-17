@@ -3,17 +3,22 @@
 #include "duckdb/common/chrono.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/client_config.hpp"
 #include "duckdb/main/database.hpp"
 #include "notebook/script.hpp"
+#include "notebook/session.hpp"
 
-// notebook_run(path) runs a notebook headlessly: every cell in file order, in a
-// connection of its own. It is the seed of the runner the server will use.
+#include <map>
+
+// notebook_run(path, params := {...}) runs a notebook headlessly, in a connection of its
+// own. Cells run in file order, except that a markdown cell waits for the cells its
+// `{{ }}` expressions read (notebook::RunOrder). It is the seed of the runner the server
+// will use.
 //
-// The session connection is created here and destroyed when the scan finishes. Never
+// The Runner's connection is created here and destroyed when the scan finishes. Never
 // store a Connection (or anything else that owns the DatabaseInstance) in state that
 // outlives a query: it would keep the database open after the user closes it, so the
-// file stays locked and is not checkpointed. The server must hold a weak_ptr to the
-// DatabaseInstance and make connections on demand.
+// file stays locked and is not checkpointed.
 namespace duckdb {
 
 namespace {
@@ -21,10 +26,15 @@ namespace {
 struct RunBindData : public TableFunctionData {
 	string path;
 	notebook::Notebook notebook;
+	vector<int> order;
+	//! Values from params := {...}, by variable name.
+	std::map<string, Value> params;
 };
 
 struct RunState : public GlobalTableFunctionState {
-	unique_ptr<Connection> session;
+	SessionState session;
+	unique_ptr<Runner> runner;
+	//! Position in RunBindData::order.
 	idx_t next = 0;
 };
 
@@ -34,6 +44,25 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	result->path = input.inputs[0].GetValue<string>();
 	result->notebook = ReadNotebook(context, result->path);
 	ThrowIfInvalid(result->notebook, result->path);
+	result->order = notebook::RunOrder(result->notebook);
+
+	auto params = input.named_parameters.find("params");
+	if (params != input.named_parameters.end() && !params->second.IsNull()) {
+		auto &value = params->second;
+		if (value.type().id() != LogicalTypeId::STRUCT) {
+			throw InvalidInputException("notebook_run: params must be a struct, such as {region: 'US'}, not %s",
+			                            value.type().ToString());
+		}
+		auto &children = StructValue::GetChildren(value);
+		for (idx_t i = 0; i < children.size(); i++) {
+			auto name = StructType::GetChildName(value.type(), i).GetIdentifierName();
+			auto problem = notebook::ParameterError(result->notebook, name);
+			if (!problem.empty()) {
+				throw InvalidInputException("notebook_run: %s", problem);
+			}
+			result->params[name] = children[i];
+		}
+	}
 
 	auto column = [&](const char *name, LogicalType type) {
 		names.emplace_back(name);
@@ -42,85 +71,63 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	column("idx", LogicalType::INTEGER);
 	column("kind", LogicalType::VARCHAR);
 	column("name", LogicalType::VARCHAR);
-	// 'ok', 'error', or 'skipped' for cells with nothing to execute (markdown, chart, metadata).
+	// 'ok', 'error', or 'skipped' for cells with nothing to execute (metadata, markdown without {{ }}).
 	column("status", LogicalType::VARCHAR);
 	column("error", LogicalType::VARCHAR);
-	// Rows a query cell returns. NULL for other cells.
+	// Rows a query cell returns, or rows of a chart's (first) data query. NULL for other cells.
 	column("row_count", LogicalType::BIGINT);
 	column("elapsed_ms", LogicalType::DOUBLE);
+	// Markdown cells: the content with each {{ expr }} replaced by its value.
+	column("output", LogicalType::VARCHAR);
 	return std::move(result);
 }
 
 unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 	auto state = make_uniq<RunState>();
-	// A separate connection gives the notebook its own temp views and variables,
-	// while sharing the caller's attached databases.
-	state->session = make_uniq<Connection>(DatabaseInstance::GetDatabase(context));
-	auto &notebook = input.bind_data->Cast<RunBindData>().notebook;
-	for (auto &name : notebook::UndefinedVariables(notebook)) {
-		auto result = state->session->Query("SET VARIABLE " + notebook::QuoteIdentifier(name) + " = NULL");
-		if (result->HasError()) {
-			result->ThrowError();
-		}
-	}
+	// A separate connection gives the notebook its own temp views and variables, while sharing
+	// the caller's attached databases.
+	state->runner = make_uniq<Runner>(DatabaseInstance::GetDatabase(context), state->session);
+	auto &bind_data = input.bind_data->Cast<RunBindData>();
+	state->runner->ApplyMetadata(bind_data.notebook, bind_data.path);
+	state->runner->InitializeVariables(bind_data.notebook, bind_data.params);
 	return std::move(state);
 }
 
 void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &cells = data.bind_data->Cast<RunBindData>().notebook.cells;
+	auto &bind_data = data.bind_data->Cast<RunBindData>();
+	auto &cells = bind_data.notebook.cells;
 	auto &state = data.global_state->Cast<RunState>();
-	if (state.next >= cells.size()) {
-		// Release the session as soon as the last cell has been reported.
-		state.session.reset();
+	if (state.next >= bind_data.order.size()) {
+		// Release the connection as soon as the last cell has been reported.
+		state.runner.reset();
 		return;
 	}
 	// One cell per call, so a caller reading the result incrementally sees progress.
-	auto &cell = cells[state.next++];
-	auto sql = notebook::CellSql(cell);
-
-	Value status("skipped"), error(LogicalType::VARCHAR), row_count(LogicalType::BIGINT);
-	auto start = steady_clock::now();
-	if (!sql.empty()) {
-		// A cell's script can hold several statements; Query runs them all and returns the last result.
-		auto result = state.session->Query(sql);
-		bool failed = result->HasError();
-		string message = failed ? result->GetError() : string();
-		bool is_query = cell.kind == notebook::CellKind::SQL && cell.is_query;
-		if (!failed && is_query && cell.name.empty()) {
-			row_count = Value::BIGINT(NumericCast<int64_t>(result->RowCount()));
-		}
-		// A result keeps its connection busy until it is released.
-		result.reset();
-		if (!failed && is_query && !cell.name.empty()) {
-			// Creating the view only binds the query; reading it is what proves it runs.
-			auto count = state.session->Query("SELECT count(*) FROM " + notebook::QuoteIdentifier(cell.name));
-			failed = count->HasError();
-			if (failed) {
-				message = count->GetError();
-			} else if (auto chunk = count->Fetch()) {
-				row_count = chunk->GetValue(0, 0);
-			}
-		}
-		status = Value(failed ? "error" : "ok");
-		if (failed) {
-			error = Value(message);
-		}
-	}
-	auto elapsed = std::chrono::duration<double, std::milli>(steady_clock::now() - start).count();
+	auto &cell = cells[NumericCast<idx_t>(bind_data.order[state.next++])];
+	RunnerOptions options;
+	options.params = bind_data.params;
+	// Chart cells compile and query their data, so a broken spec fails the run.
+	options.charts = true;
+	auto outcome = state.runner->Run(bind_data.notebook, cell, options);
 
 	output.data[0].Append(Value::INTEGER(cell.index));
 	output.data[1].Append(Value(notebook::CellKindName(cell.kind)));
 	output.data[2].Append(cell.name.empty() ? Value(LogicalType::VARCHAR) : Value(cell.name));
-	output.data[3].Append(status);
-	output.data[4].Append(error);
-	output.data[5].Append(row_count);
-	output.data[6].Append(sql.empty() ? Value(LogicalType::DOUBLE) : Value::DOUBLE(elapsed));
+	output.data[3].Append(Value(outcome.status));
+	output.data[4].Append(outcome.status == "error" ? Value(outcome.error) : Value(LogicalType::VARCHAR));
+	output.data[5].Append(outcome.row_count >= 0 ? Value::BIGINT(outcome.row_count) : Value(LogicalType::BIGINT));
+	output.data[6].Append(outcome.elapsed_ms >= 0 ? Value::DOUBLE(outcome.elapsed_ms) : Value(LogicalType::DOUBLE));
+	output.data[7].Append(outcome.has_output ? Value(outcome.output) : Value(LogicalType::VARCHAR));
 }
 
 } // namespace
 
 void RegisterNotebookRun(ExtensionLoader &loader) {
-	loader.RegisterFunction(TableFunction("notebook_run", {LogicalType::VARCHAR}, Scan, Bind, Init));
+	TableFunction function("notebook_run", {LogicalType::VARCHAR}, Scan, Bind, Init);
+	// params := {name: value, ...} overrides input defaults and sets selection variables.
+	function.GetSignature().WithTypedKwargs("options",
+	                                        [](TypedKwargs &options) { options.Add("params", LogicalType::ANY); });
+	loader.RegisterFunction(function);
 }
 
 } // namespace duckdb

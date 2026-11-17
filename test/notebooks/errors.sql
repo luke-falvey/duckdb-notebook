@@ -17,3 +17,8 @@ SET VARIABLE other_name = 1;
 /*
 mark: bar
 */
+
+-- %% [markdown]
+/*
+Unclosed {{ 1 +
+*/

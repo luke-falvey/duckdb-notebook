@@ -43,11 +43,16 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	column("options", LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR));
 	column("body", LogicalType::VARCHAR);
 	column("content", LogicalType::VARCHAR);
+	column("charts", LogicalType::LIST(LogicalType::VARCHAR));
 	column("is_query", LogicalType::BOOLEAN);
 	column("variables", LogicalType::LIST(LogicalType::VARCHAR));
+	column("defines", LogicalType::LIST(LogicalType::VARCHAR));
+	column("reads", LogicalType::LIST(LogicalType::VARCHAR));
+	column("depends_on", LogicalType::LIST(LogicalType::INTEGER));
 	column("start_line", LogicalType::INTEGER);
 	column("end_line", LogicalType::INTEGER);
 	column("errors", LogicalType::LIST(LogicalType::VARCHAR));
+	column("warnings", LogicalType::LIST(LogicalType::VARCHAR));
 	return std::move(result);
 }
 
@@ -80,11 +85,20 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		    Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, std::move(keys), std::move(values)));
 		output.data[col++].Append(Value(cell.body));
 		output.data[col++].Append(has_content ? Value(cell.content) : Value(LogicalType::VARCHAR));
+		output.data[col++].Append(StringList(cell.charts));
 		output.data[col++].Append(is_sql ? Value::BOOLEAN(cell.is_query) : Value(LogicalType::BOOLEAN));
 		output.data[col++].Append(StringList(cell.variables));
+		output.data[col++].Append(StringList(cell.defines));
+		output.data[col++].Append(StringList(cell.reads));
+		vector<Value> depends_on;
+		for (auto index : cell.depends_on) {
+			depends_on.push_back(Value::INTEGER(index));
+		}
+		output.data[col++].Append(Value::LIST(LogicalType::INTEGER, std::move(depends_on)));
 		output.data[col++].Append(Value::INTEGER(cell.start_line));
 		output.data[col++].Append(Value::INTEGER(cell.end_line));
 		output.data[col++].Append(StringList(cell.errors));
+		output.data[col++].Append(StringList(cell.warnings));
 	}
 }
 

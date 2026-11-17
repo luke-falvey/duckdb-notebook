@@ -1,7 +1,9 @@
 # DuckDB Notebook: design
 
-Status: draft for review. The first pass of the extension exists (format parser and headless runner;
-see §9 and §11). Everything else here is still design.
+Status: every roadmap step (§9) has a first implementation: format parser, dependency graph,
+headless runner, server and browser UI, chart compiler and renderers, in-database storage, and the
+HTML, PDF, Markdown, SQL, data and DuckDB-WASM exports. §11 records what building it taught us and
+where the implementation departs from the design below.
 
 Companion documents: [FORMAT.md](FORMAT.md) specifies the file format; [RESEARCH.md](RESEARCH.md)
 records the survey this design draws on and what could not be verified.
@@ -72,9 +74,7 @@ SELECT date_trunc('month', ts) AS month, sum(amount) AS revenue
 FROM orders
 WHERE region = $region
 GROUP BY ALL;
-
--- %% chart from=monthly
-/*
+/* chart
 mark: line
 x: month
 y: revenue
@@ -84,6 +84,8 @@ y: revenue
 - **Markers are comments.** `-- %%` starts a cell; prose and chart specs sit in block comments. DuckDB,
   sqlfluff and any editor see a normal SQL file.
 - **A named query cell is a view.** `monthly` above can be queried by any later cell.
+- **A query's output is a table until it is given charts.** Chart specs written after the query are
+  views of its result, shown as tabs (§14).
 - **Parameters are DuckDB variables.** An input cell is a real `SET VARIABLE` statement, and `$region`
   reads it. This needs no templating layer: `$name` is DuckDB 2.0's documented shorthand for
   `getvariable('name')`. Notebooks therefore need DuckDB 2.0 or later.
@@ -114,7 +116,7 @@ the extension writes an expanded script with the wrappers spelled out
 
 | Cell | Defines | Reads |
 |---|---|---|
-| Query cell | Its own name | Tables, views and variables in its SQL |
+| Query cell | Its own name; its charts' selection variables | Tables, views and variables in its SQL; its charts' `filter` selections (no dependency) |
 | Effect cell | Objects it creates or attaches; variables it sets | Same |
 | Input | Its variable | The `from=` cell, if any |
 | Chart | Its selection variable, if any | `from`, `filter`, fields |
@@ -143,9 +145,11 @@ be surprising and sometimes destructive. Editing or running an effect cell marks
 **Inputs and selections** set a variable in the session and trigger the same staleness propagation. To
 the graph, a slider and a chart brush are the same thing.
 
-**Sessions.** Each open notebook gets its own DuckDB connection. Temporary views and variables are
+**Sessions.** Each open notebook gets a session of its own. Temporary views and variables are
 private to a connection (checked in 2.0.0), so two notebooks can both define `monthly` without
-colliding, while both see the same attached databases.
+colliding, while both see the same attached databases. The server does not hold a connection
+between requests (see §11): a session is its variables plus the statements that rebuild its
+temporary views, replayed onto a fresh connection for each request.
 
 **Long queries.** Results stream to the grid in pages. Any running cell can be interrupted. A
 `materialize=table` option stores a slow cell's result as a temp table so dependents do not recompute
@@ -162,11 +166,11 @@ chooses to run it.
  ┌─────────────────────────────────────────────────────────────┐
  │  notebook extension                                         │
  │   ├─ format parser, dependency graph, chart-spec compiler   │
- │   ├─ runner (one connection per notebook session)           │
- │   ├─ exporters (HTML, SQL, Markdown, data)                  │
+ │   ├─ runner (a session replayed onto a connection per run)  │
+ │   ├─ exporters (HTML, PDF, SQL, Markdown, data, WASM)       │
  │   └─ HTTP server on 127.0.0.1 ── serves embedded frontend   │
  └───────────────────────────┬─────────────────────────────────┘
-                             │ HTTP + server-sent events, Arrow results
+                             │ HTTP + server-sent events, JSON results
                       Browser: editor, grids, charts
 ```
 
@@ -177,7 +181,7 @@ the code is already in the database process.
 
 **What it costs.** The extension is C++ and must be rebuilt for each DuckDB release. To limit that,
 all logic that does not need engine internals (the UI, chart rendering, export viewer) lives in the
-TypeScript frontend, and the C++ side stays small: parser, graph, compiler, runner, server.
+JavaScript frontend, and the C++ side stays small: parser, graph, compiler, runner, server.
 
 ### SQL surface
 
@@ -186,18 +190,23 @@ or CI job with no browser.
 
 | Function | Purpose | State |
 |---|---|---|
-| `notebook_cells(path)` | One row per cell: kind, name, options, body, variables read, format errors. `defines` and `reads` come with the graph | Built, without the graph columns |
+| `notebook_cells(path)` | One row per cell: kind, name, options, body, chart specs, variables read, `defines`, `reads`, `depends_on`, errors and warnings | Built |
 | `notebook_sql(path)` | The notebook as a plain SQL script (the `sql` export) | Built |
-| `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count and timing | Built, without `params` |
-| `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook | |
-| `notebook_stop()` | Stop it | |
-| `notebook_export(path, to := 'out.html', format := …, params := {…})` | Export (see §7) | |
-| `notebook_save(path, name := …, message := …)` | Store a file in the current database as a new version | |
-| `notebook_checkout(name, to := 'x.sql', version := …)` | Write a stored version to a file | |
-| `notebook_chart_query(spec, from)` | The SQL a chart spec compiles to, for inspection | |
+| `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count, timing and rendered markdown | Built |
+| `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook | Built |
+| `notebook_stop()` | Stop it | Built |
+| `notebook_export(path, file := 'out.html', format := …, params := {…})` | Export (see §7) | Built |
+| `notebook_save(path, name := …, message := …, force := …)` | Store a file in the current database as a new version | Built |
+| `notebook_checkout(name, file := 'x.sql', version := …, force := …)` | Write a stored version to a file | Built |
+| `notebook_chart_query(spec, from)` | The SQL a chart spec compiles to, for inspection | Built |
+
+The output file parameter is `file :=` rather than `to :=`: `to` is a reserved word in DuckDB's
+grammar and cannot name a parameter. Every function that takes a path also takes `db:<name>` or
+`db:<name>@<version>` for a notebook stored in the database.
 
 All of these are table functions. `notebook_run` executes in its own connection, so tables it creates
-persist but its views and variables do not reach the caller. To run a notebook inside your own
+persist but its views and variables do not reach the caller. It runs chart cells too (compiling and
+querying their data), so a broken chart spec fails a headless run. To run a notebook inside your own
 connection, execute the script `notebook_sql` returns.
 
 ### HTTP server
@@ -205,23 +214,66 @@ connection, execute the script `notebook_sql` returns.
 - Binds to `127.0.0.1` only. A random token is created at start and required on every request. `Host`
   and `Origin` headers are checked as well, which blocks DNS-rebinding and cross-site requests. (The
   official UI relies on an `Origin` check alone.)
-- Endpoints: load and save a notebook, parse to cells and graph, run and interrupt a cell, set a
-  variable, fetch chart data, catalog listing, export. One server-sent-events stream reports cell
-  state changes, catalog changes and edits made to the file by another program.
-- **Results are Arrow IPC streams.** The charting and grid libraries consume Arrow directly. The
-  official UI uses DuckDB's own binary serialisation with an MIT-licensed TypeScript decoder, which is
-  a fallback if producing Arrow inside the extension proves awkward (spike S2).
-- The frontend bundle is compressed and compiled into the extension binary. Nothing is fetched from
-  the network at run time.
+- Endpoints: load and save a notebook, parse to cells and graph, run and interrupt cells, set a
+  variable, page through a result, input choices, catalog listing, export. A server-sent-events
+  stream reports edits made to the file by another program.
+- **Results are JSON** (S2, see §11): a result page or a chart's aggregated rows are small, and JSON
+  needs no decoder in the browser.
+- The server is cpp-httplib, which DuckDB already vendors. The frontend is compiled into the extension
+  binary. Nothing is fetched from the network at run time.
 
 ### Frontend
 
-A TypeScript single-page app:
+A single-page app in plain JavaScript with no dependencies (`frontend/`). It looks like a sketchbook
+drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes, lines and charts.
 
-- CodeMirror 6 editor with DuckDB completion from the live catalog and cell names.
-- Result grid, virtualised, with a per-column profile (type, null share, histogram or top values),
-  the feature people single out in the official UI.
-- Catalog browser for attached databases, with drag-to-insert.
+- A quiet toolbar: the notebook's title, its status, **Run all**, and a gear. Everything else (open,
+  save, auto-run, reading and graph views, catalog, theme, default page size, export) is in the gear's
+  menu.
+
+- An editor per cell with Ctrl+Space completion from the live catalog, cell names and variables, and
+  Shift+Enter to run. The design called for CodeMirror 6; bundling it needs a JavaScript build step in
+  the extension build, which was left for later (§11).
+- SQL highlighting without an editor library (`render-sql.js`): a tokenizer that follows
+  `sql_lexer.cpp` (nested comments, `''` escapes, `$tag$` strings versus `$name` variables) colours a
+  `<pre>` laid exactly behind a transparent textarea, which grows to fit its text so neither scrolls.
+  Keywords come from the running DuckDB's `duckdb_keywords()` (reserved, column-name and type/function
+  ones; unreserved keywords include common column names such as `day`, so only statement words are
+  taken from them) and types from `duckdb_types()`. Query cell names are coloured where SQL reads
+  them. Exports and ```` ```sql ```` fences in prose use the same highlighter (about 5 KB).
+- Result grid, paged from the server, headed by plain column names. An earlier per-column profile
+  (type, null share, histogram or top values) was removed to keep tables quiet; the catalog sidebar
+  still lists column types. A page-size picker under each table writes `rows=N` to the cell, so the
+  choice is saved with the notebook and applies to exports.
+- Margins: a cell keeps only the left edge of its hand-drawn box, a bracket that darkens under the
+  pointer and turns violet with the caret. Its kind symbol (☰ settings, ¶ text, ◉ input, ▦ query, ✎ SQL
+  that changes the database, ∿ chart) and name sit in the left margin; clicking either opens its
+  `-- %%` line to edit the name and options. Its state dot sits in the right margin. Its buttons (run,
+  hide code, hide output, move, delete) form one row at its top right, in line with the state dot,
+  while the pointer or caret is in the cell: a column of them in the margin was out of reach on
+  one-line cells. The buttons are inside the cell, and a redraw keeps them for the cell under a still pointer
+  (browsers recompute `:hover` only when the mouse moves), so clicking one does not hide the rest. Narrow
+  windows put both margins in a row at the top of the cell. Chosen from mockups of four quieter
+  treatments (faint frames, no frames, margins, frames only on hover).
+- Quiet by default: the buttons that add a cell appear
+  only when the pointer is between cells; a cell's rows, what it defines and its run time sit in the
+  bottom right corner of its box (`timing: false` in the `[notebook]` cell hides the time); and a
+  table's chart picker stays behind a "+ chart" button until asked for.
+- Hover values: pointing at a mark shows its values in a paper note by the pointer, in the editor and
+  in exports. On line and area charts the nearest point anywhere along the line answers, marked with a
+  dot, even under a brush; a bar answers anywhere in its column (its row, when horizontal), which is
+  highlighted. Hatched shapes carry an invisible hit area, so the gaps between hatch lines count.
+  Bars on a continuous x (months on a date axis) are as wide as the spacing allows, and the axis is
+  padded so the first and last are too. Re-rendering
+  keeps the scroll position, so changing an input or brushing a chart does not move the page.
+- Code and output switches in every cell header write `hide=` to the cell. While editing, a hidden
+  part collapses to a line that reveals it; reading view and exports leave it out.
+- Prose, chart, input and metadata cells show their result and keep their source behind an "edit"
+  line (or a double-click on prose); SQL cells show their code.
+- Catalog browser for attached databases, with click and drag to insert.
+- A query's charts as tabs over its result, with the table last. A chart picker under the table (or
+  "+ chart") writes a new `/* chart */` comment into the cell; "edit chart spec" opens a chart's spec,
+  and Shift+Enter redraws it without running the query.
 - Graph view of cells, showing stale and failed cells.
 - Editing view (cells with code) and reading view (code hidden, grid layout via `span`).
 - **Two-way file sync.** Saving writes the `.sql` file; an edit made in another editor or by an agent
@@ -267,13 +319,15 @@ QUALIFY version = max(version) OVER (PARTITION BY name);
 - **A database carries its own analysis.** Send someone `sales.duckdb` and they get the data and the
   notebooks that explain it. `CALL notebook_start('db:revenue')` opens a stored notebook.
 - **Result cache.** For a database-backed notebook the cache goes in `_notebook.cache(name, cell,
-  hash, data BLOB)` in place of the sidecar directory.
+  hash, data BLOB)` in place of the sidecar directory. (Not built yet: neither cache exists.)
 
 **File and database together.** A notebook session has one source of truth: the place it was opened
 from. `notebook_save` and `notebook_checkout` copy between the two explicitly. There is no automatic
 two-way sync in the first version, because silent merges between a git checkout and a database row
 are exactly where work gets lost. Both commands compare hashes and refuse to overwrite a newer copy
-without `force := true`.
+without `force := true`: `notebook_save` refuses text that equals an *older* stored version, and
+`notebook_checkout` refuses to overwrite a file whose content matches no stored version. Saving from
+the UI of a `db:` notebook appends a version.
 
 **Alternatives considered.** DuckLake snapshots give time travel for free, but require a DuckLake
 catalog and are heavy for a few kilobytes of text. The official UI keeps notebooks as JSON rows in a
@@ -283,10 +337,10 @@ private `ui.db`; using the user's own database and the plain-text format is what
 
 ### Principle: the extension writes the query, the browser draws the result
 
-A chart cell is a short YAML spec ([FORMAT.md §5](FORMAT.md#5-chart-cells)). The extension compiles
-it into two things:
+A chart is a short YAML spec ([FORMAT.md §5](FORMAT.md#5-charts)), written at the end of a query cell
+or as a chart cell. The extension compiles it into two things:
 
-1. **A data query**: one aggregate SQL statement over the cell's `from` relation. Grouping, binning,
+1. **A data query**: one aggregate SQL statement over the relation the chart draws. Grouping, binning,
    time truncation and downsampling all happen in DuckDB.
 2. **A render description**: marks, scales and axes for the browser, referring to the query's columns.
 
@@ -310,27 +364,33 @@ still changing between 0.x releases. It remains the likely basis for the fully i
 
 ### Renderers
 
-The spec is ours; the libraries behind it are replaceable. All are permissively licensed.
+The spec is ours; the renderers behind it are replaceable. The design planned on libraries:
 
-| Chart family | Library | Notes |
+| Chart family | Planned library | Built |
 |---|---|---|
-| Marks on axes, facets, layers | Observable Plot | SVG output, which is what PDF wants |
-| Sankey, chord, treemap, sunburst, icicle | D3 layouts (`d3-sankey`, `d3-chord`, `d3-hierarchy`) | Drawn as SVG |
-| Funnel, candlestick, gauge, calendar | Apache ECharts | SVG renderer for export |
-| Maps | MapLibre GL + deck.gl GeoArrow layers | Geometry from the `spatial` extension; H3 hex layers |
-| Networks | cosmos.gl | GPU layout; Cosmograph, built on it, is non-commercial and is not used |
-| Tables, pivots | Virtualised grid | Pivot aggregation is a DuckDB `PIVOT` query |
-| KPI tiles, sparklines | Own SVG | |
-| Raw escape hatch | Vega-Lite, ECharts | `type: vega-lite` / `type: echarts` with a native spec |
+| Marks on axes, facets, layers | Observable Plot | Own SVG (`frontend/render-chart.js`) |
+| Sankey, chord, treemap, sunburst, icicle | D3 layouts | Own SVG layouts (`frontend/render-typed.js`) |
+| Funnel, candlestick, gauge, calendar | Apache ECharts | Own SVG |
+| Maps | MapLibre GL + deck.gl | Own SVG, equirectangular, no basemap |
+| Networks | cosmos.gl | Own SVG with a small force layout (up to a few thousand nodes) |
+| Tables, pivots | Virtualised grid | Paged grid; pivot is a DuckDB `PIVOT` query |
+| KPI tiles, sparklines, gauge | Own SVG | Own SVG |
+| Raw escape hatch | Vega-Lite, ECharts | Specs whose marks map onto the built-in renderer are drawn; others show as a table |
 
-D3 is used as a toolkit inside built-in chart types. Hand-written D3 needs JavaScript cells, which are
-out of scope; the raw Vega-Lite and ECharts specs are the declarative escape hatch until then.
+The first implementation draws everything itself, in about 1,500 lines of dependency-free
+JavaScript, for the reason in §11 ("The frontend has no build step"), and draws it by hand:
+`frontend/render-sketch.js` is a small rough.js-style library (wobbly double strokes, overshooting
+corners, hachure fills) that every renderer uses. Above 600 marks in a layer it falls back to plain
+shapes in the same colours, because the wobble costs time and adds nothing at that density. Drawing
+is seeded per chart, so a chart looks the same in the editor, an export and a PDF. All charts are SVG,
+so PDFs stay vector. A basemap needs tiles, which are not available offline, so maps draw the data alone. The
+libraries remain the upgrade path for richer interaction (zoom, GPU-scale networks, tiled maps).
 
 ### Building charts
 
-- **Chart switcher under every result**, as in Zeppelin: pick a chart type and drag columns to
-  channels. The difference is that the result is written into the file as a chart cell, so a chart
-  made by clicking is reviewable and editable as text.
+- **Chart switcher under every result**, as in Zeppelin: pick a chart type and columns for its
+  channels. The difference is that the result is written into the file as a `/* chart */` comment in
+  the query's cell, so a chart made by clicking is reviewable and editable as text.
 - **Suggested chart** from the result's column types: one time column and one number gives a line; one
   category and one number, a bar; two numbers, a scatter or a binned heatmap when large; a single
   value, a KPI tile; a geometry or latitude/longitude pair, a map.
@@ -339,8 +399,11 @@ out of scope; the raw Vega-Lite and ECharts specs are the declarative escape hat
 
 ### Themes
 
-One light and one dark theme with a categorical palette checked for colour-vision deficiency, applied
-across every renderer so charts from different libraries look like one system.
+The notebook looks like a sketchbook drawn in Excalidraw ("Option A" of the design mockups): warm
+paper with a faint grain, cells in hand-drawn rounded boxes, Excalifont for text and Cascadia Code for
+SQL (both SIL OFL, compiled into the extension; `third_party/fonts/LICENSE.md`), values computed in
+prose highlighted with a marker, and charts in Excalidraw's palette: a stroke colour with its pastel
+as a hachure fill. Dark mode is Excalidraw's own: the page is inverted and its hues turned back.
 
 ## 7. Export
 
@@ -351,7 +414,7 @@ across every renderer so charts from different libraries look like one system.
 | `html-wasm` | No (ships DuckDB-WASM) | Extension alone | One file, about 12 MB plus data: viewer, DuckDB-WASM, data as a `.duckdb` file |
 | `pdf` | No | Browser print, or headless Chrome | Paged document, vector charts |
 | `sql` | Yes | Extension alone | Expanded script with no notebook dependency |
-| `md` | No | Extension; chart images need a browser | Markdown with tables; charts as SVG files |
+| `md` | No | Extension alone | Markdown with tables; each chart as a table of its data |
 | `data` | No | Extension alone | One Parquet or CSV file per query cell |
 
 ### Single-file HTML
@@ -360,13 +423,18 @@ The extension assembles one `.html` file from parts it already has:
 
 - the read-only viewer (a subset of the frontend, stored in the extension),
 - the notebook's cells and render descriptions as JSON,
-- each chart's data and each visible table's first page as gzip-compressed Arrow, base64 encoded.
+- each chart's data and each visible table's first page as gzip-compressed JSON, base64 encoded.
 
 The page decompresses with the browser's built-in `DecompressionStream` and draws the charts when
-opened. It works from a `file://` path, as an email attachment or on any static host. Tooltips, legend
-toggles, table sorting and paging work; nothing needs a server. Expected size is a few hundred
-kilobytes for the viewer core plus the data, with heavy renderers (maps, networks, ECharts) included
-only when the notebook uses them.
+opened. It works from a `file://` path, as an email attachment or on any static host; nothing needs a
+server. The fonts travel inside the page as data URIs, so it looks the same offline. Measured: the
+viewer and renderers are about 35 KB gzip-compressed and the two fonts 90 KB; the revenue example
+exports to 252 KB and the 27-chart gallery to 425 KB.
+
+`hide := 'code'`, `'output'` or `'all'` leaves that part of every cell out of any export, on top of
+each cell's own `hide=`; prose and inputs always stay. The gear menu offers the same as two
+checkboxes. Tables in an export page through the rows it includes (`page_rows`, default 100, raised
+to a cell's `rows=` when larger).
 
 ### Interactivity without DuckDB
 
@@ -394,8 +462,13 @@ The spike set four constraints on this export:
 - The DuckDB-WASM on npm is engine v1.5.4, which lacks the `$name` shorthand. Until a 2.0-based
   build is published, the exporter rewrites `$name` to `getvariable('name')`.
 
-If the extension can itself be built for DuckDB-WASM, the same chart compiler runs in the browser;
-otherwise the compiler is ported or Mosaic takes that role (S5).
+Built as designed, with one simplification that removes S5: the browser never compiles a chart. A
+chart's SQL depends on its spec and its source's column types, not on input values, because inputs and
+selections reach the query through `getvariable()`. So the exporter compiles every chart in advance and
+the page re-runs the stored SQL after `SET VARIABLE`. The runtime (DuckDB-WASM plus a small adapter,
+`wasm/`) is built once with `sh wasm/build.sh` and passed as `wasm_runtime := 'wasm/dist'`; it is not
+compiled into the extension because it is 36 MB uncompressed. The revenue example exports to 12.2 MB
+and boots in about a second in headless Chromium with the network blocked.
 
 ### PDF
 
@@ -416,13 +489,13 @@ a browser to produce the SVG.
 
 | ID | Question | Why it matters |
 |---|---|---|
-| S1 | Can the extension walk a parsed statement for table and parameter references across all statement kinds? | Core of the graph. `duckdb_get_table_names` is not enough: in 2.0.0 it binds, and so fails, on `JOIN … USING` and `INSERT` against tables that do not exist yet. `json_serialize_sql` handles only `SELECT` |
-| S2 | Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder? | Result transport |
-| S3 | Size of the extension with the frontend embedded; lazy loading of heavy renderers | Download size and the community-extension build |
+| S1 | ~~Can the extension walk a parsed statement for table and parameter references across all statement kinds?~~ | **Done: yes, with the C++ parser and no binding.** See §11 |
+| S2 | ~~Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder?~~ | **Done: neither; JSON.** Pages and chart data are small after aggregation. See §11 |
+| S3 | ~~Size of the extension with the frontend embedded; lazy loading of heavy renderers~~ | **Done: 132 KB of frontend source, 30 KB compressed**, negligible next to the extension itself |
 | S4 | ~~DuckDB-WASM inlined in a single HTML file, opened from `file://`~~ | **Done: it works in Chromium.** See [the spike](../spikes/wasm-single-file/README.md). Firefox, Safari and inlined extensions are untested |
-| S5 | Does the extension build for DuckDB-WASM with the server parts left out? | Reuse of the chart compiler in `html-wasm`. The community build chain targets Wasm, so this is plausible but untried |
+| S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Not needed**: `html-wasm` ships precompiled chart SQL (§7). Still untried |
 | S6 | Will the community repository accept an extension that embeds an HTTP server and a multi-megabyte asset bundle? | Distribution. The process itself is documented: a pull request with a descriptor file, after which DuckDB's CI builds for Linux, macOS, Windows and Wasm |
-| S7 | Chart compiler coverage: how much of the grammar compiles cleanly to one query | Scope of chart work |
+| S7 | ~~Chart compiler coverage: how much of the grammar compiles cleanly to one query~~ | **Done: all of FORMAT.md §5** compiles, with layers and sparklines as one query each. See `examples/charts.sql` |
 
 Other risks:
 
@@ -433,21 +506,27 @@ Other risks:
   but is not planned.
 - **Reactivity surprises.** Effect cells are the escape from the pure model. The manual-run default
   and visible stale markers are the guard.
-- **Scope of charts.** The list in FORMAT.md is long. The roadmap ships grammar charts first.
+- **Scope of charts.** The list in FORMAT.md is long. Every type is drawn, simply; see §6 for what
+  the planned libraries would add.
 
 ## 9. Roadmap
 
-1. **Format and headless runner.** Parser, `notebook_cells`, `notebook_run`, `sql` export. **Done**,
-   except for the items in 1b.
+1. **Format and headless runner.** Parser, `notebook_cells`, `notebook_run`, `sql` export. **Done.**
 
    1b. **Dependency graph.** `defines` and `reads` per cell from DuckDB's parser, forward-reference
    and cycle errors, `params` for `notebook_run`, `{{ }}` expressions in markdown. Resolves S1.
-2. **Server and minimal UI.** Editor, grid, reactive runs, file sync. Resolves S2, S3.
+   **Done.**
+2. **Server and minimal UI.** Editor, grid, reactive runs, file sync. Resolves S2, S3. **Done.**
 3. **Charts and inputs.** Chart compiler, grammar charts, KPI and table, input widgets, selections.
-4. **In-database storage.** `_notebook` schema, save, checkout, history.
-5. **Export.** Single-file HTML, PDF, Markdown, precomputed interactivity.
-6. **More chart types.** Maps, hierarchies, flows, networks, pivot.
-7. **Interactive WASM export.** Resolves S5.
+   **Done.**
+4. **In-database storage.** `_notebook` schema, save, checkout, history. **Done.**
+5. **Export.** Single-file HTML, PDF, Markdown, precomputed interactivity. **Done.**
+6. **More chart types.** Maps, hierarchies, flows, networks, pivot. **Done.**
+7. **Interactive WASM export.** Resolves S5. **Done.**
+
+Next, in rough order: the result cache (FORMAT.md §8), a bundled CodeMirror editor, tracking macro
+calls in the graph, Firefox and Safari checks for the exports, building every platform in CI, and the
+community-repository submission (S6).
 
 ## 10. Open questions
 
@@ -525,11 +604,31 @@ connection, and it reports `PIVOT` statements as not serialisable. The lexer is 
 only place that scans SQL text; it tracks strings, nested block comments and dollar-quoted strings,
 so a `-- %%` line inside a comment or string is not mistaken for a cell marker.
 
-### The dependency graph is still open (S1)
+### The dependency graph comes from the parser, not the binder (S1)
 
-The first pass extracts the variables a cell reads, but not the tables. With the C++ API the
-extension can call DuckDB's parser directly and walk the statement tree without binding it, which is
-what S1 needs. That is the next piece of work.
+`duckdb_get_table_names` binds, so it fails on statements whose tables do not exist yet, which is the
+normal state of a notebook that has not run. The graph instead calls DuckDB's `Parser` and walks the
+statement tree (`src/functions/references.cpp`). DuckDB 2.0 made this easier than expected: `INSERT`,
+`UPDATE`, `DELETE`, `MERGE` and `COPY` are query nodes, and `ParsedExpressionIterator` walks them all,
+so the walker only adds what the iterator skips: expression subqueries, the target of an `INSERT`,
+`COPY` and `DROP` tables, `CREATE` and `ATTACH` names, `SET VARIABLE`, and `getvariable('…')`.
+
+The split follows the rule above: the extension supplies one function, "what does this SQL define and
+read", and everything else (resolving names to cells, ordering, duplicates, cycles, run order) is in
+`src/core/graph.cpp` and unit-tested without a database. Findings:
+
+- `PIVOT` parses into a multi-statement that creates an internal `__pivot_enum_…` type; the walker
+  ignores it.
+- `ATTACH 'x.duckdb'` without `AS` keeps its path as an expression in 2.0; the walker derives the
+  alias `x` from it as DuckDB does.
+- CTE names are collected per statement rather than per scope. A CTE that shadows a real table hides
+  reads of that table elsewhere in the same statement; this has not mattered in practice.
+- Markdown cells may refer to cells below them, so the runner evaluates a markdown cell only after
+  everything it reads has run. `notebook_run` therefore returns rows in run order, not file order.
+- A syntax error is a warning on the cell, not a format error: the notebook still runs and the cell
+  fails on its own terms, as before.
+- The unknown-variable warning promised above exists. Chart selections are definitions, so a cell
+  reading `$picked_months` warns only if no chart selects into it.
 
 ### DuckDB 2.0 specifics worth knowing
 
@@ -537,3 +636,103 @@ what S1 needs. That is the next piece of work.
   destroyed. Release one result before issuing the next query on the same connection.
 - A cell with several statements can be sent as one string; the result is the last statement's.
 - Running statements on a second connection from inside a table function works, including DDL.
+
+## 12. What building steps 2 to 7 taught us
+
+### A session is replayed, not held
+
+The server must not hold a `Connection` (§11), yet a notebook session has temporary views and
+variables that live in one. The first idea, holding the connection and releasing it when the user's
+own connections close, does not work: DuckDB calls `OnConnectionClosed` with its connection-manager
+lock held, so releasing a connection there deadlocks. Instead a session is data: its variables, read
+back from the connection after each request, and per cell the statements that rebuild what a fresh
+connection lacks (the temporary view of a query cell, `CREATE TEMP`, `SET`, `USE`). Each request
+opens a connection, replays that, runs, and closes it. Replaying views is cheap because they are lazy;
+`materialize=table` cells recompute, which is the cost of this model.
+
+The server object lives in the database's object cache as a non-evictable entry. The cache is
+destroyed with the database, which stops the server. Checked end to end: a shell running the server
+exits, and the database file has no WAL left and opens in another process.
+
+### The frontend has no build step
+
+The design assumed a TypeScript app bundled with npm. That puts Node in the extension build, and
+DuckDB's extension CI does not have it. The frontend is plain JavaScript and CSS instead, which CMake
+compiles into the binary as byte arrays (`CMakeLists.txt`); editing a file re-runs CMake. The cost is
+writing the renderers rather than using libraries (§6). The html-wasm runtime does need Node, so it is
+built separately and optionally.
+
+### JSON is enough for results (S2)
+
+Results reach the browser after aggregation or as one page, so they are small. JSON needs nothing in
+the browser to decode, keeps the server simple, and is what the exports embed (gzip-compressed). Large
+integers beyond 2^53 travel as strings; temporal values as `YYYY-MM-DD HH:MM:SS` text.
+
+### Variables need types from the browser
+
+A value set from the browser is JSON, but a brush on a timestamp axis must compare as a timestamp.
+The server derives the variable's SQL type from what produced it: an input's widget or `from=`
+column, or the columns behind a chart selection's channels (`STRUCT(lo T, hi T)` for an interval).
+Brushes on a `DATE` axis are typed `TIMESTAMP`, because they end between days.
+
+### DuckDB-WASM is a version behind
+
+The npm DuckDB-WASM is engine 1.5, so the html-wasm export rewrites `$name` to `getvariable('name')`
+and writes its data file with `STORAGE_VERSION 'v1.5.0'`. One more difference surfaced: 1.5 cannot
+read `.lo` from an untyped `NULL`, so selection variables start as `NULL::STRUCT(lo T, hi T)` there.
+Arrow hands decimals over unscaled, and bundlers rename Arrow's classes, so the runtime converts by
+`typeId` and scale.
+
+### Smaller findings
+
+- `to` is a reserved word, so the output parameter of `notebook_export` and `notebook_checkout` is
+  `file :=`.
+- Chart cells now run in `notebook_run`: the compiler is cheap to exercise headless, and a broken
+  spec should fail CI like a broken query.
+- The PDF export finds Chrome, Chromium, Edge or Playwright's `chrome-headless-shell`; the headless
+  shell needs far fewer system libraries than full Chrome.
+
+## 13. What the sketchbook look taught us
+
+- **Hand-drawn is a renderer concern, not a format one.** Nothing in the file changed for it. A
+  single primitives library (`render-sketch.js`) sits under the chart renderers, the cell outlines and
+  the export viewer, so the look is consistent and could be swapped back to plain SVG in one place.
+- **Seeded wobble.** Random wobble that changed on every redraw looked like flicker. Each chart and
+  each cell outline seeds its own generator from stable inputs (title, data shape, cell position).
+- **Outlines follow their content.** A cell's outline is an SVG drawn behind it at its measured size; a
+  `ResizeObserver` redraws it when a result, a chart or a font load changes the size.
+- **View settings that matter belong in the file.** Page size and hiding code or output change what
+  readers of an export see, so the UI writes them as cell options (`rows=`, `hide=`) rather than
+  keeping them in the browser. Only the default page size, a personal preference, stays in the
+  browser (`localStorage`).
+- **Value markers.** To highlight `{{ }}` results in prose, the runner wraps each value in two
+  private-use characters (U+E000, U+E001) when asked; the markdown renderer turns them into `<mark>`,
+  and the Markdown export strips them. `notebook_run` output is unchanged.
+- **SVG attributes do not resolve CSS variables.** Hand-drawn ink is `currentColor`, with the colour
+  set in CSS, so themes reach it.
+
+## 14. Charts belong to their query
+
+The first design made every chart a cell of its own, `-- %% chart from=<cell>`. In use, that meant
+naming a query only so a chart could find it, and keeping two cells in step for one idea. Now a query
+cell can end with `/* chart */` comments: the query says what data is fetched, the charts how it is
+shown, and the table remains as the last tab. Chart cells stay for a chart of another cell or of a
+table, and every existing notebook still parses.
+
+- **The file is still plain SQL.** A chart is a block comment after the last statement, so DuckDB
+  ignores it and `notebook_sql` leaves it out. The parser takes the comments off the body (`Cell::sql`
+  is what runs, `Cell::charts` the specs), and the editor rebuilds the body from the two when either
+  changes.
+- **One relation for every chart.** `ChartFrom` gives the relation a cell's charts read: a chart cell's
+  `from`, a named cell's view, or an unnamed cell's query in parentheses. The compiler and the runner
+  treat chart cells and query charts alike, so `notebook_chart_query`, exports and DuckDB-WASM needed
+  no new chart code.
+- **Redraw without re-running.** Editing a spec, or a selection that only a cell's charts filter on,
+  redraws that cell's charts (`/api/run` with `redraw`); its query and the cells below it do not run.
+- **Selections without cycles.** An overview chart that selects and a detail chart that filters on the
+  same query used to be two chart cells reading one view. As charts of one cell, or of cells in either
+  order, a filter must not become a dependency, or the pair would form a cycle or a forward reference.
+  A query cell's chart filters are therefore listed in `reads` but add no edge to `depends_on`. The
+  one thing ruled out is a cell's SQL reading its own chart's selection.
+- **A failing chart keeps its result.** The query ran, so its rows and row count stay; the cell is
+  reported as an error with the chart's message, which shows in that chart's tab.

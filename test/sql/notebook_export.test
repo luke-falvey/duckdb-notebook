@@ -1,0 +1,107 @@
+# name: test/sql/notebook_export.test
+# description: notebook_export writes HTML, Markdown, SQL and data files
+# group: [notebook]
+
+require notebook
+
+query II
+SELECT format, bytes > 50000 FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/basic.html')
+----
+html	true
+
+# One self-contained page: the viewer, the styles and the gzip-compressed results are inline
+query III
+SELECT content LIKE '<!doctype html>%', content LIKE '%id="nb-data">H4sI%', content NOT LIKE '%<script src=%' FROM read_text('__TEST_DIR__/basic.html')
+----
+true	true	true
+
+statement ok
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/basic.md', format := 'md')
+
+query II
+SELECT content LIKE '%# Basic%', content LIKE '%| grp | n |%' FROM read_text('__TEST_DIR__/basic.md')
+----
+true	true
+
+statement ok
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/basic.expanded.sql', format := 'sql')
+
+query I
+SELECT content = (SELECT sql FROM notebook_sql('test/notebooks/basic.sql')) FROM read_text('__TEST_DIR__/basic.expanded.sql')
+----
+true
+
+# One file per named query cell
+query II
+SELECT format, note FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/basic_data', format := 'data', data_format := 'csv')
+----
+data	3 file(s)
+
+query I
+SELECT count(*) FROM read_csv('__TEST_DIR__/basic_data/kept.csv')
+----
+6
+
+# Parameters apply as in notebook_run
+statement ok
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/basic8.md', format := 'md', params := {lowest: 8})
+
+query I
+SELECT content LIKE '%| 8 | 2 |%' FROM read_text('__TEST_DIR__/basic8.md')
+----
+true
+
+# Precomputed inputs: the exporter reports what it did
+query I
+SELECT note FROM notebook_export('examples/revenue.sql', file := '__TEST_DIR__/revenue.html', interactive := 'precomputed')
+----
+3 precomputed state(s); frozen at their current value: min_amount
+
+# hide := hides code or results in every cell, on top of each cell's own hide=
+statement ok
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/nocode.md', format := 'md', hide := 'code')
+
+query III
+SELECT content NOT LIKE '%```sql%', content LIKE '%| grp | n |%', content LIKE '%# Basic%' FROM read_text('__TEST_DIR__/nocode.md')
+----
+true	true	true
+
+statement ok
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/nooutput.md', format := 'md', hide := 'output')
+
+query III
+SELECT content LIKE '%```sql%', content NOT LIKE '%| grp | n |%', content LIKE '%# Basic%' FROM read_text('__TEST_DIR__/nooutput.md')
+----
+true	true	true
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/x.md', format := 'md', hide := 'everything')
+----
+hide must be 'code', 'output', 'all' or 'none'
+
+# The page carries its fonts, so it looks the same offline
+query II
+SELECT content LIKE '%url(data:font/woff2;base64,%', content NOT LIKE '%/assets/%' FROM read_text('__TEST_DIR__/basic.html')
+----
+true	true
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', format := 'docx')
+----
+Unknown export format 'docx'
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/x.html', format := 'html-wasm', wasm_runtime := '__TEST_DIR__/nope')
+----
+not found. Build the runtime with wasm/build.sh
+
+statement error
+FROM notebook_export('test/notebooks/errors.sql', file := '__TEST_DIR__/x.html')
+----
+has errors
+
+statement ok
+DROP TABLE nb_test_numbers
+
+statement ok
+DROP TABLE orders
