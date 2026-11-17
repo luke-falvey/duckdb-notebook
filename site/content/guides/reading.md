@@ -1,0 +1,195 @@
+# Reading and presenting
+
+The same notebook serves the person writing it and the people reading it. Everything that decides
+how it reads (what is hidden, how wide each cell is, how many rows a table shows) is an option on a
+cell's `-- %%` line, so it is saved in the file, reviewed like any edit, and holds in the editor's
+reading view and in every export.
+
+## The reading view
+
+In the editor, open the ⚙ menu and press **Reading**. Code and editing controls disappear, and cells
+are laid out on a 12-column grid by their `span=`:
+
+<figure class="shot" markdown>
+![The sketchbook template in the reading view: title and prose, two inputs side by side, three KPIs in a row, and a line chart](../images/template-reading.webp)
+<figcaption>The <a href="https://github.com/luke-falvey/duckdb-notebook/blob/main/.github/skills/sketchbook-authoring/assets/template.sql">sketchbook template</a> in the reading view: plumbing hidden with <code>hide=</code>, inputs and KPIs in rows with <code>span=</code>.</figcaption>
+</figure>
+
+An [HTML export](exporting.md) looks like the reading view, with code shown unless hidden.
+
+## Hiding code and output
+
+`hide=` on a cell decides what readers see:
+
+| `hide=` | Readers see |
+|---|---|
+| `none` (default) | Code and output |
+| `code` | Output only: use it on queries whose result is the point |
+| `output` | Code only |
+| `all` | Nothing: use it for loading data and helper cells |
+
+In the editor, the `</>` and `◫` buttons on a cell write `hide=code` and `hide=output` into its head.
+The hidden part folds to a line you can click to peek at it. An export can hide more for every cell
+with `hide :=` (see [exporting](exporting.md)); prose and inputs are never hidden by `output`.
+
+## Laying out with span
+
+`span=1` to `span=12` sets a cell's width on a 12-column grid. Consecutive cells whose spans add up
+to 12 or less share a row, and cells in a row stretch to the tallest:
+
+```sql
+-- %% chart revenue_kpi from=filtered span=4
+-- %% chart orders_kpi from=filtered span=4
+-- %% chart average_kpi from=filtered span=4
+```
+
+Rows that work: `6+6`, `4+4+4`, `3+3+3+3` for KPIs, `8+4` for a chart and its note. Narrow cells
+(`span=4` or less) suit KPIs, gauges, small bars and pies, not time series. A query cell's charts are
+tabs, shown one at a time; to put two charts side by side, give them chart cells with `span=6`.
+
+## A page that reads well
+
+A shape that works, top to bottom:
+
+```text
+[markdown]  # Title, one sentence on the question, the answer with {{ }} values
+input span=6 | input span=6
+chart kpi span=4 | chart kpi span=4 | chart kpi span=4
+query hide=code with /* chart */ tabs          the main chart, full width
+[markdown]  ## Section heading and a sentence or two
+chart span=6 | chart span=6
+query hide=code rows=10                        the detail table
+```
+
+- Use exactly one `#` heading; it gets the red underline. Use `##` for sections.
+- Put the key numbers in prose with `{{ }}`, formatted in SQL; they get a highlighter mark.
+- Keep paragraphs short. The handwriting is large and wide.
+- Hide the plumbing (`hide=all` on loading cells, `hide=code` on results).
+
+The repository's [sketchbook template](https://github.com/luke-falvey/duckdb-notebook/blob/main/.github/skills/sketchbook-authoring/assets/template.sql)
+follows this shape.
+
+## Presenting
+
+A notebook can be shown one screen at a time, for a meeting or a talk. In the editor, open the ⚙ menu
+and press **Present**. An HTML export presents too: add `#present` to the end of its address, or
+`#present=3` to start at the third screen.
+
+<figure class="shot" markdown>
+![The sketchbook template presented: one screen holding its main chart, Revenue by month, scaled up to fill the window, with the page number in the corner](../images/present.webp)
+<figcaption>A presented screen: one row of the reading layout, scaled up to fill the window.</figcaption>
+</figure>
+
+Code is never shown, and what each screen holds follows from the reading layout, so a notebook that
+reads well presents well with no extra markup:
+
+- **A screen is a row of the reading layout**: one cell, or the consecutive cells whose `span`s share a
+  row (two `span=6` charts, three `span=4` KPIs).
+- **An input shares the screen of the next cell**, so the audience sees what it changes.
+- Cells that show nothing when reading have no screen: `hide=all`, `hide=output`, the `[notebook]`
+  cell, and SQL cells that return no rows.
+
+When that is not what you want, `screen=` on a cell overrides it:
+
+| Option | Effect |
+|---|---|
+| `screen=new` | Start a new screen here, even if the cell would share a row or follow an input |
+| `screen=join` | Stay on the screen of the cell before: a note under its chart, a table under its KPIs |
+| `screen=skip` | Leave the cell out of the presentation; it still shows when reading and in exports |
+
+```sql
+-- %% chart trend from=monthly
+-- %% [markdown] screen=join
+/* What the trend shows, on the same screen as the chart. */
+-- %% detail rows=10 screen=skip
+SELECT * FROM monthly;
+```
+
+**Moving around:**
+
+| Keys | Do |
+|---|---|
+| <kbd>→</kbd>, <kbd>Space</kbd>, <kbd>Page Down</kbd>, or a click on empty space | Next screen |
+| <kbd>←</kbd>, <kbd>Shift</kbd>+<kbd>Space</kbd>, <kbd>Page Up</kbd> | Previous screen |
+| <kbd>Home</kbd> / <kbd>End</kbd> | First / last screen |
+| <kbd>F</kbd> | Full screen |
+| <kbd>Esc</kbd> | Stop presenting |
+
+Inputs, chart tabs and brushing keep working on a screen (clicks on them act on them rather than
+moving on), so you can answer a question live. In an export they work as they do there: precomputed
+inputs switch, static ones stay frozen. The current screen is in the address (`#present=3`), so a
+reload or a shared link returns to it.
+
+A screen is laid out as in the reading view, centred and scaled up to fill the window. One that is
+too tall is scaled down, but not below four fifths of the reading size; past that it scrolls.
+
+## Tables
+
+A result table pages through its rows, 25 at a time unless the reader picks another default in the ⚙
+menu. `rows=N` on a cell fixes its page size (1 to 10,000); the page-size picker under a table writes
+it for you. Wide tables page through their columns too.
+
+## Light and dark
+
+The ⚙ menu's ◐ button switches the editor between light and dark, and the choice is remembered in
+your browser. Exports are always light.
+
+## The pen
+
+Every piece of the page is written by a pen as it appears: headings and prose letter by letter, SQL
+as if typed, charts axes first, then marks, then labels. Only what is new or changed is written, so
+re-running a cell rewrites only its result.
+
+<img src="../../images/handwriting/revenue.gif" alt="The revenue notebook being written onto the page by a pen" width="720">
+
+The ⚙ menu's **handwriting** setting is `gentle` (the default), `watch` or `off`, remembered in your
+browser. It is off when the system asks for reduced motion, when printing, in PDF exports, and when the
+page's URL has `ink=off`, whatever the setting says. The finished page is identical either way.
+
+### Watch mode
+
+The gentle pen gets out of the way: a screen is written in a couple of seconds, many strokes at once.
+**Watch mode** is the opposite, for watching: one pen writes the whole page in front of you, letter by
+letter and stroke by stroke, as a person drawing it would, and the page scrolls to follow it.
+
+<img src="../../images/handwriting/watch-open.gif" alt="Watch mode: one pen writes the title and opening prose of the revenue notebook, letter by letter" width="720">
+
+Start it in any of three ways:
+
+- choose **watch** under handwriting in the editor's ⚙ menu (remembered in this browser);
+- add `ink=watch` to the address of the editor or of an HTML export, so a link opens straight into it:
+  try [revenue.html?ink=watch](../examples/revenue.html?ink=watch);
+- press **✎ watch** in an HTML export's header, which writes the page again from the top.
+
+While the pen has work, a small row of controls sits in the bottom-left corner:
+
+| Control | Key | Does |
+|---|---|---|
+| pause / go on | <kbd>Space</kbd> or <kbd>P</kbd> | Stop and start the pen |
+| − and + | <kbd>−</kbd> and <kbd>+</kbd> | Slower or faster, from 0.25× to 8×; remembered |
+| skip | <kbd>N</kbd> | Finish the piece being written and go on to the next |
+| finish | <kbd>E</kbd> | Write everything now |
+| × | <kbd>Esc</kbd> | Stop watching: the page completes and the pen goes back to gentle |
+| follow | | Shown when you have scrolled away: go back to following the pen |
+
+**Following the pen.** The page keeps the pen in view. Scroll away and it stops following; it picks
+up again when you leave the pen in view for a moment, press a key, or press **follow**.
+
+At 1× the revenue example takes about five and a half minutes and the chart gallery about eighteen;
+the title and opening paragraph take under half a minute. Press + a couple of times for the gist.
+Where something is too big to draw mark by mark (thousands of points, a long table, hatching), the pen
+draws a representative part properly and then hurries through the rest. Selects and sliders, which
+cannot be written, fade in.
+
+**While presenting**, watch mode writes each screen as you come to it. <kbd>Space</kbd> and
+<kbd>Esc</kbd> belong to the presentation there; use <kbd>P</kbd> to pause, and the other keys as
+usual.
+
+**Using the page meanwhile.** Your own changes (moving a slider, brushing, switching a tab, paging a
+table) show at once in anything the pen has already written. Results of a run are written in reading
+order, so a result further down waits for the pen.
+
+<img src="../../images/handwriting/watch-chart.gif" alt="Watch mode: a chart drawn after its query, axes first, then the line, then labels" width="720">
+
+The design and measurements are in
+[docs/HANDWRITING.md](https://github.com/luke-falvey/duckdb-notebook/blob/main/docs/HANDWRITING.md#watch-mode).

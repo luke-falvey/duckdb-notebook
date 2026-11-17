@@ -132,12 +132,18 @@ bool ResultCacheStore::Prepare() {
 			if (!fs.DirectoryExists(root)) {
 				fs.CreateDirectory(root);
 			}
+			if (!fs.DirectoryExists(directory)) {
+				fs.CreateDirectory(directory);
+			}
+			// A file system without directories (DuckDB-WASM's in-memory one: creating a directory does
+			// nothing and none exists) could take the entries but never list them back: no cache there.
+			if (!fs.DirectoryExists(directory)) {
+				available = false;
+				return false;
+			}
 			auto ignore = root + "/.gitignore";
 			if (!fs.FileExists(ignore)) {
 				WriteTextFile(db, ignore, "# Results cached by the DuckDB notebook extension. Safe to delete.\n*\n");
-			}
-			if (!fs.DirectoryExists(directory)) {
-				fs.CreateDirectory(directory);
 			}
 		}
 		prepared = true;

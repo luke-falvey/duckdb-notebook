@@ -16,7 +16,7 @@ taught us and where it departs from the design.
 | `notebook_chart_query(spec, from)` | The SQL and render description a chart spec compiles to | `src/functions/notebook_chart_query.cpp` |
 | `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
 | `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
-| `notebook_start`, `notebook_stop` | The HTTP server and browser UI | `src/functions/server.cpp` |
+| `notebook_start`, `notebook_stop` | The HTTP server and browser UI (not in WASM builds) | `src/functions/server.cpp` |
 | `notebook_peek(sql, cursor)` | The CTE or sub-query at a byte offset and the query that selects from it (DESIGN §19) | `src/functions/peek.cpp` |
 | `notebook_cache`, `notebook_cache_clear` | The result cache: what is kept, fresh or stale; clearing it | `src/functions/result_cache.cpp` |
 
@@ -66,6 +66,7 @@ src/include/       Headers: notebook/*.hpp for core; functions.hpp, session.hpp 
 test/core/         Unit tests for src/core. No DuckDB needed.
 test/sql/          sqllogictest files: end-to-end tests through SQL.
 test/browser/      Playwright tests of the server, UI and exports in Chromium.
+test/wasm/         The WebAssembly build loaded into DuckDB-WASM in headless Chromium (Node).
 test/notebooks/    Notebook files the SQL tests read.
 examples/          Notebooks for people to read. Tests check they stay valid and runnable.
 .github/skills/    Agent skills for writing sketchbooks (notebooks) and making them look good: authoring
@@ -74,6 +75,8 @@ duckdb/            Submodule, pinned to the DuckDB release we build against (v2.
 extension-ci-tools/ Submodule: DuckDB's shared build and CI scripts.
 third_party/       Licences of bundled assets (fonts).
 spikes/            Throwaway experiments kept as evidence. Not built or tested by CI.
+site/              The user documentation, published to GitHub Pages: MkDocs sources, theme, the
+                   notebooks the docs show, generated outputs, screenshots and exports.
 ```
 
 ## Build and test
@@ -149,6 +152,60 @@ Needs `pip install playwright` and `playwright install chromium`. Set
 `NOTEBOOK_WASM_RUNTIME=$PWD/wasm/dist` after `make wasm_runtime` (Node and npm) to include the
 html-wasm export. On a machine without Chromium's system libraries, `apt-get download` the missing
 packages, `dpkg -x` them into a directory and point `LD_LIBRARY_PATH` at its `usr/lib/x86_64-linux-gnu`.
+
+### WebAssembly (DuckDB-WASM)
+
+The extension also builds for DuckDB-WASM (`wasm_eh`, `wasm_threads`; DESIGN §21). Install the
+Emscripten version DuckDB's extension pipeline uses, 6.0.9, once:
+
+```bash
+git clone --depth 1 https://github.com/emscripten-core/emsdk /opt/emsdk
+/opt/emsdk/emsdk install 6.0.9 && /opt/emsdk/emsdk activate 6.0.9
+```
+
+```bash
+source /opt/emsdk/emsdk_env.sh
+OVERRIDE_GIT_DESCRIBE=v2.0.0 make wasm_eh
+```
+
+Writes `build/wasm_eh/extension/notebook/notebook.duckdb_extension.wasm`. It compiles DuckDB for
+WebAssembly too: about 12 minutes on 4 cores the first time. `make wasm_threads` builds the threaded
+variant. Then:
+
+```bash
+(cd test/wasm && npm ci) && node test/wasm/run.cjs
+```
+
+Loads every built architecture into DuckDB-WASM 2.0 in headless Chromium and runs the notebook
+functions on `examples/revenue.sql` (`test/wasm/README.md`). CI runs it on the pipeline's artifacts
+(the `wasm-test` job).
+
+## The documentation site
+
+`site/` is the user documentation, published at https://luke-falvey.github.io/duckdb-notebook/ by
+`.github/workflows/docs.yml` (builds on every pull request, deploys from `main`). It is MkDocs with a
+small theme of its own (`site/theme/`); the toolchain is `site/requirements.txt`.
+
+```bash
+pip install -r site/requirements.txt
+mkdocs build --strict -f site/mkdocs.yml && python3 site/tools/check_links.py   # into build/site
+mkdocs serve -f site/mkdocs.yml        # preview at http://127.0.0.1:8000; stop it when done
+```
+
+- `site/content/reference/format.md` is `docs/FORMAT.md`, rendered by `site/hooks.py`: there is one
+  specification, and it is `docs/FORMAT.md`.
+- Pages include files rather than copying them: notebooks with `--8<-- "path"` and single cells with
+  `<!-- cell NAME in PATH -->` (default `examples/charts.sql`; the chart reference is built this way).
+- Queries the docs show live in `site/outputs/<name>.sql`; `python3 site/tools/outputs.py` runs them
+  with the release build and writes `<name>.txt`. Screenshots (WebP), the live exports in
+  `site/content/examples/` and the Markdown sample come from `python3 site/tools/assets.py` (needs
+  Playwright and Pillow; it starts one notebook server and stops it). Both are committed, so the
+  docs workflow never builds DuckDB. Rerun them when output or the look changes.
+- The notebooks in `site/notebooks/` are run by `test/sql/docs_notebooks.test`; add new ones there.
+
+**A change to the format, a chart key, an SQL function (arguments, defaults, columns) or a setting
+needs the matching change in the site** (the guide that explains it and the reference page that
+lists it), in the same pull request, as it does in `docs/FORMAT.md`.
 
 ## Conventions
 
@@ -280,6 +337,23 @@ create, because all test files share one database.
   The server refuses to peek until the reader has run something (`Session::trusted`, set by a run and cleared when the text is reloaded from disk; separate from the cache's `Session::ran`).
 - The html-wasm export runs on DuckDB-WASM 1.5: `$name` is rewritten to `getvariable('name')`, data
   is written with `STORAGE_VERSION 'v1.5.0'`, and selection variables start as typed NULLs.
+  The extension itself targets DuckDB-WASM 2.0 (npm `next`, `1.33.1-dev110.0` and later); see DESIGN §21
+  for which of these workarounds 2.0 makes unnecessary.
+- The WebAssembly build has no server, no PDF export and no process spawning: `NOTEBOOK_HOST_FEATURES`
+  is off under Emscripten, `server_unavailable.cpp` replaces `server.cpp`, and `export.cpp` has one
+  `#ifdef NOTEBOOK_NO_HOST_FEATURES`. Keep anything that needs sockets, threads or processes behind
+  that boundary, and keep `src/core` free of platform conditionals.
+- Build wasm targets without `GEN=ninja` (they run `emmake make`) and with `OVERRIDE_GIT_DESCRIBE=v2.0.0`:
+  DuckDB-WASM refuses an extension whose stamped version or platform differs from its own, and a local
+  build is otherwise stamped with a commit hash.
+- DuckDB-WASM 2.0 has two bundles: `base` is platform `wasm_eh`, `threads` is `wasm_threads`. No bundle
+  loads `wasm_mvp`, though CI still builds it.
+- `wasm_threads` builds need the two flags the `Makefile` adds after including extension-ci-tools'
+  Makefile (`-fwasm-exceptions`, `-DUSE_WASM_THREADS=ON`); without them `LOAD` fails with an empty
+  dlopen error. Even with them, DuckDB-WASM's threads bundle hangs in `LOAD` about one time in eight
+  (DuckDB's own extensions too), which is why `test/wasm/run.cjs` retries it there.
+- Do not build natively from a shell that has sourced `emsdk_env.sh`: `make release` then fails with
+  error 127. Each Bash call starts a fresh shell, so source it only in the call that builds wasm.
 - clang-format re-indents lambdas inside `server.cpp` with mixed tabs and spaces; match on content,
   not indentation, when scripting edits there.
 - `vcpkg.json` must exist at the repository root even with no dependencies, or CI fails at configure.
@@ -311,6 +385,6 @@ create, because all test files share one database.
 
 Develop on a feature branch and open a pull request against `main`. CI runs the core tests and
 DuckDB's extension pipeline on every native platform: Linux amd64 and arm64 (glibc and musl), macOS
-amd64 and arm64, Windows amd64 and arm64 (MSVC) and amd64 with MinGW. The WebAssembly builds are in
-`exclude_archs` for now. The pipeline runs `test/sql` on most of them (not linux_arm64 or osx_amd64), so
+amd64 and arm64, Windows amd64 and arm64 (MSVC) and amd64 with MinGW, and the three WebAssembly
+targets, whose `wasm_eh` and `wasm_threads` builds the `wasm-test` job loads into DuckDB-WASM. The pipeline runs `test/sql` on most of them (not linux_arm64 or osx_amd64), so
 a test must pass on Windows too. A job takes about 5 to 15 minutes because DuckDB comes prebuilt.
