@@ -109,7 +109,7 @@ show nothing.
 | **Reading** | The [reading view](../guides/reading.md): no code, cells on the `span=` grid |
 | **Present** | [Present](../guides/reading.md#presenting) the notebook one screen at a time: arrows, Space or a click move, <kbd>F</kbd> for full screen, <kbd>Esc</kbd> leaves |
 | **Graph** | The dependency graph |
-| **Catalog** | A side panel of tables, views and their columns. Click a column to insert it; drag or double-click a table |
+| **Catalog** | A side panel of tables, views and their columns. Click or drag a column to insert its name; double-click or drag a table |
 | ◐ | Light or dark |
 | rows per page | Default page size for tables without `rows=`, remembered in this browser |
 | timing | Show run times; writes `timing:` into the `[notebook]` cell |
