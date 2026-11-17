@@ -65,6 +65,12 @@ public:
 	//! Sets variables that cells read but nothing sets to NULL, or to their param.
 	void InitializeVariables(const notebook::Notebook &notebook, const std::map<string, Value> &params);
 
+	//! Before the first cell of a run: ApplyMetadata, then InitializeVariables.
+	void Prepare(const notebook::Notebook &notebook, const string &source, const std::map<string, Value> &params);
+
+	//! Runs every cell in run order (notebook::RunOrder), keeping no outcomes.
+	void RunAll(const notebook::Notebook &notebook, const RunnerOptions &options);
+
 	//! Runs one cell. Fills `data` with the result page (query cells) or chart data (chart cells)
 	//! as requested in the options.
 	CellOutcome Run(const notebook::Notebook &notebook, const notebook::Cell &cell, const RunnerOptions &options,

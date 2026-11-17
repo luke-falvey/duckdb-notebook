@@ -354,8 +354,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            Runner runner(*db, session->state);
 		            RunningGuard running(*session, runner);
 		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
-		            runner.ApplyMetadata(notebook, session->source);
-		            runner.InitializeVariables(notebook, {});
+		            runner.Prepare(notebook, session->source, {});
 		            RunnerOptions options;
 		            options.charts = true;
 		            options.mark_values = true;

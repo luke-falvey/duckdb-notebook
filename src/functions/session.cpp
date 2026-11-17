@@ -219,6 +219,17 @@ void Runner::ApplyMetadata(const notebook::Notebook &notebook, const string &sou
 	}
 }
 
+void Runner::Prepare(const notebook::Notebook &notebook, const string &source, const std::map<string, Value> &params) {
+	ApplyMetadata(notebook, source);
+	InitializeVariables(notebook, params);
+}
+
+void Runner::RunAll(const notebook::Notebook &notebook, const RunnerOptions &options) {
+	for (auto index : notebook::RunOrder(notebook)) {
+		Run(notebook, notebook.cells[NumericCast<idx_t>(index)], options);
+	}
+}
+
 void Runner::InitializeVariables(const notebook::Notebook &notebook, const std::map<string, Value> &params) {
 	auto &config = ClientConfig::GetConfig(*connection->context);
 	for (auto &name : notebook::UndefinedVariables(notebook)) {

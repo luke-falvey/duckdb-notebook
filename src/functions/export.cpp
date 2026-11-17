@@ -205,8 +205,7 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 	Runner runner(db, state);
 	auto notebook = AnalyzeText(*runner.Conn().context, text);
 	ThrowIfInvalid(notebook, source);
-	runner.ApplyMetadata(notebook, source);
-	runner.InitializeVariables(notebook, options.params);
+	runner.Prepare(notebook, source, options.params);
 	RunnerOptions run;
 	run.page_rows = options.page_rows;
 	run.rows_at_least = true;
@@ -272,13 +271,10 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 	Runner runner(db, state);
 	auto &connection = runner.Conn();
 	auto notebook = AnalyzeText(*connection.context, text);
-	runner.ApplyMetadata(notebook, source);
-	runner.InitializeVariables(notebook, options.params);
+	runner.Prepare(notebook, source, options.params);
 	RunnerOptions run;
 	run.params = options.params;
-	for (auto index : notebook::RunOrder(notebook)) {
-		runner.Run(notebook, notebook.cells[NumericCast<idx_t>(index)], run);
-	}
+	runner.RunAll(notebook, run);
 
 	// Relations the cells read that no query cell defines: tables (or views) in the database.
 	std::set<string> cell_views;
@@ -586,13 +582,10 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 		Runner runner(db, state);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		// Choices may come from cells (select from=cell.column), which must run first.
-		runner.ApplyMetadata(notebook, source);
-		runner.InitializeVariables(notebook, options.params);
+		runner.Prepare(notebook, source, options.params);
 		RunnerOptions run_all;
 		run_all.params = options.params;
-		for (auto index : notebook::RunOrder(notebook)) {
-			runner.Run(notebook, notebook.cells[NumericCast<idx_t>(index)], run_all);
-		}
+		runner.RunAll(notebook, run_all);
 		vector<InputSpace> spaces;
 		vector<string> frozen;
 		idx_t combinations = 1;
@@ -793,13 +786,10 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		Runner runner(db, session);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		ThrowIfInvalid(notebook, bind.source);
-		runner.ApplyMetadata(notebook, bind.source);
-		runner.InitializeVariables(notebook, bind.options.params);
+		runner.Prepare(notebook, bind.source, bind.options.params);
 		RunnerOptions run;
 		run.params = bind.options.params;
-		for (auto index : notebook::RunOrder(notebook)) {
-			runner.Run(notebook, notebook.cells[NumericCast<idx_t>(index)], run);
-		}
+		runner.RunAll(notebook, run);
 		idx_t files = 0;
 		auto extension = bind.options.data_format == "csv" ? ".csv" : ".parquet";
 		for (auto &cell : notebook.cells) {
