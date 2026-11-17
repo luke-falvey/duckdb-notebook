@@ -58,6 +58,7 @@ nav:
       - Storing notebooks in a database: guides/storing.md
       - Exporting and sharing: guides/exporting.md
       - Running headless and in CI: guides/headless.md
+      - Running in the browser: guides/browser.md
   - Reference:
       - Overview: reference/index.md
       - File format: reference/format.md

@@ -13,3 +13,4 @@ Each guide covers one task, with real notebooks and the output they produce.
 | [Storing notebooks in a database](storing.md) | Keep notebooks and their history inside a DuckDB file |
 | [Exporting and sharing](exporting.md) | Send HTML, PDF, Markdown, plain SQL or data files |
 | [Running headless and in CI](headless.md) | Run notebooks from SQL, scripts and GitHub Actions |
+| [Running in the browser](browser.md) | Load the extension into DuckDB-WASM and use it in your own pages |

@@ -21,14 +21,19 @@ CI builds the extension for every native platform DuckDB distributes for:
 | Windows x86-64 (MSVC) | `windows_amd64` | yes |
 | Windows x86-64 (MinGW) | `windows_amd64_mingw` | yes |
 | Windows ARM64 | `windows_arm64` | built only |
+| DuckDB-WASM 2.0, `base` bundle | `wasm_eh` | yes, loaded into DuckDB-WASM in Chromium |
+| DuckDB-WASM 2.0, `threads` bundle | `wasm_threads` | yes, as above; `LOAD` can hang (see [running in the browser](../guides/browser.md)) |
+| (no DuckDB-WASM 2.0 bundle loads it) | `wasm_mvp` | built only |
 
-"Tested" means DuckDB's pipeline runs the SQL test suite there; "built only" platforms compile and
-link but the pipeline does not run tests on them. DuckDB-WASM (in the browser) is not a target yet;
-the [html-wasm export](../guides/exporting.md#inputs-that-still-work) runs exported notebooks there
-without the extension.
+"Tested" means DuckDB's pipeline runs the SQL test suite there (for the WebAssembly builds, a job of
+this repository loads them into DuckDB-WASM in headless Chromium and runs the notebook functions);
+"built only" platforms compile and link but are not tested. In DuckDB-WASM the editor's server and
+PDF export are not available; [running in the browser](../guides/browser.md) has what works there and
+how to load it.
 
-The extension is about 40 MB (15 MB compressed). Almost all of it is DuckDB itself, which every C++
-extension that runs SQL links in; the notebook's own code is under 2 MB.
+A native extension is about 40 MB (15 MB compressed). Almost all of it is DuckDB itself, which every
+C++ extension that runs SQL links in; the notebook's own code is under 2 MB. The WebAssembly build
+links against the DuckDB already in the page and is 1.2 MB.
 
 ## Download the CI build
 
