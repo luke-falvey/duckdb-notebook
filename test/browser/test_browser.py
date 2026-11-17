@@ -554,6 +554,19 @@ def test_ink(browser, work, chromium):
     print(f"     charts.sql: first screen in {took:.0f} ms; frames while writing: " + ", ".join(f"{k} {v:.1f}" for k, v in smooth.items()))
     check(took < 2500 * 1.25 and smooth["gap95"] < 34, f"charts.sql: the first screen is written within the budget, at a smooth frame rate ({took:.0f} ms)")
 
+    # A reader's own change (a tab) is drawn at once, not written out at length.
+    page = browser.new_page(viewport=viewport)
+    page.goto(url)
+    page.wait_for_function("Ink.plans.length > 0")
+    page.wait_for_function("Ink.jobs().every(j => j.state === 'parked')", timeout=10000)
+    tab = page.locator(".nb-cell[data-idx='7'] .nb-tab", has_text="table")
+    tab.scroll_into_view_if_needed()
+    page.wait_for_function("Ink.jobs().every(j => j.state === 'parked')", timeout=10000)
+    tab.click()
+    quick = page.evaluate("Ink.plans[Ink.plans.length - 1]")
+    page.wait_for_timeout(250)
+    check(quick["dur"] <= 200 and page.evaluate(INK_STATE)["running"] == 0, f"switching a tab draws the new tab within 200 ms ({quick['key']}, {quick['dur']} ms)")
+
     # 8. Switches: each gives the complete page and no jobs.
     for name, setup in (("reduced motion", {"reduced_motion": "reduce"}), ("print media", None), ("the gear menu's setting", "localStorage.setItem('nb.ink', 'off')")):
         page = browser.new_page(viewport=viewport, **(setup if isinstance(setup, dict) else {}))
@@ -643,6 +656,19 @@ def test_ink_editor(browser, work):
         frames(page, 3)
         again = page.evaluate(INK_STATE)
         check(again["jobs"] == done["jobs"] and again["canvases"] == 0, f"rendering again after everything is written writes nothing ({again})")
+        # Typing never writes: code is keyed to the notebook as opened, not to its text.
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.goto(url)
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("Ink.jobs().every(j => j.state === 'parked')", timeout=10000)
+        codes = page.evaluate("Ink.plans.filter(p => p.key.endsWith('/code')).length")
+        area = page.locator(".nb-cell[data-idx='3'] textarea")
+        area.click()
+        area.press("End")
+        area.type(" -- typed", delay=20)
+        page.wait_for_timeout(900)
+        check(page.evaluate("Ink.plans.filter(p => p.key.endsWith('/code')).length") == codes and page.locator(".nb-cell[data-idx='3'] canvas.ink-layer").count() == 0,
+              "typing in a cell writes nothing")
         page.click("#gear")
         page.select_option("#ink", "off")
         page.keyboard.press("Escape")
