@@ -2,16 +2,9 @@
 // the data; this file maps the rows it sends to SVG. Typed charts live in render-typed.js.
 (function (NB) {
   'use strict';
-  var SVG = 'http://www.w3.org/2000/svg';
   var M = { top: 12, right: 16, bottom: 42, left: 58 };
 
-  function s(tag, attrs, parent) {
-    var e = document.createElementNS(SVG, tag);
-    for (var k in attrs || {}) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
-    if (parent) parent.appendChild(e);
-    return e;
-  }
-  NB.svg = s;
+  var s = NB.svg = Sketch.el;
 
   NB.objects = function (dataset) {
     if (!dataset || !dataset.columns) return [];
@@ -208,7 +201,7 @@
     }
     var a = s('g', { 'class': 'nb-axis' }, g);
     ticks.forEach(function (t) {
-      var p = scale.kind === 'band' ? scale.center(t) : scale(numeric(t, 'x') === numeric(t, 'x') ? t : t);
+      var p = scale.kind === 'band' ? scale.center(t) : scale(t);
       if (!isFinite(p)) return;
       if (orient === 'bottom') {
         if (scale.kind !== 'band') s('line', { x1: p, x2: p, y1: 0, y2: h, 'class': 'nb-grid-line' }, a);
@@ -922,5 +915,5 @@
     }
   };
 
-  NB.scales = { linear: linear, band: band, time: time, color: colorScale, axis: axis, numeric: numeric, distinct: distinct, tooltip: tooltip, margin: M };
+  NB.scales = { linear: linear, band: band, time: time, axis: axis, numeric: numeric, distinct: distinct, margin: M };
 })(NB);

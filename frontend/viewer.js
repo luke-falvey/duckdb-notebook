@@ -10,10 +10,7 @@
   var payload, current, wasm = null, variables = {}, selected = {};
 
   function bytes(id) {
-    var text = document.getElementById(id).textContent.trim();
-    var bin = atob(text), out = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    return b64bytes(document.getElementById(id).textContent.trim());
   }
   function gunzip(u8) {
     return new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer().then(function (b) { return new Uint8Array(b); });

@@ -342,13 +342,9 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 	}
 	for (auto index : notebook::RunOrder(notebook)) {
 		auto &cell = notebook.cells[NumericCast<idx_t>(index)];
-		if (cell.kind == notebook::CellKind::INPUT) {
-			for (auto &statement : notebook::SplitStatements(notebook::CellSql(cell))) {
-				setup.Push(Json::String(notebook::RewriteVariables(statement.text)));
-			}
-		}
-		if (cell.kind == notebook::CellKind::SQL && cell.is_query) {
-			// Query cells become temporary views again; effect cells already ran into the data file.
+		// Inputs set their variables and query cells become temporary views again; effect cells already ran
+		// into the data file.
+		if (cell.kind == notebook::CellKind::INPUT || (cell.kind == notebook::CellKind::SQL && cell.is_query)) {
 			for (auto &statement : notebook::SplitStatements(notebook::CellSql(cell))) {
 				setup.Push(Json::String(notebook::RewriteVariables(statement.text)));
 			}

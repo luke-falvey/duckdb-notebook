@@ -1032,8 +1032,7 @@ public:
 		} else if (type == "pivot") {
 			auto rows = spec.Get("rows") ? spec.Get("rows")->Strings() : std::vector<std::string>();
 			auto column = spec.Str("columns");
-			Json value_enc;
-			auto value = Measure(spec.Get("values"), "values", "", &value_enc);
+			Measure(spec.Get("values"), "values", "", nullptr); // validates the channel
 			auto values_node = spec.Get("values");
 			auto agg = values_node && values_node->IsMap() ? Lower(values_node->Str("agg", "sum")) : "sum";
 			if (rows.empty() || column.empty() || !values_node) {

@@ -13,8 +13,8 @@
 
 // notebook_run(path, params := {...}) runs a notebook headlessly, in a connection of its
 // own. Cells run in file order, except that a markdown cell waits for the cells its
-// `{{ }}` expressions read (notebook::RunOrder). It is the seed of the runner the server
-// will use.
+// `{{ }}` expressions read (notebook::RunOrder). Cells run through Runner (session.cpp), as in
+// the server and the exports.
 //
 // A run never reads the result cache: it exists to compute from the data as it is now. With
 // cache := true it writes it, so the next person to open the notebook sees these results at once.
