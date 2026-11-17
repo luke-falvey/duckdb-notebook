@@ -36,6 +36,37 @@ def sql(db, *statements):
     return result.stdout
 
 
+# Shells running a server that have not been stopped yet; main() stops them if a test fails part-way.
+running = []
+
+
+def serve(work, notebook, db=None, setup=None):
+    """Starts the notebook server in a DuckDB shell (in-memory, or on `db`) and returns (shell, url).
+    `setup` is SQL the shell runs first. Stop it with stop(shell)."""
+    args = [DUCKDB, "-init", "/dev/null", "-noheader", "-list"] + ([db] if db else [])
+    shell = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             cwd=work, bufsize=1)
+    running.append(shell)
+    if setup:
+        shell.stdin.write(setup + "\n")
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    return shell, shell.stdout.readline().strip()
+
+
+def stop(shell):
+    """Stops the server and quits the shell; returns what the shell printed. Kills a shell that does not quit."""
+    running.remove(shell)
+    try:
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        return shell.communicate(timeout=30)[0]
+    except Exception:
+        shell.kill()
+        shell.communicate()
+        raise
+
+
 def still(url):
     """The page with the handwriting animation off (render-ink.js): the checks here are about the finished
     page. test_ink checks the animation itself."""
@@ -53,11 +84,7 @@ def test_server(browser, work):
     notebook = os.path.join(work, "revenue.sql")
     shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
     db = os.path.join(work, "server.duckdb")
-    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list", db], stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
-    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
-    shell.stdin.flush()
-    url = shell.stdout.readline().strip()
+    shell, url = serve(work, notebook, db)
     check(url.startswith("http://127.0.0.1:"), f"notebook_start returns a URL ({url[:40]}...)")
 
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
@@ -297,9 +324,7 @@ def test_server(browser, work):
           "the API refuses requests without the token")
     check(not errors, f"no browser errors in the editor {errors[:3]}")
 
-    shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
-    shell.stdin.flush()
-    output = shell.communicate(timeout=30)[0]
+    output = stop(shell)
     check("true" in output, "notebook_stop stops the server")
     check(not os.path.exists(db + ".wal"), "the database closes and checkpoints when the shell exits")
     check(sql(db, "SELECT count(*) FROM orders").strip() == "50000",
@@ -311,11 +336,7 @@ def test_metadata_error(browser, work):
     notebook = os.path.join(work, "needs_ext.sql")
     with open(notebook, "w") as f:
         f.write("-- %% [notebook]\n/*\ntitle: Needs an extension\nextensions: [no_such_extension_xyz]\n*/\n\n-- %% one\nSELECT 1 AS x;\n")
-    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
-    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
-    shell.stdin.flush()
-    url = shell.stdout.readline().strip()
+    shell, url = serve(work, notebook)
     page = browser.new_page()
     page.goto(still(url))
     page.wait_for_selector(".nb-cell")
@@ -324,9 +345,7 @@ def test_metadata_error(browser, work):
     text = page.locator(".nb-problem .nb-error").text_content()
     check("no_such_extension_xyz" in text and "LOAD no_such_extension_xyz works" in text and page.locator(".nb-problem").is_visible(),
           "a run that fails before any cell shows the whole message, naming the missing extension")
-    shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
-    shell.stdin.flush()
-    shell.communicate(timeout=30)
+    stop(shell)
 
 
 def test_cache(browser, work):
@@ -340,16 +359,7 @@ def test_cache(browser, work):
     sidecar = os.path.join(folder, ".duckdb-notebook", "revenue")
 
     def start(source=notebook):
-        shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list", db], stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=folder, bufsize=1)
-        shell.stdin.write(f"SELECT url FROM notebook_start('{source}', open := false);\n")
-        shell.stdin.flush()
-        return shell, shell.stdout.readline().strip()
-
-    def stop(shell):
-        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
-        shell.stdin.flush()
-        shell.communicate(timeout=30)
+        return serve(folder, source, db)
 
     def open_page(url):
         page = browser.new_page(viewport={"width": 1400, "height": 1000})
@@ -866,11 +876,7 @@ def test_ink_editor(browser, work):
     # 5 and 6 in the editor, whose render() rebuilds every cell on every change.
     notebook = os.path.join(work, "ink_editor.sql")
     shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
-    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
-    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
-    shell.stdin.flush()
-    url = shell.stdout.readline().strip()
+    shell, url = serve(work, notebook)
     try:
         off = browser.new_page(viewport={"width": 1400, "height": 1000})
         off.goto(still(url))
@@ -964,9 +970,7 @@ def test_ink_editor(browser, work):
         check(page.evaluate("Ink.jobs().length") == 0 and done["canvases"] == 0 and done["styled"] == 0, f"the watched editor ends with no trace ({done})")
         check(not errors, f"no browser errors watching the editor {errors[:3]}")
     finally:
-        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
-        shell.stdin.flush()
-        shell.communicate(timeout=30)
+        stop(shell)
 
 
 # One pen at a time: the running piece, and how many of its atoms (not counting the second pass of a
@@ -1398,11 +1402,7 @@ def test_present(browser, work):
 def test_present_editor(browser, work):
     notebook = os.path.join(work, "present_editor.sql")
     shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
-    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
-    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
-    shell.stdin.flush()
-    url = shell.stdout.readline().strip()
+    shell, url = serve(work, notebook)
     try:
         page = browser.new_page(viewport={"width": 1366, "height": 768})
         errors = watch(page)
@@ -1467,9 +1467,7 @@ def test_present_editor(browser, work):
               "nothing of the presentation is left on the page")
         check(not errors, f"no browser errors presenting in the editor {errors[:3]}")
     finally:
-        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
-        shell.stdin.flush()
-        shell.communicate(timeout=30)
+        stop(shell)
 
 def test_chart_marks(browser, work):
     """Rules and bands on charts (FORMAT 5.1), in an export of test/notebooks/references.sql."""
@@ -1578,12 +1576,8 @@ def test_peek(browser, work):
     # note beside the code. Nothing is asked before the notebook has run, and nothing else changes.
     notebook = os.path.join(work, "peek.sql")
     shutil.copy(os.path.join(ROOT, "test", "notebooks", "peek.sql"), notebook)
-    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
-    shell.stdin.write("CREATE SEQUENCE nb_peek_seq; CREATE MACRO nb_peek_sneaky() AS nextval('nb_peek_seq');\n")
-    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
-    shell.stdin.flush()
-    url = shell.stdout.readline().strip()
+    shell, url = serve(work, notebook,
+                       setup="CREATE SEQUENCE nb_peek_seq; CREATE MACRO nb_peek_sneaky() AS nextval('nb_peek_seq');")
 
     def caret(page, cell, needle, skip=0):
         """Puts the caret just before `needle` (plus `skip`) in a cell's SQL, with a real key press."""
@@ -1794,9 +1788,7 @@ def test_peek(browser, work):
               "a notebook reloaded from disk is not peeked at until it is run again")
         check(not errors, f"no browser errors while peeking {errors[:3]}")
     finally:
-        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
-        shell.stdin.flush()
-        shell.communicate(timeout=30)
+        stop(shell)
 
 
 
@@ -1808,16 +1800,7 @@ def test_peek_cached(browser, work):
     db = os.path.join(work, "peek_cached.duckdb")
 
     def start():
-        shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list", db], stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
-        shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
-        shell.stdin.flush()
-        return shell, shell.stdout.readline().strip()
-
-    def stop(shell):
-        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
-        shell.stdin.flush()
-        shell.communicate(timeout=30)
+        return serve(work, notebook, db)
 
     probe = "() => App.api('POST', '/api/peek', {sql: 'SELECT * FROM (SELECT 1 AS a) q', cursor: 20, rows: 5})"
     shell, url = start()
@@ -1874,6 +1857,8 @@ def main():
             test_peek_cached(browser, work)
         finally:
             browser.close()
+            for shell in list(running):
+                stop(shell)
     shutil.rmtree(work, ignore_errors=True)
     print(f"{len(failures)} failure(s)" if failures else "browser tests passed")
     sys.exit(1 if failures else 0)

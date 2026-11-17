@@ -1,5 +1,6 @@
 #pragma once
 
+#include "notebook/format.hpp"
 #include "notebook/json.hpp"
 #include "notebook/yaml.hpp"
 
@@ -62,6 +63,10 @@ ChartPlan CompileChart(const std::string &spec, const std::string &from, const C
 
 //! The selection a spec defines, if any.
 SelectionInfo ChartSelectionInfo(const std::string &spec);
+SelectionInfo ChartSelectionInfo(const Yaml &spec);
+
+//! Every selection the notebook's charts define, by name. Where two charts define one name, the later wins.
+std::map<std::string, SelectionInfo> NotebookSelections(const Notebook &notebook);
 
 //! Rewrites `$name` to `getvariable('name')` in SQL code (not strings or comments), for engines
 //! older than DuckDB 2.0 such as the DuckDB-WASM used by the html-wasm export.

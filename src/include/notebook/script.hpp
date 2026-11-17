@@ -18,6 +18,15 @@ std::string QuoteIdentifier(const std::string &name);
 //!  - anything else: the body unchanged
 std::string CellSql(const Cell &cell);
 
+//! What a fresh connection must run to have what a SQL cell left in the last one: its statements that
+//! set connection state (SET, USE, CREATE TEMP ..., notebook::IsConnectionState) and, for a named
+//! query cell, the view or temp table it defines. Each statement ends in `;\n`. Empty for other cells.
+std::string ReplaySql(const Cell &cell);
+
+//! The SQL whose rows a query cell displays: `SELECT * FROM <name>` for a named one, its last
+//! statement for an unnamed one. Empty for other cells.
+std::string DisplaySql(const Cell &cell);
+
 //! The relation a cell's charts read, as a chart `from`: a chart cell's from=, a named query
 //! cell's name, or an unnamed query cell's query in parentheses. Empty for other cells.
 std::string ChartFrom(const Cell &cell);

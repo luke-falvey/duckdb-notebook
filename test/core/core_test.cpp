@@ -1,6 +1,7 @@
 // Tests for src/core, which has no DuckDB dependency. Build and run with `make core_test`.
 // End-to-end behaviour through SQL is covered by test/sql/*.test.
 #include "notebook/chart.hpp"
+#include "notebook/document.hpp"
 #include "notebook/format.hpp"
 #include "notebook/json.hpp"
 #include "notebook/yaml.hpp"
@@ -119,6 +120,18 @@ static void TestScript() {
 	                              "SELECT * FROM t WHERE r = $region AND $brush IS NULL LIMIT $lim;\n");
 	CHECK(CellSql(nb.cells[3]) == "CREATE OR REPLACE TEMP TABLE \"snap\" AS\nFROM filtered;\n");
 	CHECK(CellSql(nb.cells[4]) == "SELECT 1;\n");
+	// What a fresh connection replays, and what a query cell displays.
+	CHECK(ReplaySql(nb.cells[0]).empty() && ReplaySql(nb.cells[1]).empty());
+	// SET VARIABLE is not replayed: variables are saved and restored on their own.
+	CHECK(ReplaySql(nb.cells[2]) == "-- pick rows\nCREATE OR REPLACE TEMP VIEW \"filtered\" AS\n"
+	                                "SELECT * FROM t WHERE r = $region AND $brush IS NULL LIMIT $lim;\n");
+	CHECK(ReplaySql(nb.cells[3]) == "CREATE OR REPLACE TEMP TABLE \"snap\" AS\nFROM filtered;\n");
+	CHECK(ReplaySql(nb.cells[4]).empty());
+	auto effects =
+	    ParseNotebook("-- %% setup\nSET threads = 2;\nCREATE TEMP TABLE t AS SELECT 1;\nCREATE TABLE u (x INT);\n");
+	CHECK(ReplaySql(effects.cells[0]) == "SET threads = 2;\nCREATE TEMP TABLE t AS SELECT 1;\n");
+	CHECK(DisplaySql(nb.cells[2]) == "SELECT * FROM \"filtered\"" && DisplaySql(nb.cells[4]) == "SELECT 1");
+	CHECK(DisplaySql(nb.cells[0]).empty() && DisplaySql(effects.cells[0]).empty());
 	auto undefined = UndefinedVariables(nb);
 	CHECK(undefined.size() == 1 && undefined[0] == "brush");
 	CHECK(ExpandNotebook(nb, "x.sql").find("SET VARIABLE \"brush\" = NULL;") != std::string::npos);
@@ -150,6 +163,12 @@ static void TestChartSpec() {
 	CHECK(ChartSelection("mark: bar\nselect: {as: picked, type: point, on: x}\n") == "picked");
 	CHECK(ChartSelection("select:\n  type: interval\n  as: \"brush\"\nmark: line") == "brush");
 	CHECK(ChartSelection("mark: bar\nlayers:\n  - select: {as: nested}") == "");
+	// Every selection in a notebook, by name.
+	auto selecting =
+	    ParseNotebook("-- %% a\nSELECT 1 AS x\n/* chart\nmark: bar\nx: x\nselect: {as: pick, type: point}\n*/\n"
+	                  "-- %% b\nSELECT 2 AS x\n/* chart\nmark: line\nx: x\n*/\n");
+	auto selections = NotebookSelections(selecting);
+	CHECK(selections.size() == 1 && selections["pick"].type == "point" && selections["pick"].channels.size() == 1);
 	CHECK(ChartFilters("filter: picked # from the trend chart") == std::vector<std::string> {"picked"});
 	CHECK((ChartFilters("filter: [a, 'b']") == std::vector<std::string> {"a", "b"}));
 	CHECK((ChartFilters("filter:\n  - a\n  - b\nmark: bar") == std::vector<std::string> {"a", "b"}));
@@ -524,6 +543,12 @@ static void TestCellOptions() {
 	CHECK(shown.cells[0].errors.empty() && shown.cells[1].errors.empty() && shown.cells[2].errors.empty());
 	CHECK(shown.cells[1].Option("screen") == "join");
 	CHECK(shown.cells[3].errors.size() == 1 && shown.cells[3].errors[0].find("screen=next") != std::string::npos);
+	// from=<relation>.<column> splits at the last dot.
+	auto inputs =
+	    ParseNotebook("-- %% input r widget=select from=main.orders.region\n'EU'\n-- %% input s widget=text\n''\n");
+	std::string relation, column;
+	CHECK(inputs.cells[0].InputFrom(relation, column) && relation == "main.orders" && column == "region");
+	CHECK(!inputs.cells[1].InputFrom(relation, column));
 }
 
 static void TestQueryCharts() {
@@ -577,6 +602,40 @@ static void TestQueryCharts() {
 	CHECK(nb.cells[1].charts.size() == 1 && nb.cells[1].charts[0] == "mark: bar" && ChartFrom(nb.cells[1]) == "a");
 }
 
+static void TestDocument() {
+	// The title: [notebook] title:, else the first # heading, else the file name.
+	CHECK(NotebookTitle(ParseNotebook("-- %% [notebook]\n/*\ntitle: Sales\n*/\n-- %% [markdown]\n/*\n# Other\n*/\n"),
+	                    "x.sql") == "Sales");
+	CHECK(NotebookTitle(ParseNotebook("-- %% [markdown]\n/*\n# Revenue review\ntext\n*/\n"), "x.sql") ==
+	      "Revenue review");
+	CHECK(NotebookTitle(ParseNotebook("-- %% q\nSELECT 1;\n"), "/data/monthly.report.sql") == "monthly.report");
+	CHECK(NotebookTitle(ParseNotebook("-- %% q\nSELECT 1;\n"), ".hidden") == ".hidden");
+
+	// The Markdown export of a payload: prose, fenced code, tables of at most 20 rows, inputs and hide=.
+	std::string error;
+	auto payload = ParseJson(R"({"hide": "", "cells": [
+	  {"kind": "markdown", "output": "# Title"},
+	  {"kind": "sql", "sql": "SELECT a FROM t", "options": {},
+	   "table": {"columns": [{"name": "a|b"}], "rows": [[1], ["x\ny"]], "total": 30}},
+	  {"kind": "sql", "sql": "SELECT 2", "options": {"hide": "code"}, "error": "boom"},
+	  {"kind": "input", "name": "region", "options": {"label": "Region"}, "value": "EU"},
+	  {"kind": "chart", "options": {}, "chart": {"render": {"title": "Sales"}, "datasets": [{"columns": [{"name": "n"}], "rows": [[3]]}]}}
+	]})",
+	                         error);
+	CHECK(error.empty());
+	auto md = MarkdownDocument(payload);
+	CHECK(md.find("# Title\n\n") == 0);
+	CHECK(md.find("```sql\nSELECT a FROM t\n```") != std::string::npos);
+	CHECK(md.find("| a\\|b |\n| --- |\n| 1 |\n| x y |\n") != std::string::npos);
+	CHECK(md.find("30 rows in total.") != std::string::npos);
+	CHECK(md.find("SELECT 2") == std::string::npos && md.find("> Error: boom") != std::string::npos);
+	CHECK(md.find("**Region**: EU") != std::string::npos);
+	CHECK(md.find("*Sales* (chart data; charts are drawn in the HTML export)\n\n| n |") != std::string::npos);
+	payload.Set("hide", Json::String("output"));
+	md = MarkdownDocument(payload);
+	CHECK(md.find("boom") == std::string::npos && md.find("| 1 |") == std::string::npos && md.find("# Title") == 0);
+}
+
 static void TestTimingSetting() {
 	auto nb = ParseNotebook("-- %% [notebook]\n/*\ntitle: T\ntiming: false\n*/\n");
 	CHECK(nb.cells[0].errors.empty());
@@ -606,6 +665,7 @@ int main() {
 	TestChartReferences();
 	TestChartNotes();
 	TestCellOptions();
+	TestDocument();
 	TestQueryCharts();
 	TestTimingSetting();
 	TestCache();

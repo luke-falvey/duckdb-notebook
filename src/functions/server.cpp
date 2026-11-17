@@ -7,6 +7,7 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "notebook/chart.hpp"
+#include "notebook/document.hpp"
 #include "notebook/functions.hpp"
 #include "notebook/graph.hpp"
 #include "notebook/result_cache.hpp"
@@ -138,7 +139,7 @@ Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) 
 	                .Set("source", Json::String(session.source))
 	                .Set("text", Json::String(session.text))
 	                .Set("preamble", Json::String(notebook.preamble))
-	                .Set("title", Json::String(NotebookTitle(notebook, session.source)))
+	                .Set("title", Json::String(notebook::NotebookTitle(notebook, session.source)))
 	                .Set("cells", CellsJson(notebook))
 	                .Set("sql_words", [&]() {
 		                Connection connection(db);
@@ -153,6 +154,11 @@ Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) 
 		    .Set("ran", Json::Bool(session.ran));
 	}
 	return json;
+}
+
+//! The notebook a request is about: `nb` in its JSON body, or else in its query string.
+string Source(const http::Request &req, const Json &body) {
+	return body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb");
 }
 
 shared_ptr<Session> GetSession(ServerState &state, const string &source) {
@@ -306,7 +312,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 	// Update the session's text (and optionally save it). Returns the analysis of the new text.
 	server.Post("/api/notebook", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->lock);
 		            auto db = Database(state);
 		            if (auto text = body.Get("text")) {
@@ -339,7 +345,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 
 	server.Post("/api/run", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            // A run does not wait for a peek.
 		            session->peeks++;
 		            session->InterruptPeek();
@@ -354,8 +360,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            Runner runner(*db, session->state);
 		            RunningGuard running(*session, runner);
 		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
-		            runner.ApplyMetadata(notebook, session->source);
-		            runner.InitializeVariables(notebook, {});
+		            runner.Prepare(notebook, session->source, {});
 		            RunnerOptions options;
 		            options.charts = true;
 		            options.mark_values = true;
@@ -405,14 +410,9 @@ void Routes(shared_ptr<ServerState> &shared) {
 				            results.Push(result);
 				            continue;
 			            }
-			            RanCell done;
-			            done.index = index;
-			            done.status = RunForEditor(runner, notebook, cell, options, result).status;
-			            if (auto value = result.Get("value")) {
-				            done.value = *value;
-			            }
+			            auto status = RunForEditor(runner, notebook, cell, options, result).status;
 			            // Serialised once, for the response and for the cache.
-			            done.result = result.Dump();
+			            auto done = RanFromResult(index, status, result);
 			            results.Push(Json::Raw(done.result));
 			            ran.push_back(std::move(done));
 		            }
@@ -424,7 +424,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 
 	server.Post("/api/variable", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->lock);
 		            auto name = body.Get("name") ? body.Get("name")->Str() : string();
 		            if (name.empty()) {
@@ -461,7 +461,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 	// into it. Answers `{reason}` instead of an error when there is nothing to show.
 	server.Post("/api/peek", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            auto nothing = [&](const string &reason) {
 			            SendJson(res, Json::Object().Set("reason", Json::String(reason)));
 		            };
@@ -512,7 +512,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto db = Database(state);
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
-		           auto sql = Runner::DisplaySql(CellAt(notebook, Param(req, "cell")));
+		           auto sql = notebook::DisplaySql(CellAt(notebook, Param(req, "cell")));
 		           if (sql.empty()) {
 			           throw InvalidInputException("That cell has no result to page through");
 		           }
@@ -610,7 +610,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 	server.Post("/api/cache/clear",
 	            Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->lock);
 		            auto db = Database(state);
 		            auto removed = session->cache.Clear(*db, session->source);
@@ -619,7 +619,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 
 	server.Post("/api/interrupt", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->running_lock);
 		            if (session->running) {
 			            session->running->Interrupt();
@@ -811,10 +811,6 @@ struct StartBindData : public TableFunctionData {
 	bool open = true;
 };
 
-struct OnceState : public GlobalTableFunctionState {
-	bool done = false;
-};
-
 unique_ptr<FunctionData> StartBind(ClientContext &context, TableFunctionBindInput &input,
                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<StartBindData>();
@@ -839,10 +835,6 @@ unique_ptr<FunctionData> StartBind(ClientContext &context, TableFunctionBindInpu
 	names.emplace_back("token");
 	return_types.push_back(LogicalType::VARCHAR);
 	return std::move(result);
-}
-
-unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<OnceState>();
 }
 
 void OpenBrowser(const string &url) {

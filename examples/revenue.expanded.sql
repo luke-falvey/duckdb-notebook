@@ -52,4 +52,3 @@ WHERE $picked_months IS NULL
    OR ts BETWEEN $picked_months.lo AND $picked_months.hi
 ORDER BY amount DESC
 LIMIT 20;
-

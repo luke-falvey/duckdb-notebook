@@ -119,7 +119,7 @@ the extension writes an expanded script with the wrappers spelled out
 | Query cell | Its own name; its charts' selection variables | Tables, views and variables in its SQL; its charts' `filter` selections (no dependency) |
 | Effect cell | Objects it creates or attaches; variables it sets | Same |
 | Input | Its variable | The `from=` cell, if any |
-| Chart | Its selection variable, if any | `from`, `filter`, fields |
+| Chart | Its selection variable, if any | `from`, `filter` |
 | Markdown | Nothing | Names inside `{{ }}` |
 
 Reads come from DuckDB's parser, not from regular expressions. The extension walks the parsed
@@ -129,8 +129,9 @@ calls. Names that match no cell are assumed to be catalog objects and are left a
 **Rules**
 
 - One definition per name. A second cell defining the same name is an error on both.
-- SQL and input cells read only cells above them, so the graph cannot contain a cycle and the file
-  reads top to bottom.
+- SQL and input cells read only cells above them, so the file reads top to bottom. The one exception is
+  a chart's selection: a query cell's chart filters are read but add no edge, so charts of one query can
+  select and filter each other (§14).
 - A cell is `fresh`, `stale`, `running` or `failed`. When a cell's source or anything it reads changes,
   it and everything downstream become stale.
 
@@ -140,7 +141,8 @@ are only marked stale and wait for a click, which is how marimo's lazy mode and 
 
 **Effect cells run only when asked.** Automatically replaying `INSERT`, `COPY … TO` or `ATTACH` would
 be surprising and sometimes destructive. Editing or running an effect cell marks its dependents stale.
-"Run all" executes every cell in file order, which is also what the headless runner does.
+"Run all" executes every cell in run order, which is also what the headless runner does: file order,
+except that a markdown or chart cell waits for the cells it reads (§11).
 
 **Inputs and selections** set a variable in the session and trigger the same staleness propagation. To
 the graph, a slider and a chart brush are the same thing.
@@ -195,9 +197,9 @@ or CI job with no browser.
 | `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count, timing and rendered markdown | Built |
 | `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook | Built |
 | `notebook_stop()` | Stop it | Built |
-| `notebook_export(path, file := 'out.html', format := …, params := {…})` | Export (see §7) | Built |
-| `notebook_save(path, name := …, message := …, force := …)` | Store a file in the current database as a new version | Built |
-| `notebook_checkout(name, file := 'x.sql', version := …, force := …)` | Write a stored version to a file | Built |
+| `notebook_export(path, file := 'out.html', format := …, params := {…}, interactive := …, hide := …, page_rows := …, budget := …, data_format := …, chrome := …, wasm_runtime := …)` | Export (see §7) | Built |
+| `notebook_save(path, name := …, message := …, database := …, force := …)` | Store a file in the current database as a new version | Built |
+| `notebook_checkout(name, file := 'x.sql', version := …, database := …, force := …)` | Write a stored version to a file | Built |
 | `notebook_chart_query(spec, from)` | The SQL a chart spec compiles to, for inspection | Built |
 
 The output file parameter is `file :=` rather than `to :=`: `to` is a reserved word in DuckDB's
@@ -492,7 +494,7 @@ a browser to produce the SVG.
 |---|---|---|
 | S1 | ~~Can the extension walk a parsed statement for table and parameter references across all statement kinds?~~ | **Done: yes, with the C++ parser and no binding.** See §11 |
 | S2 | ~~Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder?~~ | **Done: neither; JSON.** Pages and chart data are small after aggregation. See §11 |
-| S3 | ~~Size of the extension with the frontend embedded; lazy loading of heavy renderers~~ | **Done: 132 KB of frontend source, 30 KB compressed**, negligible next to the extension itself |
+| S3 | ~~Size of the extension with the frontend embedded; lazy loading of heavy renderers~~ | **Done: about 350 KB of frontend source and 90 KB of fonts (2026-11-17; the pen strokes are 89 KB of that)**, small next to the extension itself |
 | S4 | ~~DuckDB-WASM inlined in a single HTML file, opened from `file://`~~ | **Done: it works in Chromium.** See [the spike](../spikes/wasm-single-file/README.md). Firefox, Safari and inlined extensions are untested |
 | S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Not needed**: `html-wasm` ships precompiled chart SQL (§7). Still untried |
 | S6 | Will the community repository accept an extension that embeds an HTTP server and a multi-megabyte asset bundle? | Distribution. The process itself is documented: a pull request with a descriptor file, after which DuckDB's CI builds for Linux, macOS, Windows and Wasm |
@@ -649,8 +651,9 @@ variables that live in one. The first idea, holding the connection and releasing
 own connections close, does not work: DuckDB calls `OnConnectionClosed` with its connection-manager
 lock held, so releasing a connection there deadlocks. Instead a session is data: its variables, read
 back from the connection after each request, and per cell the statements that rebuild what a fresh
-connection lacks (the temporary view of a query cell, `CREATE TEMP`, `SET`, `USE`). Each request
-opens a connection, replays that, runs, and closes it. Replaying views is cheap because they are lazy;
+connection lacks (the temporary view of a query cell, `CREATE TEMP`, `SET`, `USE`), from
+`notebook::ReplaySql` in `src/core/script.cpp` (unit-tested without a database). Each request opens a
+connection, replays that, runs, and closes it. Replaying views is cheap because they are lazy;
 `materialize=table` cells recompute, which is the cost of this model.
 
 The server object lives in the database's object cache as a non-evictable entry. The cache is
@@ -898,8 +901,9 @@ draw the cells and only ask it which ones.
   Cells off screen are re-run all the same and show their new results when their screen comes.
 - **State is the address.** `#present=3` is written with `history.replaceState` as the presenter moves,
   so a reload, a restored tab or a shared link opens the same screen, and Back is not filled with
-  screens. In the editor a reload starts a new session: the result cache (§17) puts the last results
-  on screen at once, and presenting runs the notebook so its inputs and brushes are live again.
+  screens. In the editor a reload keeps the server's session for that notebook: the result cache (§17)
+  puts the last results on screen at once, and presenting runs the notebook so its inputs and brushes
+  are live again.
 - **Print is unchanged.** `beforeprint` leaves presenting before the browser lays out the page, so paper
   and PDF get the whole notebook.
 
@@ -953,7 +957,7 @@ show their own results, so what was missing was a look inside one.
   CTE holding `INSERT ... RETURNING` are refused wherever the caret is. A part that calls a volatile
   scalar function (`nextval`, `setval`, `write_log`...; `random()` and `uuid()` are allowed), or a table
   function on a short list of ones that change something (`checkpoint`, `copy_database`, the
-  `notebook_*` functions, `enable_*`/`disable_*`), is refused before it runs. Anything the list misses
+  `notebook_*` functions that write, `enable_*`/`disable_*`), is refused before it runs. Anything the list misses
   in the local database is stopped by the read-only transaction: a macro that hides `nextval` fails with
   "cannot write". Effects outside it (an extension's function that writes to a remote system) are not.
 - **Trust.** Opening a notebook does not run it (§3), so the server refuses to peek in a session until

@@ -380,6 +380,74 @@ var NB = (function () {
     return r.kind || 'chart ' + (k + 1);
   };
 
+  // An input cell's widget. onChange(cell, value) fires when the reader changes it. opts.values: the only
+  // values offered (a precomputed export's select); opts.enabled === false disables it. opts.exported keeps
+  // what the export viewer has always done differently from the editor: an empty label= or step= counts as
+  // set, a number shows with thousands separators, and an empty number input has no value attribute.
+  NB.inputWidget = function (cell, onChange, opts) {
+    opts = opts || {};
+    var exported = !!opts.exported, values = opts.values;
+    var option = function (key, fallback) {
+      var o = cell.options || {};
+      if (exported) return o[key] != null ? o[key] : fallback;
+      return fallback === undefined ? o[key] : o[key] || fallback;
+    };
+    var box = NB.el('div', { 'class': 'nb-input' });
+    box.appendChild(NB.el('label', { text: option('label', cell.name) }));
+    var w = cell.widget, v = cell.value, control;
+    var fire = function (value) { onChange(cell, value); };
+    if (values) {
+      control = NB.el('select', { onchange: function () { fire(values[+control.value]); } });
+      values.forEach(function (x, i) { control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: NB.key(x) === NB.key(v) ? 'selected' : null })); });
+    } else if (w === 'select' || w === 'multiselect') {
+      var choices = cell.choices || (option('options', '') ? option('options', '').split(',') : []);
+      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
+        var picked = Array.prototype.filter.call(control.options, function (x) { return x.selected; }).map(function (x) { return choices[+x.value]; });
+        fire(w === 'multiselect' ? picked : picked[0]);
+      } });
+      choices.forEach(function (x, i) {
+        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
+        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
+      });
+    } else if (w === 'checkbox') {
+      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
+    } else if (w === 'slider' || w === 'number') {
+      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : exported ? NB.formatNumber(v) : String(v) });
+      var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option('min'), max: option('max'), step: option('step', 'any'),
+        value: v == null && !exported ? '' : v, oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
+      box.appendChild(input);
+      box.appendChild(shown);
+    } else if (w === 'date') {
+      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: option('min'), max: option('max'), onchange: function () { fire(control.value); } });
+    } else if (w === 'daterange') {
+      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
+      a.onchange = b.onchange = function () { fire({ lo: a.value, hi: b.value }); };
+      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
+    } else {
+      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: option('placeholder'), onchange: function () { fire(control.value); } });
+    }
+    if (control) box.appendChild(control);
+    if (opts.enabled === false) box.querySelectorAll('input,select').forEach(function (e) { e.disabled = true; });
+    return box;
+  };
+
+  // ---- Cell framing, shared by the editor and the export viewer ------------------------------
+  // `query` for a SQL cell that is a query, `sql` for one that changes the database, else the cell's kind.
+  NB.kindName = function (cell) { return cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind; };
+  // Whether a hide= value hides `what` (code or output).
+  NB.hides = function (hide, what) { return hide === 'all' || hide === what; };
+  // The columns of 12 a cell spans in reading view (span=).
+  NB.span = function (span) { return Math.max(1, Math.min(12, +span)); };
+  // The tabs over a query cell's result: one per chart (marked when it failed), then the table.
+  NB.queryTabItems = function (charts, count) {
+    var items = [];
+    for (var k = 0; k < count; k++) {
+      var chart = (charts || [])[k];
+      items.push({ label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) });
+    }
+    return items.concat([{ label: 'table', title: 'The query\'s rows' }]);
+  };
+
   // A row of tabs. items: [{label, title}]; extra: elements appended after the tabs.
   NB.tabs = function (items, active, onPick, extra) {
     var bar = NB.el('div', { 'class': 'nb-tabs', role: 'tablist' });
