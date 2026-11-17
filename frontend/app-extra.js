@@ -24,10 +24,13 @@ var AppExtra = (function () {
       Object.keys(groups).sort().forEach(function (g) {
         side.appendChild(NB.el('div', { 'class': 'nb-coltype', text: g }));
         groups[g].forEach(function (t) {
-          var d = NB.el('details', {}, [NB.el('summary', { text: t.name + (t.kind === 'view' ? ' (view)' : ''), title: 'Click a name to insert it', draggable: 'true' })]);
+          // A click on a table opens it to show its columns, so a double-click inserts its name.
+          var d = NB.el('details', {}, [NB.el('summary', { text: t.name + (t.kind === 'view' ? ' (view)' : ''), title: 'Double-click to insert the name, or drag it into a cell', draggable: 'true' })]);
           d.querySelector('summary').addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', t.qualified); });
           (t.columns || []).forEach(function (col) {
-            d.appendChild(NB.el('div', { 'class': 'nb-col', onclick: function () { X.insert(col.name); }, draggable: 'true' }, [NB.el('span', { text: col.name }), NB.el('span', { 'class': 'nb-coltype', text: col.type })]));
+            var row = NB.el('div', { 'class': 'nb-col', title: 'Click to insert the name, or drag it into a cell', onclick: function () { X.insert(col.name); }, draggable: 'true' }, [NB.el('span', { text: col.name }), NB.el('span', { 'class': 'nb-coltype', text: col.type })]);
+            row.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', col.name); });
+            d.appendChild(row);
           });
           d.querySelector('summary').addEventListener('dblclick', function () { X.insert(t.qualified); });
           side.appendChild(d);

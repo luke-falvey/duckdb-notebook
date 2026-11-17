@@ -370,6 +370,15 @@ def test_metadata_first(browser, work):
         check(options == ["a", "b"], f"an input's choices from an attached database load before anything runs ({options})")
         catalog = page.evaluate("() => App.api('GET', '/api/catalog').then(r => r.tables.map(t => t.qualified), e => 'error: ' + e.message)")
         check(isinstance(catalog, list) and any("picks" in t for t in catalog), f"the catalog lists the attached database's tables ({catalog})")
+        # B12: what the catalog offers to drag can be dragged, and its tooltips name the gestures that work.
+        page.wait_for_selector("#sidebar details .nb-col", state="attached")
+        dragged = page.evaluate("""() => [...document.querySelectorAll('#sidebar details')].map(d => {
+          const col = d.querySelector('.nb-col'), t = new DataTransfer();
+          col.dispatchEvent(new DragEvent('dragstart', {dataTransfer: t, bubbles: true}));
+          return [d.querySelector('summary').title, col.title, t.getData('text/plain')];
+        })""")
+        check(any(row[2] == "c" for row in dragged) and all("ouble-click" in row[0] and "rag" in row[1] for row in dragged),
+              f"a catalog column drags its name, and the tooltips say double-click and drag ({dragged})")
         page.close()
     finally:
         stop(shell)
