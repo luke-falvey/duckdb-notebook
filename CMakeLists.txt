@@ -42,7 +42,7 @@ configure_file(${NOTEBOOK_ASSET_CPP}.tmp ${NOTEBOOK_ASSET_CPP} COPYONLY)
 # WebAssembly build leaves them out: server_unavailable.cpp registers notebook_start and notebook_stop
 # with the same signatures, failing with a clear message, and export.cpp refuses format 'pdf'.
 # Everything else (parsing, analysis, the chart compiler, running, storage, the other exports)
-# is the same in both builds. See docs/DESIGN.md section 19.
+# is the same in both builds. See docs/DESIGN.md section 20.
 if(EMSCRIPTEN)
   set(NOTEBOOK_HOST_FEATURES_DEFAULT OFF)
 else()
@@ -80,6 +80,7 @@ set(EXTENSION_SOURCES
     src/functions/storage.cpp
     src/functions/export.cpp
     ${NOTEBOOK_SERVER_SOURCE}
+    src/functions/peek.cpp
     ${NOTEBOOK_ASSET_CPP}
     src/notebook_extension.cpp)
 
