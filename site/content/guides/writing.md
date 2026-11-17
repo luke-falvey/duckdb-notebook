@@ -158,6 +158,12 @@ name, because the views are added by the runner. Three ways around that:
   unchanged.
 - [Run it headless](headless.md) with `notebook_run`.
 
+## Look inside a query while you write it
+
+In the editor, put the caret inside a CTE or sub-query and its first rows appear beside the cell,
+without running it: see [peek under the pen](../reference/editor.md#peek-under-the-pen). Write
+long queries as a chain of named CTEs and you can check each step as you go.
+
 ## Check your work
 
 ```sql

@@ -8,10 +8,11 @@
 │ notebook_chart_query │
 │ notebook_checkout    │
 │ notebook_export      │
+│ notebook_peek        │
 │ notebook_run         │
 │ notebook_save        │
 │ notebook_sql         │
 │ notebook_start       │
 │ notebook_stop        │
 └──────────────────────┘
-        11 rows
+        12 rows

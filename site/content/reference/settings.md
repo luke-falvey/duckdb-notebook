@@ -49,6 +49,7 @@ Kept in the browser's local storage, per browser, never in the file:
 | Rows per page | ⚙ → rows per page | 10 to 1,000 | 25 |
 | Theme | ⚙ → ◐ | light, dark | light |
 | Handwriting | ⚙ → handwriting | `gentle`, `slow`, `off` | `gentle` |
+| Peek | ⚙ → peek | on, off | on |
 | Auto-run | ⚙ → auto-run | on, off | on (not remembered between visits) |
 
 Adding `ink=off` to a page's URL turns the handwriting off for that visit, in the editor and in HTML

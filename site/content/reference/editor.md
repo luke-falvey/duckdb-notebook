@@ -16,6 +16,7 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
 | <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> | anywhere | Save the file |
 | <kbd>Ctrl</kbd>+<kbd>Space</kbd> | in SQL | Complete cell names, tables, columns and `$variables`; <kbd>Enter</kbd> or <kbd>Tab</kbd> picks, <kbd>Esc</kbd> closes |
 | <kbd>Tab</kbd> | in a cell | Insert four spaces |
+| <kbd>Esc</kbd> | a peek note showing | Put the [peek](#peek-under-the-pen) away until the caret is in another part |
 | <kbd>Enter</kbd> / <kbd>Esc</kbd> | in a cell's `-- %%` line | Keep / cancel the change |
 | <kbd>Esc</kbd> | ⚙ menu open | Close it |
 | <kbd>→</kbd> <kbd>←</kbd> <kbd>Space</kbd> <kbd>Home</kbd> <kbd>End</kbd> <kbd>F</kbd> <kbd>Esc</kbd> | presenting | Next, back, first, last, full screen, stop ([presenting](../guides/reading.md#presenting)) |
@@ -60,6 +61,37 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
 - Pointing at a chart shows the values under the pointer. Drag to brush, click to select, if the
   chart has a [selection](../guides/selections.md).
 
+## Peek under the pen
+
+While you edit a query, put the caret inside one of its CTEs or sub-queries: after a moment its first
+rows appear in a small note beside the cell, and the part is marked in the code with the highlighter.
+The cell is not run and its result does not change.
+
+<figure class="shot" markdown>
+![A query with two CTEs; the caret is in the first, daily, which is highlighted in the code, and a note beside the cell shows its first five rows of day, region and revenue and says first 5 of 1,460 rows](../images/peek.webp)
+<figcaption>The caret is inside <code>daily</code>: the note shows its first rows and how many there are.</figcaption>
+</figure>
+
+- The note shows the part's name (the CTE's, or the sub-query's alias), up to six columns, five rows,
+  and the row count when it is quick to find. With the caret in the main query there is nothing to
+  show.
+- **It needs a run first.** Opening a notebook runs nothing, so there is nothing to peek at until you
+  have run something in this session, and again after the file was reloaded from disk. Results
+  [kept from an earlier run](../guides/cache.md) do not count.
+- <kbd>Esc</kbd> puts the note away until the caret moves to another part; leaving the cell takes it
+  away. The ⚙ menu's **peek** switch turns it off (remembered in this browser).
+- It is an editor feature: presenting and exports never show it.
+
+**Limits.** A peek runs in a read-only transaction that is rolled back, with a 1.5-second time limit,
+on a copy of the session, so the session's variables and views are as they were. Only a plain
+`SELECT` is looked into: `INSERT … SELECT`, `CREATE TABLE AS` and statements that change data are
+refused wherever the caret is. A part that calls a volatile function (`nextval`, `setval`, …; `random()`
+and `uuid()` are allowed) or a table function that changes something is refused before it runs.
+The read-only transaction protects only the local database: a table function from another extension
+that acts on a remote system (such as `postgres_execute`) cannot be judged and could run. Parts of a
+recursive CTE that read the CTE itself are not peeked at. Errors and SQL that does not parse simply
+show nothing.
+
 ## The ⚙ menu
 
 <figure class="shot" markdown>
@@ -81,6 +113,7 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
 | rows per page | Default page size for tables without `rows=`, remembered in this browser |
 | timing | Show run times; writes `timing:` into the `[notebook]` cell |
 | handwriting | `gentle`, `slow` or `off`; remembered in this browser |
+| peek | Show the first rows of the CTE or sub-query the caret is in ([peek](#peek-under-the-pen)); remembered in this browser |
 | Export | HTML, HTML with inputs precomputed, PDF (prints the reading view from the browser), Markdown or SQL, with or without code and output |
 
 ## The dependency graph

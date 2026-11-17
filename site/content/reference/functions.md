@@ -14,6 +14,7 @@ through DuckDB's file system, so remote paths work when `httpfs` is loaded.
 | [`notebook_sql(path)`](#notebook_sql) | The notebook as a plain SQL script |
 | [`notebook_export(path)`](#notebook_export) | Writes HTML, html-wasm, PDF, Markdown, SQL or data files |
 | [`notebook_chart_query(spec, from)`](#notebook_chart_query) | The SQL and render description a chart spec compiles to |
+| [`notebook_peek(sql, cursor)`](#notebook_peek) | The CTE or sub-query at a cursor position, and the query that selects from it |
 | [`notebook_cache(path)`](#notebook_cache) | Lists the results the editor keeps for a notebook, fresh or stale |
 | [`notebook_cache_clear(path)`](#notebook_cache_clear) | Removes them |
 | [`notebook_save(path)`](#notebook_save) | Stores a version of a notebook in the database |
@@ -142,6 +143,32 @@ Compiles a chart spec against a relation (a table or view name) without drawing 
 The relation's columns are looked up on a separate connection, so a temporary view of your own
 session cannot be described; the spec is then compiled without column types. A spec that does not
 compile raises an error with the reason.
+
+## notebook_peek
+
+```sql
+notebook_peek(sql VARCHAR, cursor BIGINT)
+```
+
+Finds the CTE or sub-query that a cursor position (a 0-based byte offset into `sql`) is inside, and
+builds the query the editor's [peek](editor.md#peek-under-the-pen) runs to show its first rows. It
+runs nothing. One row:
+
+| Column | Type | Meaning |
+|---|---|---|
+| `kind` | `VARCHAR` | `cte` or `subquery`, or `NULL` when there is nothing to peek at |
+| `name` | `VARCHAR` | The CTE's name, or the sub-query's alias |
+| `query` | `VARCHAR` | A `SELECT` of the part, with the CTEs it reads |
+| `start`, `end` | `BIGINT` | Where the part is in `sql`, as byte offsets |
+| `reason` | `VARCHAR` | Why there is nothing to peek at, or why the part is refused |
+
+```sql
+--8<-- "site/outputs/peek.sql"
+```
+
+```text
+--8<-- "site/outputs/peek.txt"
+```
 
 ## notebook_cache
 

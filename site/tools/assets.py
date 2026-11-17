@@ -156,6 +156,26 @@ def shoot_editor(browser, server):
     page.wait_for_timeout(300)
     top.locator(".nb-output").screenshot(path=os.path.join(IMAGES, "brush-top-orders.png"))
 
+    # Peek under the pen: the caret inside a CTE shows its first rows in a note beside the cell.
+    page.goto(server.url("peek.sql"))
+    ready(page)
+    run_all(page)
+    page.evaluate("""() => {
+      const ta = document.querySelector(".nb-cell[data-idx='1'] textarea");
+      ta.focus();
+      const at = ta.value.indexOf('sum(amount)');
+      ta.setSelectionRange(at, at);
+      ta.dispatchEvent(new KeyboardEvent('keyup', {key: 'ArrowRight', bubbles: true}));
+    }""")
+    page.wait_for_selector(".nb-peek", timeout=10000)
+    page.wait_for_timeout(500)
+    peeked = cell(page, 1).bounding_box()
+    note = page.locator(".nb-peek").bounding_box()
+    left = max(0, peeked["x"] - 165)
+    right = max(peeked["x"] + peeked["width"], note["x"] + note["width"]) + 20
+    page.screenshot(path=os.path.join(IMAGES, "peek.png"),
+                    clip={"x": left, "y": peeked["y"] - 14, "width": right - left, "height": max(peeked["height"], note["y"] + note["height"] - peeked["y"]) + 28})
+
     # The dependency graph.
     page.goto(server.url("examples/revenue.sql"))
     ready(page)

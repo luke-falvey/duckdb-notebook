@@ -8,7 +8,7 @@ require notebook
 query I
 SELECT count(*) FROM glob('site/notebooks/*.sql')
 ----
-3
+4
 
 query I
 SELECT count(*) FROM notebook_cells('site/notebooks/hello.sql') WHERE len(errors) > 0
@@ -37,6 +37,16 @@ SELECT count(*) FROM notebook_cells('site/notebooks/charts_guide.sql') WHERE len
 
 query I
 SELECT count(*) FROM notebook_run('site/notebooks/charts_guide.sql') WHERE status = 'error'
+----
+0
+
+query I
+SELECT count(*) FROM notebook_cells('site/notebooks/peek.sql') WHERE len(errors) > 0
+----
+0
+
+query I
+SELECT count(*) FROM notebook_run('site/notebooks/peek.sql') WHERE status = 'error'
 ----
 0
 
