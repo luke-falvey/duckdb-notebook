@@ -182,7 +182,15 @@ void Runner::ApplyMetadata(const notebook::Notebook &notebook, const string &sou
 		};
 		if (auto extensions = meta.Get("extensions")) {
 			for (auto &name : extensions->Strings()) {
-				run("LOAD " + notebook::QuoteIdentifier(name));
+				auto result = connection->Query("LOAD " + notebook::QuoteIdentifier(name));
+				if (result->HasError()) {
+					// Usually the notebook was opened in a DuckDB without that extension installed.
+					throw InvalidInputException(
+					    "the [notebook] cell loads extension '%s', which this DuckDB cannot load. Open the notebook in "
+					    "a DuckDB where LOAD %s works (INSTALL it, or start that DuckDB with -unsigned for a "
+					    "community or local build). DuckDB said: %s",
+					    name, name, result->GetError());
+				}
 			}
 		}
 		auto attach = meta.Get("attach");

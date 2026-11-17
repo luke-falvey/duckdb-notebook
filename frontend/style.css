@@ -66,6 +66,8 @@ code, pre, textarea.nb-code { font-family: var(--nb-mono); font-size: 13.5px; }
 .nb-main { overflow: auto; padding: 14px 24px 140px; }
 /* Room either side of the cells for their margins: kind and name on the left, state and buttons on the right. */
 .nb-app:not(.reading) .nb-main { padding-left: 170px; padding-right: 72px; }
+.nb-problem .nb-error { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nb-banner.nb-problem { background: #ffe3e3; }
 .nb-banner { padding: 10px 16px; margin: 0 auto 14px; max-width: 1000px; display: flex; gap: 10px; align-items: center; background: #fff3bf; border-radius: var(--nb-wobbly); }
 
 /* The gear menu: everything that is not Run all. */

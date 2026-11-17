@@ -21,7 +21,16 @@ var App = (function () {
     });
   };
 
-  A.status = function (text) { $('status').textContent = text || ''; };
+  A.status = function (text) { $('status').textContent = text || ''; $('status').title = text || ''; };
+  // A problem the reader must see in full (the status line is cut short): a banner above the cells.
+  A.problem = function (text) {
+    var banner = $('banner');
+    banner.innerHTML = '';
+    banner.appendChild(NB.el('div', { 'class': 'nb-banner nb-problem' }, [
+      NB.el('span', { 'class': 'nb-error', text: text }),
+      NB.el('button', { text: 'Dismiss', onclick: function () { banner.innerHTML = ''; } })
+    ]));
+  };
 
   // ---- Text model ---------------------------------------------------------------------------
   A.text = function () {
@@ -125,11 +134,13 @@ var App = (function () {
         c.state = res.status === 'error' ? 'failed' : 'fresh';
       });
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'stale'; });
+      if ($('banner').querySelector('.nb-problem')) $('banner').innerHTML = '';
       A.status('Ran ' + r.results.length + ' cell' + (r.results.length === 1 ? '' : 's') + ' in ' + Math.round(performance.now() - started) + ' ms');
       if (window.AppExtra) AppExtra.catalog();
     }).catch(function (e) {
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'failed'; });
-      A.status(e.message);
+      A.status('Run failed: see the message above the cells');
+      A.problem(e.message);
     }).then(function () {
       A.running = false;
       $('interrupt').hidden = true;

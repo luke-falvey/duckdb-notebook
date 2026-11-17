@@ -298,6 +298,29 @@ def test_server(browser, work):
           "another process can open the database afterwards")
 
 
+def test_metadata_error(browser, work):
+    # A notebook whose [notebook] cell needs an extension this DuckDB lacks says so in full.
+    notebook = os.path.join(work, "needs_ext.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% [notebook]\n/*\ntitle: Needs an extension\nextensions: [no_such_extension_xyz]\n*/\n\n-- %% one\nSELECT 1 AS x;\n")
+    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    url = shell.stdout.readline().strip()
+    page = browser.new_page()
+    page.goto(url)
+    page.wait_for_selector(".nb-cell")
+    page.click("#run-all")
+    page.wait_for_selector(".nb-problem", timeout=30000)
+    text = page.locator(".nb-problem .nb-error").text_content()
+    check("no_such_extension_xyz" in text and "LOAD no_such_extension_xyz works" in text and page.locator(".nb-problem").is_visible(),
+          "a run that fails before any cell shows the whole message, naming the missing extension")
+    shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+    shell.stdin.flush()
+    shell.communicate(timeout=30)
+
+
 def test_exports(browser, work, chromium):
     notebook = os.path.join(ROOT, "examples", "revenue.sql")
     db = os.path.join(work, "exports.duckdb")
@@ -380,6 +403,7 @@ def main():
         browser = p.chromium.launch()
         try:
             test_server(browser, work)
+            test_metadata_error(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 "~/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
