@@ -414,6 +414,13 @@ static void TestChartCompiler() {
 	CHECK(TypeClass("TIME WITH TIME ZONE") == "temporal" && TypeClass("TIMESTAMP_NS") == "temporal" && TypeClass("BIGINT") == "quantitative");
 }
 
+static void TestChartErrors() {
+	ChartContext context;
+	// B8: a field missing inside a sparkline names the chart's type, not an empty one.
+	auto plan = CompileChart("type: kpi\nvalue: n\nsparkline: {y: n}\n", "t", context);
+	CHECK(plan.error == "kpi chart needs x:");
+}
+
 static void TestChartReferences() {
 	ChartContext context;
 	context.columns = {{"ts", "TIMESTAMP"}, {"region", "VARCHAR"}, {"amount", "DECIMAL(18,2)"}, {"n", "BIGINT"}};
@@ -679,6 +686,7 @@ int main() {
 	TestJson();
 	TestLiterals();
 	TestChartCompiler();
+	TestChartErrors();
 	TestChartReferences();
 	TestChartNotes();
 	TestCellOptions();

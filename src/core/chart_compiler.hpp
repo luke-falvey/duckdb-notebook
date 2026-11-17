@@ -46,6 +46,8 @@ public:
 	const ChartContext &context;
 	std::string from;
 	std::string error;
+	//! A typed chart's `type:`, as written, for error messages from nested specs such as a sparkline.
+	std::string chart_type;
 	ChartPlan plan;
 
 	const ColumnInfo *Column(const std::string &name) const;

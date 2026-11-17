@@ -299,7 +299,7 @@ std::string Compiler::Field(const Yaml &spec, const std::string &key, bool requi
 	auto channel = ParseChannel(key, spec.Get(key));
 	if (!channel.present) {
 		if (required) {
-			Fail(spec.Str("type") + " chart needs " + key + ":");
+			Fail((spec.Get("type") ? spec.Str("type") : chart_type) + " chart needs " + key + ":");
 		}
 		return "";
 	}

@@ -16,6 +16,7 @@ namespace notebook {
 
 void Compiler::Typed(const Yaml &spec, Json &render) {
 	auto type = Lower(spec.Str("type"));
+	chart_type = spec.Str("type");
 	render.Set("kind", Json::String(type));
 	auto limit = Limit(spec);
 	auto encodings = Json::Object();
