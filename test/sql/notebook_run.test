@@ -95,7 +95,7 @@ SELECT count(*) FROM notebook_run('examples/revenue.sql') WHERE status = 'error'
 query II
 SELECT count(*) FILTER (status = 'error'), count(*) FILTER (kind = 'chart' AND status = 'ok') FROM notebook_run('examples/charts.sql')
 ----
-0	27
+0	28
 
 # The [notebook] cell's attach: databases are attached before the first cell
 query II

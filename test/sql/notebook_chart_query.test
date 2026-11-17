@@ -72,5 +72,44 @@ source: g', 'nb_chart_t')
 ----
 sankey chart needs target:
 
+# Rules and bands: a fixed value needs no query; aggregates are one extra query over the chart's marks
+query II
+SELECT len(queries), render LIKE '%"rules":[{"axis":"y","value":50,"label":"Target"}]%' FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}
+rules:
+  - {y: 50, label: Target}', 'nb_chart_t')
+----
+1	true
+
+query I
+SELECT replace(queries[2], chr(10), ' ') FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}
+rules:
+  - {y: avg}
+bands:
+  - {y: [p25, {field: i, agg: max}]}', 'nb_chart_t')
+----
+WITH __marks0 AS (WITH __src AS (SELECT * FROM "nb_chart_t") SELECT "g" AS "x", sum("i") AS "y" FROM __src GROUP BY ALL) SELECT (SELECT avg("y") FROM __marks0) AS r0, (SELECT quantile_cont("y", 0.25) FROM __marks0) AS r1, (SELECT max("i") FROM (SELECT * FROM "nb_chart_t")) AS r2
+
+statement error
+FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}
+rules:
+  - {y: lots}', 'nb_chart_t')
+----
+rules: y must be a number or one of avg
+
+statement error
+FROM notebook_chart_query('mark: line
+x: d
+y: i
+bands:
+  - {x: 2026-02-01}', 'nb_chart_t')
+----
+bands: x must be [from, to]
+
 statement ok
 DROP TABLE nb_chart_t

@@ -300,7 +300,7 @@ column of `from` is a constant (`color: red`); `{value: …}` says so explicitly
 takes its angle from `theta` (or `y`) and its slices from `color`.
 
 Spec-level keys: `title`; `limit` (rows a query may return, default 10,000); `sample: <n>`;
-`facet: {row: …, col: …}`.
+`facet: {row: …, col: …}`; `rules` and `bands` (below).
 
 **Layers.** `layers:` is a list of specs drawn in one frame, sharing `from` and scales:
 
@@ -309,6 +309,37 @@ layers:
   - {mark: area, x: month, y: {field: revenue, agg: sum}, opacity: 0.3}
   - {mark: rule, y: {field: revenue, agg: avg}, color: red}
 ```
+
+**Rules and bands.** `rules:` draws reference lines and `bands:` shades ranges, behind the marks in
+muted ink:
+
+```yaml
+mark: line
+x: month
+y: {field: revenue, agg: sum, format: "$,.0f"}
+rules:
+  - {y: avg, label: "average {value}"}
+  - {y: 150000, label: Target}
+  - {x: 2026-06-01, label: Launch}
+bands:
+  - {y: [p25, p75], label: Middle half}
+```
+
+Each item names one axis, `x` or `y`. A rule takes one value there and a band takes two, `[from, to]`.
+A value is:
+
+| Written | Meaning |
+|---|---|
+| A number, date or category (`150000`, `2026-06-01`, `Hardware`) | That position on the axis. On a category axis a rule runs through the category and a band covers from one category to the other |
+| `avg` (or `mean`), `median`, `min`, `max`, `p05`…`p99` | That aggregate of the values the chart draws on the axis, across all series and panels: with `y: {field: revenue, agg: sum}` over months, `avg` is the average monthly sum. Needs a numeric or date axis; dates have no `avg` |
+| `{field: budget, agg: max}` | An aggregate of a column of `from`, with any channel `agg` |
+
+Aggregates are computed by DuckDB in one extra query, over the marks before any downsampling.
+Optional keys: `label` (short text by the line or in the band; `{value}`, or `{from}` and `{to}` in a
+band, is replaced by the value in the axis's format) and `color`. The axis grows to include a rule or
+band outside the data. Quote a category that reads as an aggregate (`x: "max"`). `rules` and `bands`
+are read from the top level of the spec only and need a chart with axes (not `arc`); `boxplot` takes
+values but not aggregates. Any other key or shape is a chart error.
 
 **Large data.** The compiler never ships raw rows for a mark that would overplot: `line` over a
 continuous x is reduced to at most four points per horizontal pixel (M4) once `from` has more than four

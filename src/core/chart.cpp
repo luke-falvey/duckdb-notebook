@@ -263,6 +263,23 @@ public:
 
 	std::map<std::string, std::string> bin_steps;
 
+	//! What rules and bands need to know about a layer once it is compiled: the query of its marks
+	//! before any downsampling, and the type of each axis it draws on.
+	struct LayerInfo {
+		std::string mark;
+		std::string base;
+		std::string x_type;
+		std::string y_type;
+	};
+	std::vector<LayerInfo> layer_info;
+
+	static std::string AxisType(const Channel &channel) {
+		if (!channel.present || channel.constant) {
+			return std::string();
+		}
+		return channel.agg.empty() ? (channel.type.empty() ? "nominal" : channel.type) : "quantitative";
+	}
+
 	Json Encoding(const Channel &channel, const std::string &column) {
 		auto json = channel.options;
 		if (channel.constant) {
@@ -453,6 +470,7 @@ public:
 			layer.Set("data", Json::Number(static_cast<double>(plan.queries.size())));
 			layer.Set("encoding", encoding);
 			plan.queries.push_back(Query(items, true, x.present && !x.constant ? "x" : "", Limit(top)));
+			layer_info.push_back({mark, std::string(), AxisType(x), "quantitative"});
 			return layer;
 		}
 
@@ -529,6 +547,9 @@ public:
 			}
 		}
 
+		// The marks before downsampling: what an aggregate rule or band (`y: avg`) is taken over.
+		layer_info.push_back({mark, Query(items, group, "", ""), AxisType(x), AxisType(y)});
+
 		std::string sql;
 		bool large = context.row_count > POINT_THRESHOLD;
 		bool lines = draw == "line" || draw == "area";
@@ -595,6 +616,191 @@ public:
 		}
 		plan.queries.push_back(sql);
 		return layer;
+	}
+
+	// ---- Rules and bands ------------------------------------------------------------------------
+
+	//! Scalar subqueries gathered for the aggregates of rules and bands; one row, one column each.
+	std::vector<std::string> reference_items;
+
+	static bool IsNumber(const std::string &text) {
+		if (text.empty()) {
+			return false;
+		}
+		char *end = nullptr;
+		std::strtod(text.c_str(), &end);
+		return end && *end == '\0';
+	}
+
+	static bool IsReferenceAgg(const std::string &name) {
+		static const std::set<std::string> AGGS = {"avg", "mean", "median", "min", "max"};
+		return AGGS.count(name) ||
+		       (name.size() == 3 && name[0] == 'p' && std::isdigit(static_cast<unsigned char>(name[1])) &&
+		        std::isdigit(static_cast<unsigned char>(name[2])));
+	}
+
+	//! One end of a reference on `axis`: a fixed value, an aggregate of what the chart draws on that
+	//! axis (`avg`, `median`, `p90`, `min`, `max`), or an aggregate of a column (`{field, agg}`).
+	Json ReferenceValue(const Yaml &node, const std::string &axis, const std::string &what) {
+		auto json = Json::Object();
+		const LayerInfo *layer = nullptr;
+		size_t index = 0;
+		for (size_t i = 0; i < layer_info.size(); i++) {
+			auto &type = axis == "x" ? layer_info[i].x_type : layer_info[i].y_type;
+			if (!type.empty()) {
+				layer = &layer_info[i];
+				index = i;
+				break;
+			}
+		}
+		if (!layer) {
+			Fail(what + ": the chart has no " + axis + " axis");
+			return json;
+		}
+		auto &type = axis == "x" ? layer->x_type : layer->y_type;
+		bool continuous = type == "quantitative" || type == "temporal";
+		auto column = "r" + std::to_string(reference_items.size());
+		if (node.IsMap()) {
+			auto field = node.Str("field");
+			auto agg = Lower(node.Str("agg"));
+			if (field.empty() || agg.empty()) {
+				Fail(what + ": " + axis + " as a mapping needs field: and agg:");
+				return json;
+			}
+			if (!IsField(field)) {
+				Fail(what + ": no column named '" + field + "' in " + from);
+				return json;
+			}
+			if (!continuous) {
+				Fail(what + ": an aggregate needs a numeric or date " + axis + " axis");
+				return json;
+			}
+			reference_items.push_back("(SELECT " + Agg(agg, QuoteIdentifier(field), what) + " FROM (" + source +
+			                          ")) AS " + column);
+			json.Set("column", Json::String(column));
+			json.Set("agg", Json::String(agg + "(" + field + ")"));
+			return json;
+		}
+		if (!node.IsScalar()) {
+			Fail(what + ": " + axis + " must be a value, an aggregate such as avg, or {field, agg}");
+			return json;
+		}
+		auto name = Lower(node.scalar);
+		if (!node.quoted && IsReferenceAgg(name)) {
+			if (!continuous) {
+				Fail(what + ": " + name + " needs a numeric or date " + axis + " axis");
+				return json;
+			}
+			if (type == "temporal" && (name == "avg" || name == "mean")) {
+				Fail(what + ": " + name + " is not defined for dates; use median, min or max");
+				return json;
+			}
+			if (layer->base.empty()) {
+				Fail(what + ": " + name + " is not available on a " + layer->mark + " chart; give a value");
+				return json;
+			}
+			auto marks = "__marks" + std::to_string(index);
+			reference_items.push_back("(SELECT " + Agg(name, QuoteIdentifier(axis), what) + " FROM " + marks + ") AS " +
+			                          column);
+			reference_layers.insert(index);
+			json.Set("column", Json::String(column));
+			json.Set("agg", Json::String(name));
+			return json;
+		}
+		if (type == "quantitative" && !IsNumber(node.scalar)) {
+			Fail(what + ": " + axis + " must be a number or one of avg, median, min, max, p05..p99, not '" +
+			     node.scalar + "'");
+			return json;
+		}
+		json.Set("value",
+		         type == "quantitative" ? Json::Number(std::atof(node.scalar.c_str())) : Json::String(node.scalar));
+		return json;
+	}
+
+	std::set<size_t> reference_layers;
+
+	//! `rules:` (lines at a value) and `bands:` (shading between two values) of a grammar chart.
+	void References(const Yaml &spec, Json &render) {
+		for (auto key : {"rules", "bands"}) {
+			auto list = spec.Get(key);
+			if (!list) {
+				continue;
+			}
+			std::string what = key;
+			bool band = what == "bands";
+			auto example = band ? "{y: [100, 200], label: Target}" : "{y: avg, label: Average}";
+			if (!list->IsList()) {
+				Fail(what + ": must be a list of mappings such as " + example);
+				return;
+			}
+			for (auto &info : layer_info) {
+				if (info.mark == "arc") {
+					Fail(what + ": an arc chart has no axes");
+					return;
+				}
+			}
+			auto out = Json::Array();
+			for (auto &item : list->items) {
+				if (!item.IsMap()) {
+					Fail(what + ": each item is a mapping such as " + example);
+					return;
+				}
+				for (auto &entry : item.entries) {
+					if (entry.first != "x" && entry.first != "y" && entry.first != "label" && entry.first != "color") {
+						Fail(what + ": unknown key '" + entry.first + "' (x, y, label, color)");
+						return;
+					}
+				}
+				auto x = item.Get("x"), y = item.Get("y");
+				if ((x != nullptr) == (y != nullptr)) {
+					Fail(what + ": each item needs x: or y:, not both");
+					return;
+				}
+				std::string axis = x ? "x" : "y";
+				auto &node = x ? *x : *y;
+				auto json = Json::Object();
+				json.Set("axis", Json::String(axis));
+				if (band) {
+					if (!node.IsList() || node.items.size() != 2) {
+						Fail(what + ": " + axis + " must be [from, to]");
+						return;
+					}
+					json.Set("from", ReferenceValue(node.items[0], axis, what));
+					json.Set("to", ReferenceValue(node.items[1], axis, what));
+				} else {
+					auto value = ReferenceValue(node, axis, what);
+					for (auto &entry : value.Entries()) {
+						json.Set(entry.first, entry.second);
+					}
+				}
+				for (auto option : {"label", "color"}) {
+					if (auto found = item.Get(option)) {
+						if (!found->IsScalar()) {
+							Fail(what + ": " + option + " must be text");
+							return;
+						}
+						json.Set(option, Json::String(found->scalar));
+					}
+				}
+				out.Push(json);
+			}
+			render.Set(key, out);
+		}
+		if (!error.empty() || reference_items.empty()) {
+			return;
+		}
+		// One query, one row: every aggregate is a scalar subquery over its layer's marks or the source.
+		std::string sql;
+		for (auto index : reference_layers) {
+			sql += (sql.empty() ? "WITH " : ", ") + std::string("__marks") + std::to_string(index) + " AS (" +
+			       layer_info[index].base + ")";
+		}
+		sql += (sql.empty() ? "SELECT " : "\nSELECT ");
+		for (size_t i = 0; i < reference_items.size(); i++) {
+			sql += (i ? ", " : "") + reference_items[i];
+		}
+		render.Set("reference_data", Json::Number(static_cast<double>(plan.queries.size())));
+		plan.queries.push_back(sql);
 	}
 
 	//! A measure such as `value: {field: revenue, agg: sum}`; the default agg applies to bare fields.
@@ -945,6 +1151,9 @@ ChartPlan CompileChart(const std::string &spec_text, const std::string &from, co
 			layers.Push(compiler.GrammarLayer(spec, spec));
 		}
 		render.Set("layers", layers);
+		if (compiler.error.empty()) {
+			compiler.References(spec, render);
+		}
 		if (spec.Get("facet")) {
 			render.Set("facet", Json::Object()
 			                        .Set("row", Json::Bool(spec.Get("facet")->Get("row") != nullptr))

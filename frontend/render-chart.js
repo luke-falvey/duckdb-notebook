@@ -130,7 +130,7 @@
     return bars && !enc.bin && enc.type !== 'temporal' && channel === 'x' && !enc.agg;
   }
 
-  function makeScale(layers, channel, range, zero) {
+  function makeScale(layers, channel, range, zero, extra) {
     var enc = null;
     layers.forEach(function (l) { var e = l.encoding[channel]; if (e && e.column && !enc) enc = e; });
     if (!enc) return null;
@@ -143,7 +143,8 @@
       b.enc = enc;
       return b;
     }
-    var nums = values.map(function (v) { return numeric(v, enc.type); }).filter(isFinite);
+    // Rules and bands are part of the picture: a target above every bar still has to fit.
+    var nums = values.concat(extra || []).map(function (v) { return numeric(v, enc.type); }).filter(isFinite);
     var lo = nums.length ? Math.min.apply(null, nums) : 0, hi = nums.length ? Math.max.apply(null, nums) : 1;
     var scaleOpt = enc.scale || {};
     if (scaleOpt.domain && scaleOpt.domain.length === 2) { lo = numeric(scaleOpt.domain[0], enc.type); hi = numeric(scaleOpt.domain[1], enc.type); }
@@ -544,6 +545,90 @@
     });
   }
 
+  // ---- Rules and bands ------------------------------------------------------------------------
+
+  // The value of one end of a rule or band: written in the spec, or computed by DuckDB (render.reference_data).
+  function refValue(ref, row) { return ref && ref.column ? (row ? row[ref.column] : null) : ref ? ref.value : null; }
+
+  function references(render, datasets) {
+    var row = render.reference_data != null ? (datasets[render.reference_data] || [])[0] : null;
+    var rules = (render.rules || []).map(function (r) { return Object.assign({}, r, { at: refValue(r, row) }); });
+    var bands = (render.bands || []).map(function (b) { return Object.assign({}, b, { lo: refValue(b.from, row), hi: refValue(b.to, row) }); });
+    var extra = { x: [], y: [] };
+    rules.forEach(function (r) { if (r.at != null) extra[r.axis].push(r.at); });
+    bands.forEach(function (b) { [b.lo, b.hi].forEach(function (v) { if (v != null) extra[b.axis].push(v); }); });
+    return { rules: rules, bands: bands, extra: extra };
+  }
+
+  // Where a value sits on an axis, as [start, end] pixels: a point on a continuous axis, the width of
+  // its band on a category axis.
+  function span(scale, v) {
+    if (!scale || v == null) return null;
+    if (scale.kind === 'band') { var p = scale(v); return isFinite(p) ? [p, p + scale.bandwidth] : null; }
+    var q = scale(numeric(v, scale.enc.type));
+    return isFinite(q) ? [q, q] : null;
+  }
+
+  function refLabel(text, scale, values) {
+    return String(text || '').replace(/\{(value|from|to)\}/g, function (_, k) { var v = values[k]; return v == null ? '' : tickLabel(scale, scale.kind === 'band' ? v : numeric(v, scale.enc.type)); });
+  }
+
+  // Drawn after the axes and before the marks, in muted ink, so they sit behind the data. Their labels
+  // are short handwriting that hatching would hide, so the function returned writes them over the marks.
+  function drawReferences(g, refs, x, y, w, h) {
+    if (!refs.rules.length && !refs.bands.length) return function () {};
+    var layer = s('g', { 'class': 'nb-refs' }, g), labels = [];
+    var clamp = function (p, max) { return Math.max(0, Math.min(max, p)); };
+    var label = function (parent, text, px, py, anchor) {
+      if (text) labels.push({ color: parent.style.color, text: text.length > 40 ? text.slice(0, 39) + '…' : text, x: f1(px), y: f1(py), anchor: anchor });
+    };
+    refs.bands.forEach(function (b) {
+      var scale = b.axis === 'x' ? x : y, max = b.axis === 'x' ? w : h, a = span(scale, b.lo), c = span(scale, b.hi);
+      if (!a || !c) return;
+      var p0 = clamp(Math.min(a[0], c[0]), max), p1 = clamp(Math.max(a[1], c[1]), max);
+      if (p1 - p0 < 0.5) return;
+      var e = s('g', { 'class': 'nb-ref nb-ref-band' }, layer), text = refLabel(b.label, scale, { from: b.lo, to: b.hi });
+      if (b.color) e.style.color = b.color;
+      var style = { stroke: 'none', fill: 'currentColor', gap: 9, hachure: 1.1, fillOpacity: 0.45 };
+      if (b.axis === 'y') {
+        Sketch.rect(e, 0, p0, w, p1 - p0, style);
+        label(e, text, 6, p1 - p0 >= 18 ? p0 + 14 : p0 - 4, 'start');
+      } else {
+        Sketch.rect(e, p0, 0, p1 - p0, h, style);
+        var wide = text.length * 7 + 8;
+        if (p0 + wide <= w) label(e, text, p0 + 5, 12, 'start'); else label(e, text, p1 - 5, 12, 'end');
+      }
+      if (text) e.setAttribute('data-ref', text);
+    });
+    refs.rules.forEach(function (r) {
+      var scale = r.axis === 'x' ? x : y, max = r.axis === 'x' ? w : h, at = span(scale, r.at);
+      if (!at) return;
+      var p = (at[0] + at[1]) / 2;
+      if (p < -0.5 || p > max + 0.5) return;
+      var e = s('g', { 'class': 'nb-ref nb-ref-rule' }, layer), text = refLabel(r.label, scale, { value: r.at });
+      if (r.color) e.style.color = r.color;
+      var style = { stroke: 'currentColor', width: 1.4, dash: '7 6', rough: 0.6, double: false };
+      if (r.axis === 'y') {
+        Sketch.line(e, 0, p, w, p, style);
+        label(e, text, w - 4, p < 16 ? p + 15 : p - 5, 'end');
+      } else {
+        Sketch.line(e, p, 0, p, h, style);
+        if (p + text.length * 7 + 8 <= w) label(e, text, p + 5, 12, 'start'); else label(e, text, p - 5, 12, 'end');
+      }
+      if (text) e.setAttribute('data-ref', text);
+    });
+    return function () {
+      if (!labels.length) return;
+      var over = s('g', { 'class': 'nb-ref-labels' }, g);
+      labels.forEach(function (l) {
+        var t = s('text', { x: l.x, y: l.y, 'text-anchor': l.anchor, 'class': 'nb-ref nb-ref-label' }, over);
+        if (l.color) t.style.color = l.color;
+        t.textContent = l.text;
+      });
+    };
+  }
+  function f1(n) { return Math.round(n * 10) / 10; }
+
   // ---- Grammar entry point --------------------------------------------------------------------
 
   NB.grammar = function (container, render, datasets, opts) {
@@ -590,6 +675,7 @@
     };
     // Bars on a continuous x are centred on their value: pad the axis by half the smallest gap so the
     // first and last bars are as wide as the rest.
+    var refs = references(render, datasets);
     var padForBars = function (sc, width) {
       if (!sc || sc.kind === 'band' || horizontalBars) return sc;
       var vals = [];
@@ -602,12 +688,13 @@
       for (var i = 1; i < vals.length; i++) if (vals[i] > vals[i - 1]) gap = Math.min(gap, vals[i] - vals[i - 1]);
       if (!vals.length || !isFinite(gap)) return sc;
       var lo = vals[0] - gap / 2, hi = vals[vals.length - 1] + gap / 2;
+      refs.extra.x.forEach(function (v) { v = numeric(v, sc.enc.type); if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
       var padded = sc.enc && sc.enc.type === 'temporal' ? time([lo, hi], [0, width]) : linear([lo, hi], [0, width], false);
       padded.enc = sc.enc;
       return padded;
     };
-    var x = padForBars(makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars), w);
-    var y = makeScale(allLayers, 'y', [h, 0], hasBars && !horizontalBars);
+    var x = padForBars(makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars, refs.extra.x), w);
+    var y = makeScale(allLayers, 'y', [h, 0], hasBars && !horizontalBars, refs.extra.y);
     if (y && y.kind === 'linear' && x && x.kind === 'band' && hasBars) {
       var sums = stackTotals('y', 'x');
       if (sums.length) { var hi = Math.max.apply(null, sums.concat([y.domain[1]])); y = linear([Math.min(0, y.domain[0]), hi], [h, 0], true); y.enc = allLayers[0].encoding.y; }
@@ -620,7 +707,7 @@
       if (need > left) {
         left = need;
         w = panelW - left - M.right;
-        x = padForBars(makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars), w);
+        x = padForBars(makeScale(allLayers, 'x', [0, w], hasBars && horizontalBars, refs.extra.x), w);
       }
     }
     if (x && x.kind === 'linear' && y && y.kind === 'band' && hasBars) {
@@ -646,6 +733,7 @@
         var g = s('g', { transform: 'translate(' + left + ',' + M.top + ')' }, svgEl);
         axis(g, x, 'bottom', w, h, x.enc && x.enc.title);
         axis(g, y, 'left', w, h, y && y.enc && y.enc.title, left);
+        var refLabels = drawReferences(g, refs, x, y, w, h);
         var plot = s('g', { 'class': 'nb-plot' }, g);
         plot.__points = [];
         plot.__bars = [];
@@ -655,6 +743,7 @@
           });
           drawLayer(plot, Object.assign({}, l, { rows: rows }), x, y, color, w, h, size);
         });
+        refLabels();
         var sel = render.selection;
         if (sel && sel.type === 'interval') brush(g, sel, x, y, w, h, opts);
         if (sel && sel.type === 'point') pointSelect(svgEl, sel, allLayers, opts);

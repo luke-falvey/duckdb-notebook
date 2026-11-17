@@ -680,6 +680,41 @@ def test_ink_editor(browser, work):
         shell.communicate(timeout=30)
 
 
+def test_chart_marks(browser, work):
+    """Rules and bands on charts (FORMAT 5.1), in an export of test/notebooks/references.sql."""
+    db = os.path.join(work, "marks.duckdb")
+    out = os.path.join(work, "references.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'test', 'notebooks', 'references.sql')}', file := '{out}')")
+    page = browser.new_page(viewport={"width": 1300, "height": 950})
+    errors = watch(page)
+    page.goto(still("file://" + out))
+    page.wait_for_function("window.__NB_READY === true")
+    chart = page.locator(".nb-cell[data-idx='1']")
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(chart.locator(".nb-ref-rule").count() == 6 and chart.locator(".nb-ref-band").count() == 2,
+          "a chart draws its rules and bands")
+    check("average 49.5" in labels and "24.75 to 74.25" in labels and "budget 100" in labels,
+          f"aggregates are computed by DuckDB and written into the labels ({labels})")
+    order = chart.locator("svg.nb-chart-svg > g").evaluate(
+        "g => Array.from(g.children).map(e => e.getAttribute('class')).filter(c => /nb-refs|nb-plot|nb-ref-labels/.test(c || ''))")
+    check(order == ["nb-refs", "nb-plot", "nb-ref-labels"], f"rules and bands are drawn behind the marks, their labels over them ({order})")
+    muted = chart.locator(".nb-ref-rule path").first.evaluate("e => getComputedStyle(e).stroke")
+    red = chart.locator(".nb-ref-rule").nth(5).locator("path").first.evaluate("e => getComputedStyle(e).stroke")
+    check(muted == "rgb(134, 142, 150)" and red == "rgb(224, 49, 49)", f"they are in muted ink unless given a colour ({muted}, {red})")
+    # y: 120 is above every point (n < 100): the axis grows to show it.
+    target = chart.locator(".nb-ref-rule[data-ref='Target'] path").first.bounding_box()
+    frame, line = chart.locator("svg.nb-chart-svg").bounding_box(), chart.locator(".nb-plot .nb-line").bounding_box()
+    check(target is not None and frame["y"] <= target["y"] < line["y"], "the axis grows to include a rule outside the data")
+    chart.locator(".nb-tab", has_text="Bars by group").click()
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(labels == ["Target", "average 2,475"], f"a rule's label uses the axis's format ({labels})")
+    check(chart.locator(".nb-ref-rule").count() == 2, "a rule on a category axis runs through its category")
+    bad = page.locator(".nb-cell[data-idx='2']")
+    check("rules: avg needs a numeric or date x axis" in bad.text_content(), "a bad rule is reported as the chart's error")
+    check(not errors, f"no browser errors drawing rules and bands {errors[:3]}")
+    page.close()
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -692,6 +727,7 @@ def main():
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
             chromium = shells[0] if shells else p.chromium.executable_path
             test_exports(browser, work, chromium)
+            test_chart_marks(browser, work)
             test_ink(browser, work, chromium)
             test_ink_editor(browser, work)
         finally:

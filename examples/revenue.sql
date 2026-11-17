@@ -54,6 +54,8 @@ mark: line
 x: month
 y: {field: revenue, format: "$,.0f"}
 color: category
+rules:
+  - {y: avg, label: "average {value}"}
 select: {as: picked_months, type: interval, on: x}
 */
 /* chart
