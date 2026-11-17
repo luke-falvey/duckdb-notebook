@@ -148,6 +148,11 @@ notebook::Json CellJson(const notebook::Cell &cell);
 //! An embedded frontend file (frontend/ in the repository), compiled into the extension.
 const string &GetAsset(const string &name);
 
+//! Runs one cell as the editor does and builds the result the editor is sent: status, error, row
+//! count, timing, rendered markdown, result page, charts, and an input's value and choices.
+CellOutcome RunForEditor(Runner &runner, const notebook::Notebook &notebook, const notebook::Cell &cell,
+                         const RunnerOptions &options, notebook::Json &result);
+
 //! The columns of `relation` (SQL text, as RelationSql gives) with their DuckDB types. On failure returns
 //! false and sets `error`; `columns` is left empty.
 bool DescribeColumns(Connection &connection, const string &relation, std::vector<notebook::ColumnInfo> &columns,

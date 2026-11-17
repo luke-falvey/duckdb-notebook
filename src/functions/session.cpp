@@ -584,4 +584,39 @@ string VariableSqlType(Connection &connection, const notebook::Notebook &noteboo
 	return string();
 }
 
+CellOutcome RunForEditor(Runner &runner, const notebook::Notebook &notebook, const notebook::Cell &cell,
+                         const RunnerOptions &options, Json &result) {
+	Json data;
+	auto outcome = runner.Run(notebook, cell, options, &data);
+	result.Set("status", Json::String(outcome.status));
+	result.Set("error", outcome.status == "error" ? Json::String(outcome.error) : Json());
+	result.Set("row_count", outcome.row_count >= 0 ? Json::Number(static_cast<double>(outcome.row_count)) : Json());
+	result.Set("elapsed_ms", outcome.elapsed_ms >= 0 ? Json::Number(outcome.elapsed_ms) : Json());
+	if (outcome.has_output) {
+		result.Set("output", Json::String(outcome.output));
+	}
+	if (!data.IsNull()) {
+		result.Set("data", data);
+	}
+	if (!outcome.charts.IsNull()) {
+		result.Set("charts", outcome.charts);
+	}
+	if (cell.kind == notebook::CellKind::INPUT) {
+		auto value = runner.Conn().Query("SELECT getvariable(" + notebook::QuoteString(cell.name) + ")");
+		if (!value->HasError()) {
+			if (auto chunk = value->Fetch()) {
+				result.Set("value", ValueToJson(chunk->GetValue(0, 0)));
+			}
+		}
+	}
+	if (cell.kind == notebook::CellKind::INPUT && (cell.widget == "select" || cell.widget == "multiselect")) {
+		auto choices = Json::Array();
+		for (auto &choice : InputChoices(runner.Conn(), cell, 1000)) {
+			choices.Push(ValueToJson(choice));
+		}
+		result.Set("choices", choices);
+	}
+	return outcome;
+}
+
 } // namespace duckdb

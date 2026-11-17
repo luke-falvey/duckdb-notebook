@@ -404,14 +404,9 @@ void Routes(shared_ptr<ServerState> &shared) {
 				            results.Push(result);
 				            continue;
 			            }
-			            RanCell done;
-			            done.index = index;
-			            done.status = RunForEditor(runner, notebook, cell, options, result).status;
-			            if (auto value = result.Get("value")) {
-				            done.value = *value;
-			            }
+			            auto status = RunForEditor(runner, notebook, cell, options, result).status;
 			            // Serialised once, for the response and for the cache.
-			            done.result = result.Dump();
+			            auto done = RanFromResult(index, status, result);
 			            results.Push(Json::Raw(done.result));
 			            ran.push_back(std::move(done));
 		            }

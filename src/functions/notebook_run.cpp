@@ -134,14 +134,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		auto result = notebook::Json::Object();
 		outcome = RunForEditor(*state.runner, bind_data.notebook, cell, options, result);
 		outcome.output = StringUtil::Replace(StringUtil::Replace(outcome.output, VALUE_OPEN, ""), VALUE_CLOSE, "");
-		RanCell done;
-		done.index = cell.index;
-		done.status = outcome.status;
-		if (auto value = result.Get("value")) {
-			done.value = *value;
-		}
-		done.result = result.Dump();
-		state.ran.push_back(std::move(done));
+		state.ran.push_back(RanFromResult(cell.index, outcome.status, result));
 	} else {
 		outcome = state.runner->Run(bind_data.notebook, cell, options);
 	}
