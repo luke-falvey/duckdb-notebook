@@ -24,7 +24,7 @@ var App = (function () {
   A.status = function (text) {
     $('status').textContent = text || '';
     $('status').title = text || '';
-    if (window.Ink) Ink.present($('status'), 'status', text || '');
+    if (window.Ink) Ink.present($('status'), 'toolbar/status', text || '');
   };
   // A problem the reader must see in full (the status line is cut short): a banner above the cells.
   A.problem = function (text) {
@@ -68,7 +68,7 @@ var App = (function () {
     A.generation = (A.generation || 0) + 1;
     $('title').textContent = data.title || 'Notebook';
     $('source').textContent = A.source;
-    if (window.Ink) { Ink.present($('title'), 'title'); Ink.present($('source'), 'source'); }
+    if (window.Ink) { Ink.present($('title'), 'toolbar/title'); Ink.present($('source'), 'toolbar/source'); }
     document.title = (data.title || A.source) + ' · DuckDB Notebook';
     A.render();
   };
@@ -573,7 +573,7 @@ var App = (function () {
       box.addEventListener('focusin', function () { box.classList.add('focused'); });
       box.addEventListener('focusout', function () { box.classList.remove('focused'); });
       Sketch.outline(box, { width: 1.5 });
-      if (window.Ink) write(box, cell, i);
+      if (window.Ink) write(box, cell);
     });
     if (!A.reading) root.appendChild(addBar(A.cells.length));
     if (focusIndex >= 0) {
@@ -589,8 +589,11 @@ var App = (function () {
   // Hands each piece of a cell to the pen (render-ink.js): its bracket, margin, state, and each part
   // of its body. A piece already written with the same content is left alone, so a render does not
   // replay anything; a new result is written. Code is keyed to the notebook's generation, not its text.
-  function write(box, cell, i) {
-    var id = 'cell' + i + '/';
+  var cellIds = new WeakMap(), nextCellId = 0;
+  function write(box, cell) {
+    // Keyed by the cell itself, not its position: moving or inserting a cell does not rewrite the others.
+    if (!cellIds.has(cell)) cellIds.set(cell, ++nextCellId);
+    var id = 'cell' + cellIds.get(cell) + '/';
     Array.prototype.forEach.call(box.children, function (part) {
       var c = part.getAttribute('class') || '';
       if (c.indexOf('sk-outline') >= 0) Ink.present(part, id + 'outline', cell.kind + (cell.name || ''), Ink.bracket(box));
@@ -723,10 +726,10 @@ var App = (function () {
     window.addEventListener('beforeunload', function (e) { if (A.dirty) { e.preventDefault(); e.returnValue = ''; } });
     document.fonts.ready.then(function () {
       Sketch.outline($('toolbar-rule'), { kind: 'underline', stroke: '#ced4da', width: 1.3, seed: 'rule' });
-      if (window.Ink) Ink.present($('toolbar-rule').querySelector('svg.sk-outline'), 'rule', 'rule');
+      if (window.Ink) Ink.present($('toolbar-rule').querySelector('svg.sk-outline'), 'toolbar/rule', 'rule');
     });
     if (window.Ink) {
-      ['run-all', 'gear'].forEach(function (id) { Ink.present($(id), id); });
+      ['run-all', 'gear'].forEach(function (id) { Ink.present($(id), 'toolbar/' + id); });
       $('ink').value = Ink.setting();
       $('ink').onchange = function (e) { Ink.setSetting(e.target.value); };
     } else $('ink').disabled = true;

@@ -405,6 +405,255 @@ def test_exports(browser, work, chromium):
     check(not errors, f"no browser errors in the html-wasm export {errors[:3]}")
 
 
+# ---- Handwriting (frontend/render-ink.js, docs/HANDWRITING.md) ----------------------------------
+
+INK_STATE = """() => ({
+    canvases: document.querySelectorAll('canvas.ink-layer').length,
+    hidden: document.querySelectorAll('.ink-hide').length,
+    styled: [...document.querySelectorAll('[style]')].filter(e => /opacity|visibility|dash|--ink/.test(e.getAttribute('style'))).length,
+    running: Ink.jobs().filter(j => j.state !== 'parked').length,
+    jobs: Ink.stats.jobs })"""
+
+
+def html_of(page, selector):
+    """The page's markup, without the clip-path ids Sketch.fill picks at random."""
+    return re.sub(r"skc[a-z0-9]+", "skc", page.locator(selector).evaluate("e => e.outerHTML"))
+
+
+def frames(page, n=2):
+    page.evaluate(f"() => new Promise(r => {{ let k = {n}; const f = () => --k ? requestAnimationFrame(f) : r(); requestAnimationFrame(f); }})")
+
+
+def settle(page):
+    """Outlines follow their element's size a little later (Sketch.outline); let them."""
+    page.wait_for_timeout(400)
+    frames(page, 2)
+
+
+def opened(page, url):
+    page.goto(url)
+    page.wait_for_function("window.__NB_READY === true && document.fonts.status === 'loaded'")
+    frames(page, 3)
+
+
+def pixel_diff(page, a, b):
+    """Compares two PNG screenshots in the browser: pixels differing by more than 48 in a channel."""
+    import base64
+    return page.evaluate("""async ([a, b]) => {
+      const load = async s => createImageBitmap(await (await fetch('data:image/png;base64,' + s)).blob());
+      const [x, y] = [await load(a), await load(b)];
+      const px = img => { const c = new OffscreenCanvas(img.width, img.height), g = c.getContext('2d'); g.drawImage(img, 0, 0); return g.getImageData(0, 0, img.width, img.height).data; };
+      const p = px(x), q = px(y);
+      let differ = 0, ink = 0;
+      for (let i = 0; i < p.length; i += 4) {
+        const d = Math.max(Math.abs(p[i] - q[i]), Math.abs(p[i + 1] - q[i + 1]), Math.abs(p[i + 2] - q[i + 2]));
+        if (d > 48) differ++;
+        if (Math.min(q[i], q[i + 1], q[i + 2]) < 160) ink++;
+      }
+      return { differ, ink, total: p.length / 4 };
+    }""", [base64.b64encode(a).decode(), base64.b64encode(b).decode()])
+
+
+def test_ink(browser, work, chromium):
+    revenue = os.path.join(ROOT, "examples", "revenue.sql")
+    charts = os.path.join(ROOT, "examples", "charts.sql")
+    db = os.path.join(work, "ink.duckdb")
+    html, gallery = os.path.join(work, "ink_revenue.html"), os.path.join(work, "ink_charts.html")
+    sql(db, f"FROM notebook_export('{revenue}', file := '{html}')", f"FROM notebook_export('{charts}', file := '{gallery}')")
+    url = "file://" + html
+    viewport = {"width": 1300, "height": 950}
+
+    # The reference: the same page with the animation off.
+    off = browser.new_page(viewport=viewport)
+    opened(off, still(url))
+    settle(off)
+    reference_html, reference_text = html_of(off, "#nb-root"), off.locator("#nb-root").inner_text()
+    reference_shot = off.screenshot()
+    check(off.evaluate(INK_STATE)["jobs"] == 0, "ink=off: the page is drawn with no handwriting")
+
+    # 4. Mid-flight, on a stopped clock: text is all in the DOM, a canvas writes it, shapes wait.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.add_init_script("window.__INK_PAUSE = true")
+    opened(page, url)
+    page.evaluate("Ink.advance(450)")
+    frames(page, 2)
+    state = page.evaluate(INK_STATE)
+    hidden_paths = page.locator("svg path[style*='visibility: hidden']").count()
+    check(page.locator("#nb-root").inner_text() == reference_text and state["canvases"] > 0 and state["hidden"] > 0 and hidden_paths > 0,
+          f"part-way through, the text is complete in the DOM while a canvas writes it and paths wait ({state}, {hidden_paths} paths hidden)")
+
+    # 1. No trace: finished, the page is exactly the page drawn without the animation.
+    page.evaluate("Ink.advance(60000); Ink.finishAll()")
+    settle(page)
+    state = page.evaluate(INK_STATE)
+    check(state["canvases"] == 0 and state["hidden"] == 0 and state["styled"] == 0 and html_of(page, "#nb-root") == reference_html,
+          f"no trace: once written, the page's DOM is identical to a page drawn with the animation off ({state})")
+    check(not errors, f"no browser errors while writing {errors[:3]}")
+
+       # 3. Glyph alignment: the writer's last frame is the real text, in both fonts and at several sizes.
+    page = browser.new_page(viewport=viewport)
+    page.add_init_script("window.__INK_PAUSE = true")
+    opened(page, url)
+    page.evaluate("Ink.advance(60000)")
+    frames(page, 2)
+    page.evaluate("""() => {
+      const box = document.createElement('div');
+      box.id = 'ink-samples';
+      box.style.cssText = 'position:relative;padding:8px;background:var(--nb-bg)';
+      [['var(--nb-hand)', 14], ['var(--nb-hand)', 20], ['var(--nb-hand)', 42], ['var(--nb-mono)', 13.5], ['var(--nb-mono)', 22]].forEach(([f, size]) => {
+        const p = document.createElement('div');
+        p.style.cssText = `font-family:${f};font-size:${size}px;line-height:1.4;white-space:nowrap`;
+        p.textContent = f.includes('mono') ? "SELECT sum(amount) AS revenue, 'EU' FROM t WHERE i >= 3; -- 0123" : 'Revenue review: The quick brown fox, 4,490,867.00 (APAC & EU)?';
+        box.appendChild(p);
+      });
+      document.getElementById('nb-root').prepend(box);
+      window.scrollTo(0, 0);
+      Ink.present(box, 'test/samples', 'samples');
+    }""")
+    frames(page, 2)
+    job = page.evaluate("(() => { const j = Ink.jobs().find(j => j.key === 'test/samples'); return { start: j.start, end: j.end, now: Ink.now() }; })()")
+    page.evaluate(f"Ink.advance({job['start'] + job['end'] - job['now'] - 0.5})")
+    frames(page, 2)
+    samples = page.locator("#ink-samples")
+    last_frame = samples.screenshot()
+    writing = page.evaluate("Ink.jobs().some(j => j.key === 'test/samples')")
+    page.evaluate("Ink.advance(5)")
+    frames(page, 2)
+    real = samples.screenshot()
+    diff = pixel_diff(page, last_frame, real)
+    check(writing and diff["ink"] > 3000 and diff["differ"] < diff["ink"] * 0.01,
+          f"a glyph's last frame matches the real text it hands over to ({diff['differ']} of {diff['ink']} inked pixels differ)")
+
+ # 2. Same pixels, and 7. the budget, on a running clock.
+    page = browser.new_page(viewport=viewport)
+    page.goto(url)
+    page.wait_for_function("Ink.plans.length > 0")
+    page.wait_for_function("Ink.jobs().every(j => j.state === 'parked')", timeout=10000)
+    took = page.evaluate("performance.now() - Math.min(...Ink.plans.map(p => p.at))")
+    shot = page.screenshot()
+    diff = pixel_diff(page, shot, reference_shot)
+    check(diff["differ"] == 0, f"same pixels: the first screen, written, looks exactly as it does without the animation ({diff['differ']} pixels differ)")
+    check(took < 2500 * 1.25, f"revenue.sql: the first screen is written within the budget ({took:.0f} ms)")
+
+    page = browser.new_page(viewport=viewport)
+    page.goto("file://" + gallery)
+    page.wait_for_function("Ink.plans.length > 0")
+    page.wait_for_function("Ink.jobs().every(j => j.state === 'parked')", timeout=10000)
+    took = page.evaluate("performance.now() - Math.min(...Ink.plans.map(p => p.at))")
+    for step in range(12):
+        page.mouse.wheel(0, 800)
+        page.wait_for_timeout(1500)
+    smooth = page.evaluate("""() => {
+      const f = Ink.stats.frames.filter(x => x[2] > 0), gaps = [];
+      for (let i = 1; i < f.length; i++) { const g = f[i][0] - f[i - 1][0]; if (g < 300) gaps.push(g); }
+      gaps.sort((a, b) => a - b);
+      const work = f.map(x => x[1]).sort((a, b) => a - b), q = (a, k) => a[Math.min(a.length - 1, Math.floor(a.length * k))];
+      return { frames: f.length, gap50: q(gaps, .5), gap95: q(gaps, .95), work50: q(work, .5), work95: q(work, .95), workMax: q(work, 1) };
+    }""")
+    print(f"     charts.sql: first screen in {took:.0f} ms; frames while writing: " + ", ".join(f"{k} {v:.1f}" for k, v in smooth.items()))
+    check(took < 2500 * 1.25 and smooth["gap95"] < 34, f"charts.sql: the first screen is written within the budget, at a smooth frame rate ({took:.0f} ms)")
+
+    # 8. Switches: each gives the complete page and no jobs.
+    for name, setup in (("reduced motion", {"reduced_motion": "reduce"}), ("print media", None), ("the gear menu's setting", "localStorage.setItem('nb.ink', 'off')")):
+        page = browser.new_page(viewport=viewport, **(setup if isinstance(setup, dict) else {}))
+        if name == "print media":
+            page.emulate_media(media="print")
+        elif isinstance(setup, str):
+            page.add_init_script(setup)
+        opened(page, url)
+        settle(page)
+        state = page.evaluate(INK_STATE)
+        # Print media lays the page out differently: compare only what does not depend on layout.
+        same = html_of(page, "#nb-root") == reference_html or name == "print media"
+        check(state["jobs"] == 0 and state["canvases"] == 0 and same, f"{name} switches the handwriting off ({state})")
+    page = browser.new_page(viewport=viewport)
+    page.add_init_script("window.__INK_PAUSE = true")
+    opened(page, url)
+    page.evaluate("Ink.advance(300)")
+    frames(page, 2)
+    page.evaluate("window.dispatchEvent(new Event('beforeprint'))")
+    settle(page)
+    state = page.evaluate(INK_STATE)
+    check(state["canvases"] == 0 and state["hidden"] == 0 and state["running"] == 0 and html_of(page, "#nb-root") == reference_html,
+          f"printing part-way through finishes the page at once ({state})")
+    page.evaluate("Ink.advance(300)")
+    page.keyboard.press("Escape")
+    check(page.evaluate(INK_STATE)["running"] == 0, "a key press finishes everything on screen")
+
+    # 9. PDF: the page handed to Chrome is marked not to animate.
+    wrapper = os.path.join(work, "chrome.sh")
+    with open(wrapper, "w") as f:
+        f.write(f"#!/bin/sh\nfor a in \"$@\"; do case $a in file://*) cp \"${{a#file://}}\" '{work}/printed.html';; esac; done\nexec '{chromium}' \"$@\"\n")
+    os.chmod(wrapper, 0o755)
+    pdf = os.path.join(work, "ink.pdf")
+    sql(db, f"FROM notebook_export('{revenue}', file := '{pdf}', format := 'pdf', chrome := '{wrapper}')")
+    printed = open(os.path.join(work, "printed.html")).read()
+    check(open(pdf, "rb").read(5) == b"%PDF-" and '<html lang="en" data-ink="off">' in printed,
+          "PDF export prints a page marked not to animate")
+    page = browser.new_page(viewport=viewport)
+    page.goto("file://" + os.path.join(work, "printed.html"))
+    page.wait_for_function("window.__NB_READY === true")
+    frames(page, 3)
+    check(page.evaluate(INK_STATE)["jobs"] == 0, "the page Chrome prints draws without handwriting")
+
+
+def test_ink_editor(browser, work):
+    # 5 and 6 in the editor, whose render() rebuilds every cell on every change.
+    notebook = os.path.join(work, "ink_editor.sql")
+    shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
+    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    url = shell.stdout.readline().strip()
+    try:
+        off = browser.new_page(viewport={"width": 1400, "height": 1000})
+        off.goto(still(url))
+        off.wait_for_selector(".nb-cell")
+        off.wait_for_function("document.fonts.status === 'loaded'")
+        settle(off)
+        reference = html_of(off, "#cells")
+
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors = watch(page)
+        page.add_init_script("window.__INK_PAUSE = true")
+        page.goto(url)
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.fonts.status === 'loaded'")
+        frames(page, 3)
+        page.evaluate("Ink.advance(700)")
+        frames(page, 2)
+        before = page.evaluate(INK_STATE)
+        before_hidden = page.locator("#cells [style*='visibility: hidden']").count()
+        page.evaluate("App.render()")
+        frames(page, 2)
+        after = page.evaluate(INK_STATE)
+        after_hidden = page.locator("#cells [style*='visibility: hidden']").count()
+        check(before["running"] > 0 and after["jobs"] == before["jobs"] and after["running"] == before["running"] and after_hidden == before_hidden,
+              f"a render part-way through continues each piece where it was ({before} -> {after}, hidden paths {before_hidden} -> {after_hidden})")
+        page.evaluate("Ink.advance(10000)")
+        frames(page, 3)
+        page.evaluate("Ink.finishAll()")
+        settle(page)
+        done = page.evaluate(INK_STATE)
+        check(done["canvases"] == 0 and done["styled"] == 0 and html_of(page, "#cells") == reference,
+              f"no trace in the editor: written, its cells are exactly the cells drawn without the animation ({done})")
+        page.evaluate("App.render()")
+        frames(page, 3)
+        again = page.evaluate(INK_STATE)
+        check(again["jobs"] == done["jobs"] and again["canvases"] == 0, f"rendering again after everything is written writes nothing ({again})")
+        page.click("#gear")
+        page.select_option("#ink", "off")
+        page.keyboard.press("Escape")
+        check(page.evaluate("localStorage.getItem('nb.ink')") == "off" and not page.evaluate("Ink.enabled()"), "the gear menu switches the handwriting off")
+        check(not errors, f"no browser errors in the written editor {errors[:3]}")
+    finally:
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -415,7 +664,10 @@ def main():
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
-            test_exports(browser, work, shells[0] if shells else p.chromium.executable_path)
+            chromium = shells[0] if shells else p.chromium.executable_path
+            test_exports(browser, work, chromium)
+            test_ink(browser, work, chromium)
+            test_ink_editor(browser, work)
         finally:
             browser.close()
     shutil.rmtree(work, ignore_errors=True)

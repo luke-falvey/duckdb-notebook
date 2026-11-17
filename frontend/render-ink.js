@@ -82,7 +82,13 @@ var Ink = (function () {
   function prof(name, t0) { stats.ms[name] = (stats.ms[name] || 0) + now() - t0; }
   I.stats = stats;
 
-  function now() { return performance.now(); }
+  // The clock. Tests can stop it (window.__INK_PAUSE before the page loads, or Ink.pause) and move it
+  // by hand with Ink.advance, to look at a page part-way through.
+  var paused = !!window.__INK_PAUSE, frozen = performance.now();
+  function now() { return paused ? frozen : performance.now(); }
+  I.pause = function () { frozen = performance.now(); paused = true; };
+  I.advance = function (ms) { frozen += ms; schedule(); };
+  I.now = now;
   function schedule() { if (!raf) raf = requestAnimationFrame(frame); }
 
   // A cheap hash of what an element shows. Clip-path ids from Sketch.fill are random; leave them out.
@@ -107,6 +113,8 @@ var Ink = (function () {
     } else {
       if (entry) drop(entry.job);
       var job = { key: key, sig: sig, el: null, state: 'new', quick: now() - lastAction < C.recent, level: 0, opts: opts || {} };
+      // Text that was already there before the change is not written again.
+      if (entry && entry.job.texts) job.prev = entry.job.texts;
       registry[key] = { sig: sig, job: job };
       pending.push({ el: el, job: job });
       stats.jobs++;
@@ -307,6 +315,7 @@ var Ink = (function () {
     job.atoms.forEach(function (a) { if (!a.with) W += a.w; });
     W = W || 1;
     job.atoms.forEach(function (a) {
+      if (a.instant) { a.t0 = a.t1 = 0; return; }
       if (a.with) {
         var span = a.with.t1 - a.with.t0;
         a.t0 = Math.min(D, a.with.t0 + span * lag);
@@ -357,7 +366,17 @@ var Ink = (function () {
     job.units = [];
     job.svgTexts = [];
     job.textRoot = false;
-    function add(a) { a.order = order++; atoms.push(a); return a; }
+    job.texts = [];
+    var prev = null, instant = false;
+    if (job.prev) { prev = {}; job.prev.forEach(function (t) { prev[t] = (prev[t] || 0) + 1; }); }
+    // Whether this text was on the page before: then it is shown at once, not written.
+    function known(text) {
+      job.texts.push(text);
+      if (!prev || !prev[text]) return false;
+      prev[text]--;
+      return true;
+    }
+    function add(a) { a.order = order++; if (instant) { a.instant = true; a.w = 0; } atoms.push(a); return a; }
 
     function walkHtml(el, isRoot, alpha) {
       var cs = getComputedStyle(el);
@@ -371,7 +390,9 @@ var Ink = (function () {
         return;
       }
       if (!isRoot && cs.visibility !== 'hidden' && decorated(cs) && !el.querySelector('svg, canvas, input, select, textarea')) {
+        instant = known(tag + ':' + el.textContent);
         add({ type: 'fade', el: el, to: +cs.opacity, w: 8 });
+        instant = false;
       }
       if (tag === 'TR' && job.level >= 1 && el.parentElement && el.parentElement.tagName === 'TBODY' && el.sectionRowIndex >= C.tableRows) {
         var row = textUnits(el);
@@ -397,8 +418,10 @@ var Ink = (function () {
       var unit = style({ node: node, el: node.parentNode, svg: false }, cs, alpha);
       job.units.push(unit);
       job.textRoot = true;
-      if (job.level >= 2) { add({ type: 'wipe', units: [unit], text: true, w: Math.max(20, node.data.length * fontPx(cs) * 0.25) }); return; }
-      glyphs(unit, cs);
+      instant = known(node.data);
+      if (job.level >= 2 || instant) add({ type: 'wipe', units: [unit], text: true, w: Math.max(20, node.data.length * fontPx(cs) * 0.25) });
+      else glyphs(unit, cs);
+      instant = false;
     }
 
     function glyphs(unit, cs) {
@@ -502,7 +525,9 @@ var Ink = (function () {
       job.units.push(unit);
       job.svgTexts.push(el);
       job.textRoot = true;
-      if (job.level >= 2) { add({ type: 'wipe', units: [unit], text: true, w: Math.max(20, el.textContent.length * fontPx(cs) * 0.25) }); return; }
+      instant = known(el.textContent);
+      if (job.level >= 2 || instant) { add({ type: 'wipe', units: [unit], text: true, w: Math.max(20, el.textContent.length * fontPx(cs) * 0.25) }); instant = false; return; }
+      instant = false;
       // An SVG text's characters are addressed by index in its whole text content.
       unit.node = { data: el.textContent };
       glyphs(unit, cs);
@@ -536,7 +561,7 @@ var Ink = (function () {
     atoms.forEach(function (a) {
       if (a.type === 'path') {
         try { a.len = a.el.getTotalLength(); } catch (e) { a.len = 0; }
-        a.w = a.with ? 0 : a.fast ? a.len * 0.25 : a.len;
+        a.w = a.with || a.instant ? 0 : a.fast ? a.len * 0.25 : a.len;
       }
       if (!a.with) ink += a.w;
     });
