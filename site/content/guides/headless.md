@@ -81,7 +81,7 @@ quoting.
 ## In GitHub Actions
 
 A workflow that checks every notebook in `notebooks/` and keeps the HTML exports as an artifact. It
-expects the extension's Linux build (see [install](../start/install.md)) at
+expects the extension's `linux_amd64` build (see [install](../start/install.md)) at
 `tools/notebook.duckdb_extension`, and the script above at `tools/check_notebooks.py`:
 
 ```yaml

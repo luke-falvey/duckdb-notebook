@@ -122,7 +122,7 @@ Runs the notebook and writes it in another form. Returns one row: `format`, `pat
 | `budget` | `UBIGINT` | `16` | Most runs `interactive := 'precomputed'` may make |
 | `page_rows` | `UBIGINT` | `100` | Result rows kept per query cell (at least the cell's `rows=`) |
 | `wasm_runtime` | `VARCHAR` | `$NOTEBOOK_WASM_RUNTIME` | Folder holding the DuckDB-WASM runtime, for `html-wasm` |
-| `chrome` | `VARCHAR` | `$NOTEBOOK_CHROME`, then the `PATH` | Browser that prints PDFs |
+| `chrome` | `VARCHAR` | `$NOTEBOOK_CHROME`, the `PATH`, then the usual install places | Browser that prints PDFs |
 | `data_format` | `VARCHAR` | `'parquet'` | `parquet` or `csv`, for `data` |
 
 See [exporting and sharing](../guides/exporting.md).

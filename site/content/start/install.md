@@ -6,15 +6,40 @@ duckdb-notebook is a DuckDB extension. It needs **DuckDB 2.0.0**: notebooks read
 The extension is not yet in DuckDB's community repository, so `INSTALL notebook FROM community` does
 not work. There are two ways to get it: download the build from CI, or build it yourself.
 
-## Download the CI build (Linux x86-64)
+## Supported platforms
 
-Every push to `main` builds the extension for Linux x86-64, stamped for DuckDB v2.0.0.
+CI builds the extension for every native platform DuckDB distributes for:
+
+| Platform | DuckDB's name | Tested in CI |
+|---|---|---|
+| Linux x86-64 (glibc) | `linux_amd64` | yes |
+| Linux x86-64 (musl, e.g. Alpine) | `linux_amd64_musl` | yes |
+| Linux ARM64 (glibc) | `linux_arm64` | built only |
+| Linux ARM64 (musl) | `linux_arm64_musl` | yes |
+| macOS Apple silicon | `osx_arm64` | yes |
+| macOS Intel | `osx_amd64` | built only |
+| Windows x86-64 (MSVC) | `windows_amd64` | yes |
+| Windows x86-64 (MinGW) | `windows_amd64_mingw` | yes |
+| Windows ARM64 | `windows_arm64` | built only |
+
+"Tested" means DuckDB's pipeline runs the SQL test suite there; "built only" platforms compile and
+link but the pipeline does not run tests on them. DuckDB-WASM (in the browser) is not a target yet;
+the [html-wasm export](../guides/exporting.md#inputs-that-still-work) runs exported notebooks there
+without the extension.
+
+The extension is about 40 MB (15 MB compressed). Almost all of it is DuckDB itself, which every C++
+extension that runs SQL links in; the notebook's own code is under 2 MB.
+
+## Download the CI build
+
+Every push to `main` builds the extension for each platform above, stamped for DuckDB v2.0.0.
 
 1. Open the latest successful
    [*Build and test* run on `main`](https://github.com/luke-falvey/duckdb-notebook/actions/workflows/MainDistributionPipeline.yml?query=branch%3Amain+is%3Asuccess)
    (you need to be signed in to GitHub to download artifacts).
-2. Download the artifact `notebook-v2.0.0-extension-linux_amd64` and unzip it. It holds
-   `notebook.duckdb_extension`.
+2. Download the artifact for your platform, `notebook-v2.0.0-extension-<platform>` (for example
+   `notebook-v2.0.0-extension-osx_arm64`), and unzip it. It holds `notebook.duckdb_extension`.
+   To find your platform's name, run `PRAGMA platform;` in your DuckDB.
 3. Install it into DuckDB 2.0.0. The build is not signed, so DuckDB must be started with `-unsigned`:
 
 ```sh
@@ -72,7 +97,7 @@ show how.
 | For | You need |
 |---|---|
 | Opening the editor | A web browser on the same machine (the server listens on 127.0.0.1 only) |
-| PDF export | Chrome, Chromium or Edge |
+| PDF export | Chrome, Chromium or Edge, on any platform |
 | html-wasm export | Node and npm, once, to build the DuckDB-WASM runtime |
 | Map charts drawn from a `geometry` column | DuckDB's `spatial` extension |
 | Notebooks on S3 or HTTP | DuckDB's `httpfs` extension: every path argument goes through DuckDB's file system |

@@ -74,6 +74,7 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 |---|---|
 | `INSTALL notebook FROM community` fails | It is not in the community repository yet. See [install](../start/install.md) |
 | The extension refuses to load: not signed | Start DuckDB with `-unsigned` (or `allow_unsigned_extensions` in a client) |
+| The extension refuses to load: built for another platform | Download the artifact whose name ends in your platform; `PRAGMA platform;` tells you which |
 | The extension refuses to load: built for another version | It must match your DuckDB exactly. CI builds are for v2.0.0; a local build is stamped with DuckDB's commit and only loads into the shell built with it |
 | The shell exits at once, with an error about another extension | A `~/.duckdbrc` loads something this DuckDB lacks. Start with `-init /dev/null` |
 | `$name` is a syntax error | You are on DuckDB before 2.0. Notebooks need 2.0 |

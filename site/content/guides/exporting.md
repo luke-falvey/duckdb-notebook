@@ -110,10 +110,12 @@ You can set `NOTEBOOK_WASM_RUNTIME` instead of passing `wasm_runtime :=`. Things
 FROM notebook_export('report.sql', format := 'pdf');
 ```
 
-The PDF is the HTML page printed by a Chromium-based browser in headless mode. The extension looks
-for `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable`, `microsoft-edge`,
-`chrome` or `chrome-headless-shell` on the `PATH`. Point it at another with `chrome :=` or the
-`NOTEBOOK_CHROME` environment variable. Handwriting is off in PDFs.
+The PDF is the HTML page printed by a Chromium-based browser in headless mode. The extension looks,
+in order, at `chrome :=`, the `NOTEBOOK_CHROME` environment variable, the `PATH` (`chromium`,
+`google-chrome`, `microsoft-edge`, `chrome`, `chrome-headless-shell` and the like; `chrome.exe` and
+`msedge.exe` on Windows), and then the usual install places: `Program Files` and `AppData\Local` on
+Windows, `/Applications` on macOS. So on most machines with Chrome or Edge installed it needs no
+setting. Handwriting is off in PDFs.
 
 ## Markdown
 
@@ -148,7 +150,7 @@ One Parquet file per named query cell, named after the cell. `data_format := 'cs
 | `budget` | `16` | Most runs `interactive := 'precomputed'` may make |
 | `page_rows` | `100` | Rows kept per query cell |
 | `wasm_runtime` | `NOTEBOOK_WASM_RUNTIME` | Folder of the DuckDB-WASM runtime, for `html-wasm` |
-| `chrome` | `NOTEBOOK_CHROME`, then the `PATH` | Browser for `pdf` |
+| `chrome` | `NOTEBOOK_CHROME`, the `PATH`, then the usual install places | Browser for `pdf` |
 | `data_format` | `'parquet'` | `parquet` or `csv`, for `data` |
 
 `to` is a reserved word in DuckDB, which is why the output path is `file :=`.
