@@ -1057,8 +1057,8 @@ def test_ink(browser, work, chromium):
     pdf = os.path.join(work, "ink.pdf")
     sql(db, f"FROM notebook_export('{revenue}', file := '{pdf}', format := 'pdf', chrome := '{wrapper}')")
     printed = open(os.path.join(work, "printed.html")).read()
-    check(open(pdf, "rb").read(5) == b"%PDF-" and '<html lang="en" data-ink="off">' in printed,
-          "PDF export prints a page marked not to animate")
+    check(open(pdf, "rb").read(5) == b"%PDF-" and '<html lang="en" data-ink="off" data-width-fixed="normal">' in printed,
+          "PDF export prints a page marked not to animate, at the normal width (DESIGN §22)")
     page = browser.new_page(viewport=viewport)
     page.goto("file://" + os.path.join(work, "printed.html"))
     page.wait_for_function("window.__NB_READY === true")
@@ -2071,6 +2071,257 @@ def test_peek_cached(browser, work):
         stop(shell)
 
 
+WIDE_NOTEBOOK = """-- %% [markdown]
+/*
+# Wide
+
+A paragraph long enough to show where prose stops when the page is wide: it keeps a line length a
+reader can follow from one end to the other, however wide the window is, while the tables and charts
+below it take all the room they are given. It goes on a little longer to be sure it wraps.
+*/
+
+-- %% series
+SELECT range AS day, (range * 37) % 101 + range AS value, 'a' || (range % 3) AS grp FROM range(60)
+/* chart
+mark: line
+x: day
+y: value
+*/
+
+-- %% chart fixed from=series width=500
+/*
+mark: bar
+x: {field: grp, type: nominal}
+y: {field: value, aggregate: sum}
+*/
+
+-- %% wide_table
+SELECT range AS a, range * 2 AS b, range * 3 AS c, range * 4 AS d, range * 5 AS e, range * 6 AS f,
+       range * 7 AS g, range * 8 AS h, range * 9 AS i, range * 10 AS j, range * 11 AS k, range * 12 AS l,
+       'a longer text value ' || range AS m, 'another longer text value ' || range AS n, range * 13 AS o
+FROM range(5);
+"""
+
+WIDE_STATE = """() => {
+    const svg = sel => { const e = document.querySelector(sel); if (!e) return null;
+      const b = e.getBoundingClientRect(); return { view: +e.getAttribute('viewBox').split(' ')[2], w: Math.round(b.width), h: Math.round(b.height),
+        ticks: e.querySelectorAll('.nb-axis text').length,
+        overhang: Math.round(Math.max(...[...e.querySelectorAll('.nb-axis text')].map(t => t.getBoundingClientRect().right)) - e.closest('.nb-output').getBoundingClientRect().right) }; };
+    const cells = document.querySelector('.nb-cells').getBoundingClientRect();
+    const p = document.querySelector('.nb-md p');
+    return { mode: document.documentElement.getAttribute('data-width'), cells: Math.round(cells.width),
+      fluid: svg('.nb-cell[data-idx="1"] svg.nb-chart-svg'), fixed: svg('.nb-cell[data-idx="2"] svg.nb-chart-svg'),
+      prose: p ? Math.round(p.getBoundingClientRect().width) : 0,
+      columns: document.querySelectorAll('.nb-cell[data-idx="3"] table.nb-grid thead th:not(.nb-col-off)').length,
+      scroll: document.documentElement.scrollWidth - innerWidth };
+}"""
+
+
+def test_wide(browser, work):
+    db = os.path.join(work, "wide.duckdb")
+    notebook, declared = os.path.join(work, "wide.sql"), os.path.join(work, "wide_declared.sql")
+    with open(notebook, "w") as f:
+        f.write(WIDE_NOTEBOOK)
+    with open(declared, "w") as f:
+        f.write("-- %% [notebook]\n/*\ntitle: Wide by default\nwidth: wide\n*/\n\n" + WIDE_NOTEBOOK)
+    html, html_declared = os.path.join(work, "wide.html"), os.path.join(work, "wide_declared.html")
+    sql(db, f"FROM notebook_export('{notebook}', file := '{html}')", f"FROM notebook_export('{declared}', file := '{html_declared}')")
+    url = "file://" + html
+    viewport = {"width": 1700, "height": 1000}
+
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    opened(page, still(url))
+    settle(page)
+    normal, normal_html = page.evaluate(WIDE_STATE), html_of(page, "#nb-root")
+    check(normal["mode"] == "normal" and normal["cells"] <= 1000 and normal["fluid"]["view"] == 640,
+          f"an export opens in its reading column, its charts at their compiled width ({normal})")
+
+    toggle = page.locator("button.nb-width-toggle")
+    check(toggle.is_visible() and toggle.evaluate("e => getComputedStyle(e).borderTopWidth") == "0px" and "on" not in toggle.get_attribute("class"),
+          "an export has a quiet wide control")
+    toggle.click()
+    settle(page)
+    wide = page.evaluate(WIDE_STATE)
+    check(wide["mode"] == "wide" and wide["cells"] > 1550 and wide["scroll"] <= 0,
+          f"wide: the cells use the window's width, less a gutter ({wide['cells']}px of 1700)")
+    check(wide["fluid"]["view"] > 1400 and wide["fluid"]["w"] > 1400 and abs(wide["fluid"]["h"] - normal["fluid"]["h"]) <= 2
+          and wide["fluid"]["ticks"] > normal["fluid"]["ticks"],
+          f"a chart is drawn again for the wider box: same height, more ticks, not stretched ({normal['fluid']} -> {wide['fluid']})")
+    check(wide["fluid"]["overhang"] <= 0, f"its last tick label stays inside its box ({wide['fluid']['overhang']}px)")
+    check(wide["fixed"]["view"] == 500 and wide["fixed"]["w"] == 500, f"a chart whose cell sets width= keeps it ({wide['fixed']})")
+    check(wide["prose"] <= 760 and wide["columns"] > normal["columns"],
+          f"prose keeps its line length while a table shows more columns ({wide['prose']}px; {normal['columns']} -> {wide['columns']} columns)")
+    check("on" in toggle.get_attribute("class") and page.evaluate("localStorage.getItem('nb.width')") == "wide",
+          "the control shows the choice and remembers it in this browser")
+
+    page.reload()
+    page.wait_for_function("window.__NB_READY === true")
+    settle(page)
+    check(page.evaluate(WIDE_STATE)["mode"] == "wide", "the choice holds when the page is opened again")
+    opened(page, still(url) + "&width=normal")
+    check(page.evaluate(WIDE_STATE)["mode"] == "normal", "width=normal in the address wins over the saved choice")
+
+    # Back to normal: nothing of the wide page is left, and the page is as it was first drawn.
+    opened(page, still(url))
+    settle(page)
+    page.locator("button.nb-width-toggle").click()
+    settle(page)
+    check(page.evaluate(WIDE_STATE)["mode"] == "normal" and html_of(page, "#nb-root") == normal_html,
+          "switching back draws the page exactly as a normal page")
+
+    # Print and PDF keep the normal width; the page comes back wide afterwards.
+    page.locator("button.nb-width-toggle").click()
+    settle(page)
+    page.evaluate("window.dispatchEvent(new Event('beforeprint'))")
+    printing = page.evaluate(WIDE_STATE)
+    page.evaluate("window.dispatchEvent(new Event('afterprint'))")
+    after = page.evaluate(WIDE_STATE)
+    check(printing["mode"] == "normal" and printing["fluid"]["view"] == 640 and after["mode"] == "wide" and after["fluid"]["view"] > 1400,
+          f"print gets the normal page, and the wide page comes back after ({printing['mode']}, {after['mode']})")
+    page.evaluate("document.documentElement.setAttribute('data-width-fixed', 'normal')")
+    page.evaluate("window.dispatchEvent(new Event('resize'))")
+    check(page.evaluate("NB.width.mode()") == "normal", "a page fixed at the normal width (the PDF export's) ignores the reader's choice")
+    page.evaluate("document.documentElement.removeAttribute('data-width-fixed')")
+
+    # A resized wide window lays its charts out again.
+    page.set_viewport_size({"width": 1300, "height": 1000})
+    page.wait_for_timeout(500)
+    settle(page)
+    resized = page.evaluate(WIDE_STATE)
+    check(resized["mode"] == "wide" and 1000 < resized["fluid"]["view"] < 1300 and resized["scroll"] <= 0,
+          f"resizing a wide window draws the charts again at the new width ({resized['fluid']})")
+
+    # Presenting is unaffected: the same screens at the same scale.
+    page.set_viewport_size(viewport)
+    page.wait_for_timeout(500)
+    page.evaluate("Present.enter(1)")
+    settle(page)
+    presented_wide = page.evaluate("() => ({ mode: document.documentElement.getAttribute('data-width'), scale: Present.scale, view: +document.querySelector('svg.nb-chart-svg').getAttribute('viewBox').split(' ')[2], width: document.querySelector('.nb-cells').offsetWidth })")
+    page.keyboard.press("Escape")
+    settle(page)
+    left = page.evaluate(WIDE_STATE)
+    page.evaluate("NB.width.set('normal')")
+    page.evaluate("Present.enter(1)")
+    settle(page)
+    presented_normal = page.evaluate("() => ({ mode: document.documentElement.getAttribute('data-width'), scale: Present.scale, view: +document.querySelector('svg.nb-chart-svg').getAttribute('viewBox').split(' ')[2], width: document.querySelector('.nb-cells').offsetWidth })")
+    page.keyboard.press("Escape")
+    check(presented_wide == presented_normal and left["mode"] == "wide",
+          f"presenting a wide page shows the same screen at the same scale as a normal one, and leaving it is wide again ({presented_wide})")
+    check(not errors, f"no browser errors switching width {errors[:3]}")
+    page.close()
+
+    # The author's default: width: wide in the [notebook] cell, for readers who have not chosen.
+    page = browser.new_page(viewport=viewport)
+    opened(page, still("file://" + html_declared))
+    check(page.evaluate(WIDE_STATE)["mode"] == "wide", "width: wide in the [notebook] cell opens the export wide")
+    opened(page, still("file://" + html_declared) + "&width=normal")
+    check(page.evaluate(WIDE_STATE)["mode"] == "normal", "the address still wins over the notebook's default")
+    page.evaluate("localStorage.setItem('nb.width', 'normal')")
+    opened(page, still("file://" + html_declared))
+    check(page.evaluate(WIDE_STATE)["mode"] == "normal", "a reader's own choice wins over the notebook's default")
+    page.close()
+
+    # The pen: a wide page, written, ends identical to the same page drawn with ink=off; so does one
+    # switched to wide while it was being written.
+    off = browser.new_page(viewport=viewport)
+    opened(off, still(url) + "&width=wide")
+    settle(off)
+    reference = html_of(off, "#nb-root")
+    off.close()
+    for switched in (False, True):
+        page = browser.new_page(viewport=viewport)
+        errors = watch(page)
+        page.add_init_script("window.__INK_PAUSE = true")
+        opened(page, url + ("" if switched else "?width=wide"))
+        page.evaluate("Ink.advance(400)")
+        if switched:
+            page.locator("button.nb-width-toggle").click()
+            page.evaluate("Ink.advance(300)")
+        page.evaluate("Ink.advance(60000); Ink.finishAll()")
+        settle(page)
+        state = page.evaluate(INK_STATE)
+        check(state["canvases"] == 0 and state["hidden"] == 0 and state["styled"] == 0 and html_of(page, "#nb-root") == reference,
+              f"written {'after switching to wide mid-way' if switched else 'wide'}, the page is identical to it drawn with ink=off ({state})")
+        check(not errors, f"no browser errors writing a wide page {errors[:3]}")
+        page.close()
+
+    # Watch mode: the same pen, slowly; it ends on the same page.
+    page = browser.new_page(viewport=viewport)
+    page.add_init_script("window.__INK_PAUSE = true")
+    opened(page, url + "?ink=watch&width=wide")
+    advance(page, 4000)
+    page.evaluate("Ink.finishAll()")
+    settle(page)
+    check(html_of(page, "#nb-root") == reference, "watched, a wide page ends identical to it drawn with ink=off")
+    page.close()
+
+    # A phone: wide changes nothing a narrow window can show.
+    phone = browser.new_page(viewport={"width": 390, "height": 844})
+    opened(phone, still(url) + "&width=wide")
+    settle(phone)
+    st = phone.evaluate(WIDE_STATE)
+    check(st["mode"] == "wide" and st["scroll"] <= 0 and st["fluid"]["view"] == 640 and st["fluid"]["w"] < 390,
+          f"on a phone a wide page does not scroll sideways and its charts shrink as before ({st})")
+    phone.close()
+
+
+def test_wide_editor(browser, work):
+    notebook = os.path.join(work, "wide_editor.sql")
+    with open(notebook, "w") as f:
+        f.write(WIDE_NOTEBOOK)
+    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    url = shell.stdout.readline().strip()
+    try:
+        page = browser.new_page(viewport={"width": 1700, "height": 1000})
+        errors = watch(page)
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.click("#run-all")
+        page.wait_for_selector(".nb-cell[data-idx='1'] svg.nb-chart-svg")
+        settle(page)
+        normal = page.evaluate(WIDE_STATE)
+        check(normal["mode"] == "normal" and normal["cells"] <= 1000 and normal["fluid"]["view"] == 640,
+              f"the editor opens with its cells in the reading column ({normal['cells']}px)")
+        page.click("#gear")
+        check(page.locator("#wide").is_visible() and not page.locator("#wide").is_checked(), "the gear menu has a wide switch, off")
+        page.locator("#wide").check()
+        settle(page)
+        wide = page.evaluate(WIDE_STATE)
+        check(wide["mode"] == "wide" and wide["cells"] > 1300 and wide["fluid"]["view"] > 1200 and wide["fixed"]["view"] == 500
+              and abs(wide["fluid"]["h"] - normal["fluid"]["h"]) <= 2 and wide["scroll"] <= 0,
+              f"wide: the editor's cells and charts use the window's width ({wide['cells']}px, chart {wide['fluid']})")
+        check(page.locator(".nb-margin").first.bounding_box()["x"] >= 0, "the cells' margins still have room")
+
+        page.reload()
+        page.wait_for_selector(".nb-cell[data-idx='1'] svg.nb-chart-svg")
+        settle(page)
+        page.click("#gear")
+        check(page.evaluate(WIDE_STATE)["mode"] == "wide" and page.locator("#wide").is_checked(),
+              "the editor remembers wide in this browser, and the switch shows it")
+        page.keyboard.press("Escape")
+
+        # Reading view and presenting.
+        page.goto(still(url) + "&width=wide#present=1")
+        page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent.startsWith('1 /')", timeout=30000)
+        settle(page)
+        wide_screen = page.evaluate("() => ({ mode: document.documentElement.getAttribute('data-width'), scale: Present.scale, width: document.querySelector('.nb-cells').offsetWidth })")
+        page.goto(still(url) + "&width=normal#present=1")
+        page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent.startsWith('1 /')", timeout=30000)
+        settle(page)
+        normal_screen = page.evaluate("() => ({ mode: document.documentElement.getAttribute('data-width'), scale: Present.scale, width: document.querySelector('.nb-cells').offsetWidth })")
+        check(wide_screen == normal_screen and wide_screen["mode"] == "normal",
+              f"presenting from the editor is the same wide or not ({wide_screen} vs {normal_screen})")
+        check(not errors, f"no browser errors with a wide editor {errors[:3]}")
+    finally:
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -2098,6 +2349,8 @@ def main():
             test_present_editor(browser, work)
             test_peek(browser, work)
             test_peek_cached(browser, work)
+            test_wide(browser, work)
+            test_wide_editor(browser, work)
         finally:
             browser.close()
             for shell in list(running):

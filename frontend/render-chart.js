@@ -915,6 +915,10 @@
     if (!chart) return;
     if (chart.error) { container.appendChild(NB.el('div', { 'class': 'nb-error', text: chart.error })); return; }
     var render = chart.render || {}, datasets = (chart.datasets || []).map(NB.objects);
+    // A wide page draws a chart again at the width of its box (NB.width.fit): the axes, ticks and
+    // marks are laid out for that width, not stretched.
+    if (opts && opts.width) render = Object.assign({}, render, { width: opts.width });
+    else if (NB.width) NB.width.track(container, chart, opts);
     // A stable wobble per chart: the same chart is drawn the same way every time.
     Sketch.reseed((opts && opts.seed) || ((render.title || '') + JSON.stringify(render.layers || render.kind).length + '/' + datasets.map(function (d) { return d.length; }).join(',')));
     // In a query cell's tabs the title is already the tab's label.

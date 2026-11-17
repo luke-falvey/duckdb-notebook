@@ -146,6 +146,24 @@ The ⚙ menu's **handwriting** setting is `gentle` (the default), `watch` or `of
 browser. It is off when the system asks for reduced motion, when printing, in PDF exports, and when the
 page's URL has `ink=off`, whatever the setting says. The finished page is identical either way.
 
+### Wide pages
+
+A notebook sits in a reading column about 1000 pixels wide. On a large screen, **wide** lets it use
+the whole window: cells, tables and charts take the width there is, less a margin.
+
+- Turn it on with the ⚙ menu's **wide** switch in the editor, or the **wide** control in an HTML
+  export's header. It is remembered in your browser.
+- Add `width=wide` or `width=normal` to the address of the editor or an export, so a link opens that
+  way: try [revenue.html?width=wide](../examples/revenue.html?width=wide).
+- An author can make it the default for readers who have not chosen, with `width: wide` in the
+  [`[notebook]` cell](../reference/settings.md).
+
+Charts are drawn again for the wider space, at the same height, with more ticks on their axes, rather
+than stretched. A chart whose cell sets `width=` keeps that width, and on a narrow window a chart
+shrinks as it always did. Paragraphs, lists and quotes keep their line length, which is easier to
+read than a line across a whole monitor. Presenting, printing and PDF exports always use the normal
+width.
+
 ### Watch mode
 
 The gentle pen gets out of the way: a screen is written in a couple of seconds, many strokes at once.

@@ -79,6 +79,17 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 | The shell exits at once, with an error about another extension | A `~/.duckdbrc` loads something this DuckDB lacks. Start with `-init /dev/null` |
 | `$name` is a syntax error | You are on DuckDB before 2.0. Notebooks need 2.0 |
 
+## In DuckDB-WASM
+
+| Symptom | Cause and fix |
+|---|---|
+| `LOAD` fails: the extension was built for another version or platform | Use DuckDB-WASM 2.0 (npm tag `next`, `1.33.1-dev110.0` or later; `latest` is DuckDB 1.5), the `wasm_eh` build for the `base` bundle and `wasm_threads` for `threads`, stamped `v2.0.0` |
+| `LOAD` refuses an unsigned extension | Open the database with `allowUnsignedExtensions: true` ([running in the browser](../guides/browser.md#load-it)) |
+| `LOAD` never returns, in the `threads` bundle | A race in DuckDB-WASM's threaded extension loading, about one time in eight, DuckDB's own extensions too. Retry in a fresh page with a timeout, or use the `base` bundle |
+| `notebook_start: the notebook server is not available in this build …` | The server needs sockets and threads, which DuckDB-WASM does not have. Use the other functions |
+| `notebook_export: format 'pdf' runs a local Chrome, which this build … cannot do …` | Export `html` and print it from the browser |
+| `notebook_cache` lists nothing after `cache := true` | DuckDB-WASM's in-memory file system has no directories, so the cache stays off there |
+
 ## Exports
 
 | Symptom | Cause and fix |

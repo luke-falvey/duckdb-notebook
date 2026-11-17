@@ -781,8 +781,10 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		ExportOptions html_options = bind.options;
 		html_options.format = "html";
 		auto html = ExportDocument(db, text, bind.source, html_options, note);
-		// The page is printed as it opens: no handwriting, whatever headless Chrome's clock does.
-		html = notebook::ReplaceAll(html, "<html lang=\"en\">", "<html lang=\"en\" data-ink=\"off\">");
+		// The page is printed as it opens: no handwriting, whatever headless Chrome's clock does, and
+		// the normal width whatever the notebook or the reader chose (paper has its own width).
+		html = notebook::ReplaceAll(html, "<html lang=\"en\">",
+		                            "<html lang=\"en\" data-ink=\"off\" data-width-fixed=\"normal\">");
 		auto html_path = bind.to + ".html";
 		WriteTextFile(context, html_path, html);
 		auto command = ShellQuote(browser) +

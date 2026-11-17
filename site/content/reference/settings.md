@@ -17,6 +17,7 @@ These travel with the notebook and are reviewed like any edit.
 | `attach` | list of `{path, as, read_only}` | | Databases attached before the first cell runs (`ATTACH IF NOT EXISTS`). Paths are relative to the notebook |
 | `extensions` | list of names | | Extensions loaded before the first cell runs |
 | `timing` | `true`, `false` | `true` | Show each cell's run time in the editor. The ⚙ menu's **timing** switch writes it |
+| `width` | `normal`, `wide` | `normal` | How wide the page is for a reader who has not chosen ([wide pages](../guides/reading.md#wide-pages)). A reader's own choice wins; presenting and print always use `normal` |
 | `cache` | `true`, `false` | `true` | Keep each cell's last result so the notebook reopens showing it ([keeping results](../guides/cache.md)). `false` keeps none and removes what was kept. The ⚙ menu's **keep results** switch writes it |
 
 **Options on a cell's `-- %%` line:**

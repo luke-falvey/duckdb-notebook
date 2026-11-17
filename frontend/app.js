@@ -458,6 +458,9 @@ var App = (function () {
     return foot;
   }
 
+  // A chart without width= on its cell takes the width of a wide page (NB.width).
+  A.fluid = function (cell) { return !(cell.options && cell.options.width); };
+
   function output(cell) {
     var out = NB.el('div', { 'class': 'nb-output' }), r = cell.result || {};
     // A query whose chart failed still shows its result; the chart's tab shows the error.
@@ -467,7 +470,7 @@ var App = (function () {
       var text = r.output != null ? r.output : (cell.content || '').replace(/\{\{([\s\S]*?)\}\}/g, function (_, e) { return '`' + e.trim() + '`'; });
       out.appendChild(NB.el('div', { 'class': 'nb-md', html: NB.markdown(text) }));
     } else if (cell.kind === 'chart' && r.data) {
-      NB.chart(out, r.data, { selected: A.selected, onSelect: function (name, value) { A.select(name, value, cell); } });
+      NB.chart(out, r.data, { selected: A.selected, fluid: A.fluid(cell), onSelect: function (name, value) { A.select(name, value, cell); } });
     } else if (cell.kind === 'sql') {
       queryOutput(cell, out);
     }
@@ -488,7 +491,7 @@ var App = (function () {
       var holder = NB.el('div', { 'class': 'nb-tab-body' });
       out.appendChild(holder);
       var chart = (r.charts || [])[tab];
-      if (chart) NB.chart(holder, chart, { selected: A.selected, seed: 'cell' + cell.idx + '/' + tab, inTab: true, onSelect: function (name, value) { A.select(name, value, cell); } });
+      if (chart) NB.chart(holder, chart, { selected: A.selected, fluid: A.fluid(cell), seed: 'cell' + cell.idx + '/' + tab, inTab: true, onSelect: function (name, value) { A.select(name, value, cell); } });
       else holder.appendChild(NB.el('div', { 'class': 'nb-stub', text: 'Not drawn yet: run the cell (Shift+Enter).' }));
       if (!A.reading) {
         out.appendChild(stub((cell.editingChart ? '▾ ' : '▸ edit ') + 'chart spec', function () { cell.editingChart = !cell.editingChart; A.render(); }));
@@ -613,6 +616,7 @@ var App = (function () {
     }
     root.innerHTML = '';
     document.getElementById('app').classList.toggle('reading', A.reading);
+    NB.width.declare(NB.width.declared(A.cells));
     var screen = null;
     if (Present.on) {
       screen = Present.begin(A.cells.map(function (c, i) {
@@ -693,6 +697,7 @@ var App = (function () {
       if (cell.kind === 'markdown') box.addEventListener('dblclick', function (e) { if (!cell.editing && !A.reading && e.target.closest('.nb-output')) { cell.editing = true; A.render(); } });
       box.addEventListener('focusin', function () { box.classList.add('focused'); });
       box.addEventListener('focusout', function () { box.classList.remove('focused'); });
+      NB.width.fit(box);
       Sketch.outline(box, { width: 1.5 });
       if (window.Ink) write(box, cell);
     });
@@ -707,6 +712,7 @@ var App = (function () {
     var timing = $('show-timing');
     if (timing) timing.checked = A.timing();
     if ($('keep-results')) $('keep-results').checked = A.caching();
+    if ($('wide')) $('wide').checked = NB.width.mode() === 'wide';
   };
 
   // Hands each piece of a cell to the pen (render-ink.js): its bracket, margin, state, and each part
@@ -790,6 +796,7 @@ var App = (function () {
       localStorage.setItem('nb.theme', next);
     };
     $('show-timing').onchange = function (e) { A.setTiming(e.target.checked); };
+    $('wide').onchange = function (e) { NB.width.set(e.target.checked ? 'wide' : 'normal'); };
     $('keep-results').onchange = function (e) { A.setCaching(e.target.checked); };
     $('forget-results').onclick = function () { A.forget(); };
     NB.pageSizes.forEach(function (n) { $('page-size').appendChild(NB.el('option', { value: n, text: n, selected: n === A.pageSize ? 'selected' : null })); });
@@ -830,6 +837,7 @@ var App = (function () {
     } else $('ink').disabled = true;
     A.api('GET', '/api/notebook').then(function (data) {
       A.load(data);
+      NB.width.start({ render: function () { A.render(); } });
       Present.start(A.present);
       A.watch();
       AppExtra.catalog(); AppExtra.picker();

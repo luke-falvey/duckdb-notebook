@@ -113,6 +113,7 @@ show nothing.
 | ◐ | Light or dark |
 | rows per page | Default page size for tables without `rows=`, remembered in this browser |
 | timing | Show run times; writes `timing:` into the `[notebook]` cell |
+| wide | Use the whole width of the window for cells, tables and charts ([wide pages](../guides/reading.md#wide-pages)); remembered in this browser |
 | handwriting | `gentle`, `watch` ([watch the pen](../guides/reading.md#watch-mode) write the page) or `off`; remembered in this browser |
 | peek | Show the first rows of the CTE or sub-query the caret is in ([peek](#peek-under-the-pen)); remembered in this browser |
 | Export | HTML, HTML with inputs precomputed, PDF (prints the reading view from the browser), Markdown or SQL, with or without code and output |

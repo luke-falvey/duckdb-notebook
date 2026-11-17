@@ -3,6 +3,9 @@
 Everything the extension does is a table function. Call them with `FROM f(...)`,
 `SELECT … FROM f(...)` or `CALL f(...)`. Named arguments use `:=`.
 
+In DuckDB-WASM, `notebook_start`, `notebook_stop` and PDF export are not available and the result
+cache keeps nothing; the rest works ([running in the browser](../guides/browser.md)).
+
 Every argument that takes a notebook path also accepts `db:<name>` (the latest stored version) or
 `db:<name>@<version>`, for [notebooks stored in the database](../guides/storing.md). Paths are read
 through DuckDB's file system, so remote paths work when `httpfs` is loaded.
