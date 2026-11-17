@@ -133,7 +133,7 @@ var Present = (function () {
     }
     if (P.shown !== lastShown) { scroller.scrollTop = 0; lastShown = P.shown; }
     indicator();
-    writeHash(P.at + 1);
+    writeHash(P.shown + 1);
   };
 
   // The page number, in the corner, with a faint way out for those without a keyboard.
