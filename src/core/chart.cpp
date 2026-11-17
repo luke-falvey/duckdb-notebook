@@ -420,6 +420,15 @@ ChartPlan CompileChart(const std::string &spec_text, const std::string &from, co
 		render.Set("title", title->ToJson());
 	}
 	if (spec.Get("type")) {
+		// Rules, bands and notes are drawn on a grammar chart's axes. KPIs and gauges have bands of their
+		// own ({from, to, color}), which colour the value.
+		auto type = Lower(spec.Str("type"));
+		for (auto key : {"rules", "bands", "notes"}) {
+			if (spec.Get(key) && !(std::string(key) == "bands" && (type == "kpi" || type == "gauge"))) {
+				compiler.Fail(std::string(key) +
+				              ": needs a grammar chart (mark: or layers:), not type: " + spec.Str("type"));
+			}
+		}
 		compiler.Typed(spec, render);
 		render.Set("spec", spec.ToJson());
 	} else {

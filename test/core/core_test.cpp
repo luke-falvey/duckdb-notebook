@@ -422,6 +422,14 @@ static void TestChartErrors() {
 	// B8: a field missing inside a sparkline names the chart's type, not an empty one.
 	auto plan = CompileChart("type: kpi\nvalue: n\nsparkline: {y: n}\n", "t", context);
 	CHECK(plan.error == "kpi chart needs x:");
+	// B25: rules, bands and notes belong to grammar charts; a typed chart says so rather than drop them.
+	plan = CompileChart("type: table\nrules: [{y: 5}]\n", "t", context);
+	CHECK(plan.error == "rules: needs a grammar chart (mark: or layers:), not type: table");
+	plan = CompileChart("type: sankey\nsource: a\ntarget: b\nvalue: n\nnotes: [{text: hi, x: 1}]\n", "t", context);
+	CHECK(plan.error == "notes: needs a grammar chart (mark: or layers:), not type: sankey");
+	// KPIs and gauges colour their value by bands of their own: {from, to, color}.
+	plan = CompileChart("type: kpi\nvalue: n\nbands: [{from: 0, to: 5, color: red}]\n", "t", context);
+	CHECK(plan.error.empty());
 }
 
 static void TestChartReferences() {

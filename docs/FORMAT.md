@@ -375,7 +375,8 @@ Optional keys: `label` (short text by the line or in the band; `{value}`, or `{f
 band, is replaced by the value in the axis's format) and `color`. The axis grows to include a rule or
 band outside the data. Quote a category that reads as an aggregate (`x: "max"`). `rules` and `bands`
 are read from the top level of the spec only and need a chart with axes (not `arc`); `boxplot` takes
-values but not aggregates. Any other key or shape is a chart error.
+values but not aggregates. Any other key or shape is a chart error, and so are `rules`, `bands` and
+`notes` on a typed chart (§5.3), apart from the `bands` of a `kpi` or `gauge`, which colour its value.
 
 **Notes.** `notes:` writes short remarks on the chart, each attached to a data position, so they stay
 with the data when the chart is resized or its query returns other rows:
