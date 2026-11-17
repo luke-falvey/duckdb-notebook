@@ -74,6 +74,9 @@ static void TestReferencedVariables() {
 	std::string name;
 	CHECK(IsSetVariable("-- default\nset variable Region = 'EU'", name) && name == "Region");
 	CHECK(!IsSetVariable("SET threads = 4", name));
+	// B6: a quoted variable name is a variable too, with "" read as one quote.
+	CHECK(IsSetVariable("SET VARIABLE \"lim\" = 5", name) && name == "lim");
+	CHECK(IsSetVariable("SET VARIABLE \"my \"\"x\"\"\" = 5", name) && name == "my \"x\"");
 }
 
 static void TestParseNotebook() {
@@ -302,6 +305,8 @@ static void TestParameters() {
 	CHECK(ParameterError(nb, "region").empty());
 	CHECK(ParameterError(nb, "picked").empty());
 	CHECK(ParameterError(nb, "lim").find("set by the SQL cell at line 3") != std::string::npos);
+	auto quoted = ParseNotebook("-- %% q\nSET VARIABLE \"lim\" = 5;\nSELECT $lim;\n");
+	CHECK(!ParameterError(quoted, "lim").empty() && UndefinedVariables(quoted).empty());
 	CHECK(ParameterError(nb, "nope").find("no input or variable named 'nope'") != std::string::npos);
 }
 

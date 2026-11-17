@@ -367,7 +367,8 @@ bool IsSetVariable(const std::string &statement, std::string &name) {
 	if (tokens.size() < 4 || tokens[0].text != "SET" || tokens[1].text != "VARIABLE" || tokens[3].text != "=") {
 		return false;
 	}
-	if (!IsIdentStart(tokens[2].text[0])) {
+	bool quoted = tokens[2].text == "\"";
+	if (!quoted && !IsIdentStart(tokens[2].text[0])) {
 		return false;
 	}
 	// CodeTokens upper-cases words; recover the name as written.
@@ -380,6 +381,21 @@ bool IsSetVariable(const std::string &statement, std::string &name) {
 		while (p < stripped.size() && IsSpace(stripped[p])) {
 			p++;
 		}
+	}
+	if (quoted) {
+		// "name", with "" standing for one quote.
+		name.clear();
+		for (size_t q = p + 1; q < stripped.size(); q++) {
+			if (stripped[q] == '"' && q + 1 < stripped.size() && stripped[q + 1] == '"') {
+				name += '"';
+				q++;
+			} else if (stripped[q] == '"') {
+				break;
+			} else {
+				name += stripped[q];
+			}
+		}
+		return !name.empty();
 	}
 	size_t end = p;
 	while (end < stripped.size() && IsIdentChar(stripped[end])) {
