@@ -31,6 +31,12 @@ SELECT content = (SELECT sql FROM notebook_sql('test/notebooks/basic.sql')) FROM
 ----
 true
 
+# The expanded example in examples/ is notebook_sql's output, kept in step with the notebook
+query I
+SELECT content = (SELECT sql FROM notebook_sql('examples/revenue.sql')) FROM read_text('examples/revenue.expanded.sql')
+----
+true
+
 # One file per named query cell
 query II
 SELECT format, note FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/basic_data', format := 'data', data_format := 'csv')

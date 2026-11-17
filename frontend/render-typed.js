@@ -77,10 +77,7 @@
   };
 
   T.table = function (c, render, data, opts, chart) {
-    var spec = render.spec || {}, formats = {}, bars = [], heat = [];
-    var columns = spec.columns || [];
-    (Array.isArray(columns) ? [] : []).forEach(function () {});
-    Object.keys(spec.format || {}).forEach(function (k) { formats[k] = spec.format[k]; });
+    var spec = render.spec || {}, formats = spec.format || {}, bars = [], heat = [];
     if (spec.bar) bars = [].concat(spec.bar);
     if (spec.heat) heat = [].concat(spec.heat);
     NB.table(c, chart.datasets[0], { formats: formats, bars: bars, heat: heat });

@@ -5,11 +5,13 @@
 #include "duckdb/main/database.hpp"
 #include "miniz_wrapper.hpp"
 #include "notebook/chart.hpp"
+#include "notebook/document.hpp"
 #include "notebook/functions.hpp"
 #include "notebook/graph.hpp"
 #include "notebook/script.hpp"
 #include "notebook/session.hpp"
 #include "notebook/sql_lexer.hpp"
+#include "notebook/text.hpp"
 #include "notebook/yaml.hpp"
 
 #include <cstdlib>
@@ -52,18 +54,9 @@ string Base64(const string &data) {
 	return Blob::ToBase64(string_t(data.data(), NumericCast<uint32_t>(data.size())));
 }
 
-string ReplaceAll(string text, const string &from, const string &to) {
-	size_t pos = 0;
-	while ((pos = text.find(from, pos)) != string::npos) {
-		text.replace(pos, from.size(), to);
-		pos += to.size();
-	}
-	return text;
-}
-
 //! JavaScript or JSON that sits inside a <script> element.
 string ScriptSafe(const string &code) {
-	return ReplaceAll(code, "</script", "<\\/script");
+	return notebook::ReplaceAll(code, "</script", "<\\/script");
 }
 
 string HtmlEscape(const string &text) {
@@ -87,12 +80,6 @@ string HtmlEscape(const string &text) {
 		}
 	}
 	return out;
-}
-
-string FileStem(const string &path) {
-	auto name = path.substr(path.find_last_of("/\\:") + 1);
-	auto dot = name.rfind('.');
-	return dot == string::npos || dot == 0 ? name : name.substr(0, dot);
 }
 
 vector<Value> QueryValues(Connection &connection, const string &sql) {
@@ -127,25 +114,6 @@ Json StringArray(const std::vector<std::string> &values) {
 
 } // namespace
 
-string NotebookTitle(const notebook::Notebook &notebook, const string &source) {
-	for (auto &cell : notebook.cells) {
-		if (cell.kind == notebook::CellKind::NOTEBOOK) {
-			string error;
-			auto meta = notebook::ParseYaml(cell.content, error);
-			auto title = meta.Str("title");
-			if (!title.empty()) {
-				return title;
-			}
-		}
-	}
-	for (auto &cell : notebook.cells) {
-		if (cell.kind == notebook::CellKind::MARKDOWN && cell.content.compare(0, 2, "# ") == 0) {
-			return cell.content.substr(2, cell.content.find('\n') - 2);
-		}
-	}
-	return FileStem(source);
-}
-
 //! Values an input offers: its options= list, or the distinct values of its from= column.
 vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, idx_t limit) {
 	vector<Value> values;
@@ -162,13 +130,12 @@ vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, i
 		}
 		return values;
 	}
-	auto from = cell.Option("from");
-	auto dot = from.rfind('.');
-	if (dot == string::npos) {
+	string relation, name;
+	if (!cell.InputFrom(relation, name)) {
 		return values;
 	}
-	auto column = notebook::QuoteIdentifier(from.substr(dot + 1));
-	return QueryValues(connection, "SELECT DISTINCT " + column + " FROM " + notebook::RelationSql(from.substr(0, dot)) +
+	auto column = notebook::QuoteIdentifier(name);
+	return QueryValues(connection, "SELECT DISTINCT " + column + " FROM " + notebook::RelationSql(relation) +
 	                                   " WHERE " + column + " IS NOT NULL ORDER BY 1 LIMIT " + std::to_string(limit));
 }
 
@@ -220,8 +187,7 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 	Runner runner(db, state);
 	auto notebook = AnalyzeText(*runner.Conn().context, text);
 	ThrowIfInvalid(notebook, source);
-	runner.ApplyMetadata(notebook, source);
-	runner.InitializeVariables(notebook, options.params);
+	runner.Prepare(notebook, source, options.params);
 	RunnerOptions run;
 	run.page_rows = options.page_rows;
 	run.rows_at_least = true;
@@ -271,7 +237,7 @@ Json BuildPayload(DatabaseInstance &db, const string &text, const string &source
 		array.Push(std::move(cell));
 	}
 	return Json::Object()
-	    .Set("title", Json::String(NotebookTitle(notebook, source)))
+	    .Set("title", Json::String(notebook::NotebookTitle(notebook, source)))
 	    .Set("source", Json::String(source))
 	    .Set("sql_words", SqlWords(runner.Conn()))
 	    .Set("cells", array)
@@ -287,13 +253,10 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 	Runner runner(db, state);
 	auto &connection = runner.Conn();
 	auto notebook = AnalyzeText(*connection.context, text);
-	runner.ApplyMetadata(notebook, source);
-	runner.InitializeVariables(notebook, options.params);
+	runner.Prepare(notebook, source, options.params);
 	RunnerOptions run;
 	run.params = options.params;
-	for (auto index : notebook::RunOrder(notebook)) {
-		runner.Run(notebook, notebook.cells[NumericCast<idx_t>(index)], run);
-	}
+	runner.RunAll(notebook, run);
 
 	// Relations the cells read that no query cell defines: tables (or views) in the database.
 	std::set<string> cell_views;
@@ -355,13 +318,9 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 	}
 	for (auto index : notebook::RunOrder(notebook)) {
 		auto &cell = notebook.cells[NumericCast<idx_t>(index)];
-		if (cell.kind == notebook::CellKind::INPUT) {
-			for (auto &statement : notebook::SplitStatements(notebook::CellSql(cell))) {
-				setup.Push(Json::String(notebook::RewriteVariables(statement.text)));
-			}
-		}
-		if (cell.kind == notebook::CellKind::SQL && cell.is_query) {
-			// Query cells become temporary views again; effect cells already ran into the data file.
+		// Inputs set their variables and query cells become temporary views again; effect cells already ran
+		// into the data file.
+		if (cell.kind == notebook::CellKind::INPUT || (cell.kind == notebook::CellKind::SQL && cell.is_query)) {
 			for (auto &statement : notebook::SplitStatements(notebook::CellSql(cell))) {
 				setup.Push(Json::String(notebook::RewriteVariables(statement.text)));
 			}
@@ -398,7 +357,7 @@ void AddWasmQueries(Json &cell_json, const notebook::Cell &cell) {
 		cell_json.Set(key, many ? rewritten : rewritten.Items()[0]);
 	}
 	if (cell.kind == notebook::CellKind::SQL && cell.is_query) {
-		auto sql = Runner::DisplaySql(cell);
+		auto sql = notebook::DisplaySql(cell);
 		cell_json.Set("display_sql", Json::String(notebook::RewriteVariables(sql)));
 	} else if (cell.kind == notebook::CellKind::MARKDOWN) {
 		auto expressions = Json::Array();
@@ -434,121 +393,23 @@ string Html(DatabaseInstance &db, const Json &payload, const string &title, cons
 		       Base64(ReadRuntimeFile(db, wasm_runtime, "duckdb-browser-eh.worker.js")) + "</script>\n" + "<script>" +
 		       ScriptSafe(ReadRuntimeFile(db, wasm_runtime, "runtime.js")) + "</script>\n";
 	}
-	html = ReplaceAll(html, "{{TITLE}}", HtmlEscape(title));
+	html = notebook::ReplaceAll(html, "{{TITLE}}", HtmlEscape(title));
 	// The stylesheet loads fonts from the server; an export carries them inline.
 	auto style = GetAsset("style.css");
 	for (auto font : {"Excalifont.woff2", "CascadiaCode.woff2"}) {
-		style = ReplaceAll(style, string("url('/assets/") + font + "')",
-		                   "url(data:font/woff2;base64," + Base64(GetAsset(font)) + ")");
+		style = notebook::ReplaceAll(style, string("url('/assets/") + font + "')",
+		                             "url(data:font/woff2;base64," + Base64(GetAsset(font)) + ")");
 	}
-	html = ReplaceAll(html, "{{STYLE}}", style);
-	html = ReplaceAll(html, "{{DATA}}", data);
-	html = ReplaceAll(html, "{{WASM}}", wasm);
-	html = ReplaceAll(html, "{{RENDER}}",
-	                  ScriptSafe(GetAsset("render-sketch.js") + GetAsset("ink-strokes.js") + GetAsset("render-ink.js") +
-	                             GetAsset("render-core.js") + GetAsset("render-sql.js") + GetAsset("render-chart.js") +
-	                             GetAsset("render-typed.js") + GetAsset("render-present.js")));
-	html = ReplaceAll(html, "{{VIEWER}}", ScriptSafe(GetAsset("viewer.js")));
+	html = notebook::ReplaceAll(html, "{{STYLE}}", style);
+	html = notebook::ReplaceAll(html, "{{DATA}}", data);
+	html = notebook::ReplaceAll(html, "{{WASM}}", wasm);
+	html = notebook::ReplaceAll(html, "{{RENDER}}",
+	                            ScriptSafe(GetAsset("render-sketch.js") + GetAsset("ink-strokes.js") +
+	                                       GetAsset("render-ink.js") + GetAsset("render-core.js") +
+	                                       GetAsset("render-sql.js") + GetAsset("render-chart.js") +
+	                                       GetAsset("render-typed.js") + GetAsset("render-present.js")));
+	html = notebook::ReplaceAll(html, "{{VIEWER}}", ScriptSafe(GetAsset("viewer.js")));
 	return html;
-}
-
-string Cellish(const Json &value) {
-	if (value.IsNull()) {
-		return "";
-	}
-	string text = value.GetType() == Json::Type::STRING ? value.Str() : value.Dump();
-	return ReplaceAll(ReplaceAll(text, "|", "\\|"), "\n", " ");
-}
-
-string MarkdownTable(const Json &table, idx_t max_rows) {
-	auto columns = table.Get("columns");
-	auto rows = table.Get("rows");
-	if (!columns || !rows || columns->Size() == 0) {
-		return "";
-	}
-	string out = "|";
-	string rule = "|";
-	for (auto &column : columns->Items()) {
-		out += " " + Cellish(*column.Get("name")) + " |";
-		rule += " --- |";
-	}
-	out += "\n" + rule + "\n";
-	idx_t count = 0;
-	for (auto &row : rows->Items()) {
-		if (count++ >= max_rows) {
-			break;
-		}
-		out += "|";
-		for (auto &value : row.Items()) {
-			out += " " + Cellish(value) + " |";
-		}
-		out += "\n";
-	}
-	auto total = table.Get("total");
-	if (total && total->Num() > static_cast<double>(std::min<idx_t>(max_rows, rows->Size()))) {
-		out += "\n" + std::to_string(static_cast<int64_t>(total->Num())) + " rows in total.\n";
-	}
-	return out;
-}
-
-//! A chart in markdown: its title and the data it draws.
-string MarkdownChart(const Json &chart) {
-	string title = "Chart";
-	if (chart.Get("render") && chart.Get("render")->Get("title")) {
-		title = chart.Get("render")->Get("title")->Str();
-	}
-	string out = "*" + title + "* (chart data; charts are drawn in the HTML export)\n\n";
-	if (chart.Get("datasets") && chart.Get("datasets")->Size() > 0) {
-		out += MarkdownTable(chart.Get("datasets")->Items()[0], 20) + "\n";
-	} else if (chart.Get("error")) {
-		out += "> Error: " + chart.Get("error")->Str() + "\n\n";
-	}
-	return out;
-}
-
-bool Hides(const string &hide, const char *what) {
-	return hide == "all" || hide == what;
-}
-
-string Markdown(const Json &payload) {
-	auto global_hide = payload.Get("hide") ? payload.Get("hide")->Str() : string();
-	string out;
-	for (auto &cell : payload.Get("cells")->Items()) {
-		auto kind = cell.Get("kind")->Str();
-		auto options = cell.Get("options");
-		auto hide = options && options->Get("hide") ? options->Get("hide")->Str() : string();
-		bool show_code = !Hides(hide, "code") && !Hides(global_hide, "code");
-		bool show_output = !Hides(hide, "output") && !Hides(global_hide, "output");
-		if (kind == "markdown") {
-			if (auto output = cell.Get("output")) {
-				out += output->Str() + "\n\n";
-			} else if (auto error = cell.Get("error")) {
-				out += "> Error: " + error->Str() + "\n\n";
-			}
-		} else if (kind == "sql") {
-			if (show_code) {
-				out += "```sql\n" + cell.Get("sql")->Str() + "\n```\n\n";
-			}
-			auto charts = cell.Get("charts");
-			if (show_output && charts && charts->Size() > 0) {
-				for (auto &chart : charts->Items()) {
-					out += MarkdownChart(chart);
-				}
-			} else if (show_output) {
-				if (cell.Get("error") && !cell.Get("error")->IsNull()) {
-					out += "> Error: " + cell.Get("error")->Str() + "\n\n";
-				} else if (auto table = cell.Get("table")) {
-					out += MarkdownTable(*table, 20) + "\n";
-				}
-			}
-		} else if (kind == "input") {
-			auto label = options && options->Get("label") ? options->Get("label")->Str() : cell.Get("name")->Str();
-			out += "**" + label + "**: " + Cellish(cell.Get("value") ? *cell.Get("value") : Json()) + "\n\n";
-		} else if (kind == "chart" && show_output && cell.Get("chart")) {
-			out += MarkdownChart(*cell.Get("chart"));
-		}
-	}
-	return out;
 }
 
 struct InputSpace {
@@ -569,8 +430,8 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 	auto payload = BuildPayload(db, text, source, options);
 	auto title = payload.Get("title")->Str();
 	if (format == "md") {
-		auto markdown = Markdown(payload);
-		markdown = ReplaceAll(ReplaceAll(markdown, VALUE_OPEN, ""), VALUE_CLOSE, "");
+		auto markdown = notebook::MarkdownDocument(payload);
+		markdown = notebook::ReplaceAll(notebook::ReplaceAll(markdown, VALUE_OPEN, ""), VALUE_CLOSE, "");
 		return "<!-- Exported from " + source + " by notebook_export. -->\n\n" + markdown;
 	}
 	if (format != "html" && format != "html-wasm") {
@@ -604,13 +465,10 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 		Runner runner(db, state);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		// Choices may come from cells (select from=cell.column), which must run first.
-		runner.ApplyMetadata(notebook, source);
-		runner.InitializeVariables(notebook, options.params);
+		runner.Prepare(notebook, source, options.params);
 		RunnerOptions run_all;
 		run_all.params = options.params;
-		for (auto index : notebook::RunOrder(notebook)) {
-			runner.Run(notebook, notebook.cells[NumericCast<idx_t>(index)], run_all);
-		}
+		runner.RunAll(notebook, run_all);
 		vector<InputSpace> spaces;
 		vector<string> frozen;
 		idx_t combinations = 1;
@@ -689,10 +547,6 @@ struct ExportBindData : public TableFunctionData {
 	ExportOptions options;
 };
 
-struct ExportState : public GlobalTableFunctionState {
-	bool done = false;
-};
-
 bool IsFile(const string &path) {
 	if (FILE *f = fopen(path.c_str(), "r")) {
 		fclose(f);
@@ -762,14 +616,14 @@ string ShellQuote(const string &text) {
 #ifdef _WIN32
 	return "\"" + text + "\"";
 #else
-	return "'" + ReplaceAll(text, "'", "'\\''") + "'";
+	return "'" + notebook::ReplaceAll(text, "'", "'\\''") + "'";
 #endif
 }
 
 //! A file:// URL for a local path, relative paths resolved against the working directory.
 string FileUrl(FileSystem &fs, const string &path) {
 	auto absolute = fs.IsPathAbsolute(path) ? path : fs.JoinPath(FileSystem::GetWorkingDirectory(), path);
-	absolute = ReplaceAll(absolute, "\\", "/");
+	absolute = notebook::ReplaceAll(absolute, "\\", "/");
 	// Windows drive paths (C:/x) need a third slash: file:///C:/x.
 	return string(absolute.compare(0, 1, "/") == 0 ? "file://" : "file:///") + absolute;
 }
@@ -839,12 +693,8 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	return std::move(result);
 }
 
-unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<ExportState>();
-}
-
 void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &state = data.global_state->Cast<ExportState>();
+	auto &state = data.global_state->Cast<OnceState>();
 	if (state.done) {
 		return;
 	}
@@ -866,13 +716,10 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		Runner runner(db, session);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		ThrowIfInvalid(notebook, bind.source);
-		runner.ApplyMetadata(notebook, bind.source);
-		runner.InitializeVariables(notebook, bind.options.params);
+		runner.Prepare(notebook, bind.source, bind.options.params);
 		RunnerOptions run;
 		run.params = bind.options.params;
-		for (auto index : notebook::RunOrder(notebook)) {
-			runner.Run(notebook, notebook.cells[NumericCast<idx_t>(index)], run);
-		}
+		runner.RunAll(notebook, run);
 		idx_t files = 0;
 		auto extension = bind.options.data_format == "csv" ? ".csv" : ".parquet";
 		for (auto &cell : notebook.cells) {
@@ -899,7 +746,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		html_options.format = "html";
 		auto html = ExportDocument(db, text, bind.source, html_options, note);
 		// The page is printed as it opens: no handwriting, whatever headless Chrome's clock does.
-		html = ReplaceAll(html, "<html lang=\"en\">", "<html lang=\"en\" data-ink=\"off\">");
+		html = notebook::ReplaceAll(html, "<html lang=\"en\">", "<html lang=\"en\" data-ink=\"off\">");
 		auto html_path = bind.to + ".html";
 		WriteTextFile(context, html_path, html);
 		auto command = ShellQuote(browser) +
@@ -937,7 +784,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 } // namespace
 
 void RegisterNotebookExport(ExtensionLoader &loader) {
-	TableFunction function("notebook_export", {LogicalType::VARCHAR}, Scan, Bind, Init);
+	TableFunction function("notebook_export", {LogicalType::VARCHAR}, Scan, Bind, OnceInit);
 	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
 		options.Add("file", LogicalType::VARCHAR)
 		    .Add("format", LogicalType::VARCHAR)
