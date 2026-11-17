@@ -311,6 +311,8 @@ def test_server(browser, work):
     page.click("#gear")
     page.click("#view-graph")
     check(page.locator(".nb-graph path.edge").count() >= 8, "the graph view draws the dependencies")
+    left = page.evaluate("Math.min(...[...document.querySelectorAll('.nb-graph path.edge')].map(p => p.getBBox().x))")
+    check(left >= 0, f"no dependency curve bends out of the graph's view box (leftmost x {left:.1f})")
     page.click("#view-reading")
     check(page.locator("textarea.nb-code:visible").count() == 0, "reading view hides the code")
     page.click("#view-reading")
