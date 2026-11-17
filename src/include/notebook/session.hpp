@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "notebook/chart.hpp"
 #include "notebook/format.hpp"
 #include "notebook/json.hpp"
 
@@ -64,6 +65,12 @@ public:
 	//! Sets variables that cells read but nothing sets to NULL, or to their param.
 	void InitializeVariables(const notebook::Notebook &notebook, const std::map<string, Value> &params);
 
+	//! Before the first cell of a run: ApplyMetadata, then InitializeVariables.
+	void Prepare(const notebook::Notebook &notebook, const string &source, const std::map<string, Value> &params);
+
+	//! Runs every cell in run order (notebook::RunOrder), keeping no outcomes.
+	void RunAll(const notebook::Notebook &notebook, const RunnerOptions &options);
+
 	//! Runs one cell. Fills `data` with the result page (query cells) or chart data (chart cells)
 	//! as requested in the options.
 	CellOutcome Run(const notebook::Notebook &notebook, const notebook::Cell &cell, const RunnerOptions &options,
@@ -83,9 +90,6 @@ public:
 	//! was cheap), or `{reason}` when there is nothing to show. Read-only: it runs one SELECT in a
 	//! read-only transaction with a time limit, and creates, replaces and records nothing.
 	notebook::Json Peek(const string &sql, idx_t cursor, idx_t rows, idx_t timeout_ms);
-
-	//! The SQL whose rows a query cell displays, or empty for other cells.
-	static string DisplaySql(const notebook::Cell &cell);
 
 	//! Records the connection's variables into the state (also done by the destructor).
 	void Save();
@@ -125,9 +129,6 @@ notebook::Json BuildPayload(DatabaseInstance &db, const string &text, const stri
 string ExportDocument(DatabaseInstance &db, const string &text, const string &source, const ExportOptions &options,
                       string &note);
 
-//! The notebook's title: its [notebook] cell's `title:`, its first `# heading`, or the file name.
-string NotebookTitle(const notebook::Notebook &notebook, const string &source);
-
 //! The values a select input offers: its options= list or the distinct values of its from= column.
 vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, idx_t limit);
 
@@ -140,6 +141,16 @@ notebook::Json CellJson(const notebook::Cell &cell);
 
 //! An embedded frontend file (frontend/ in the repository), compiled into the extension.
 const string &GetAsset(const string &name);
+
+//! Runs one cell as the editor does and builds the result the editor is sent: status, error, row
+//! count, timing, rendered markdown, result page, charts, and an input's value and choices.
+CellOutcome RunForEditor(Runner &runner, const notebook::Notebook &notebook, const notebook::Cell &cell,
+                         const RunnerOptions &options, notebook::Json &result);
+
+//! The columns of `relation` (SQL text, as RelationSql gives) with their DuckDB types. On failure returns
+//! false and sets `error`; `columns` is left empty.
+bool DescribeColumns(Connection &connection, const string &relation, std::vector<notebook::ColumnInfo> &columns,
+                     string &error);
 
 //! The SQL type a variable set from the browser should have, so it compares like the column it
 //! came from: from an input's widget or from= column, or a chart selection's fields. Empty when

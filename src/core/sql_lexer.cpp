@@ -1,4 +1,5 @@
 #include "notebook/sql_lexer.hpp"
+#include "notebook/text.hpp"
 
 #include <cctype>
 #include <cstdint>
@@ -15,24 +16,6 @@ bool IsIdentChar(char c) {
 }
 bool IsSpace(char c) {
 	return std::isspace(static_cast<unsigned char>(c));
-}
-
-std::string Trim(const std::string &s) {
-	size_t b = 0, e = s.size();
-	while (b < e && IsSpace(s[b])) {
-		b++;
-	}
-	while (e > b && IsSpace(s[e - 1])) {
-		e--;
-	}
-	return s.substr(b, e - b);
-}
-
-std::string Upper(std::string s) {
-	for (auto &c : s) {
-		c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-	}
-	return s;
 }
 
 //! A word or single punctuation character found in code, with its parenthesis depth.

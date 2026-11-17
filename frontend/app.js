@@ -78,16 +78,23 @@ var App = (function () {
   // page shows what it showed last time without running anything. A result made from inputs that
   // have changed since is stale. Until something runs in this session the page is a picture of the
   // last run (A.live is false): inputs and brushes do not run cells on their own.
+  // A result arrives for a cell: kept (remembered from an earlier run, with when it was saved) or null.
+  function show(c, result, kept) {
+    c.result = result;
+    c.kept = kept;
+    c.offset = 0;
+    if (result.choices) c.choices = result.choices;
+    c.state = result.status === 'error' ? 'failed' : 'fresh';
+  }
+  // A remembered result goes: the cell waits to run again.
+  function dropKept(c) { c.result = null; c.kept = null; c.state = 'stale'; }
   A.kept = function (data) {
     A.live = !!data.ran;
     (data.cached || []).forEach(function (item) {
       var c = A.cells[item.idx];
       if (!c || !item.result) return;
-      c.result = item.result;
-      c.kept = item.saved_at || true;
-      c.offset = 0;
-      if (item.result.choices) c.choices = item.result.choices;
-      c.state = item.stale ? 'stale' : item.result.status === 'error' ? 'failed' : 'fresh';
+      show(c, item.result, item.saved_at || true);
+      if (item.stale) c.state = 'stale';
     });
     var shown = data.variables || {};
     A.cells.forEach(function (c) {
@@ -108,7 +115,7 @@ var App = (function () {
   A.forget = function () {
     return A.api('POST', '/api/cache/clear', {}).then(function (r) {
       // Results this session computed stay on the page; ones only remembered go.
-      A.cells.forEach(function (c) { if (c.kept) { c.result = null; c.kept = null; c.state = 'stale'; } });
+      A.cells.forEach(function (c) { if (c.kept) dropKept(c); });
       A.status(r.removed ? 'Forgot the results of ' + r.removed + ' cell' + (r.removed === 1 ? '' : 's') : 'No results were kept');
       A.render();
     }).catch(function (e) { A.status(e.message); });
@@ -126,12 +133,16 @@ var App = (function () {
     return A.api('POST', '/api/notebook', { text: text }).then(function (r) { A.merge(r.cells); A.render(); });
   };
   var analyseTimer = null;
-  A.edited = function (cell) {
+  // The text changed: mark it unsaved and parse it again once typing pauses for `ms`.
+  function unsaved(ms) {
     A.dirty = true;
-    A.markStale(cell);
     clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 500);
+    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, ms);
     A.status('Unsaved changes');
+  }
+  A.edited = function (cell) {
+    A.markStale(cell);
+    unsaved(500);
   };
 
   // ---- Graph helpers ------------------------------------------------------------------------
@@ -177,16 +188,12 @@ var App = (function () {
           c.state = res.status === 'error' ? 'failed' : 'fresh';
           return;
         }
-        c.result = res;
-        c.kept = null;
-        c.offset = 0;
-        if (res.choices) c.choices = res.choices;
-        c.state = res.status === 'error' ? 'failed' : 'fresh';
+        show(c, res, null);
       });
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'stale'; });
       if ($('banner').querySelector('.nb-problem')) $('banner').innerHTML = '';
       A.status('Ran ' + r.results.length + ' cell' + (r.results.length === 1 ? '' : 's') + ' in ' + Math.round(performance.now() - started) + ' ms');
-      if (window.AppExtra) AppExtra.catalog();
+      AppExtra.catalog();
     }).catch(function (e) {
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'failed'; });
       A.status('Run failed: see the message above the cells');
@@ -268,16 +275,13 @@ var App = (function () {
     cell.head = tokens.join(' ');
     cell.options = Object.assign({}, cell.options);
     if (value == null || value === '') delete cell.options[key]; else cell.options[key] = String(value);
-    A.dirty = true;
-    clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 300);
-    A.status('Unsaved changes');
+    unsaved(300);
   };
 
   // hide= as two switches.
   A.hidden = function (cell) {
     var h = (cell.options && cell.options.hide) || '';
-    return { code: h === 'code' || h === 'all', output: h === 'output' || h === 'all' };
+    return { code: NB.hides(h, 'code'), output: NB.hides(h, 'output') };
   };
   A.setHidden = function (cell, code, output) {
     A.setOption(cell, 'hide', code && output ? 'all' : code ? 'code' : output ? 'output' : null);
@@ -334,7 +338,7 @@ var App = (function () {
         var s0 = ta.selectionStart;
         ta.setRangeText('    ', s0, ta.selectionEnd, 'end');
         ta.dispatchEvent(new Event('input'));
-      } else if (e.ctrlKey && e.key === ' ' && window.AppExtra) { e.preventDefault(); AppExtra.complete(ta, cell); }
+      } else if (e.ctrlKey && e.key === ' ') { e.preventDefault(); AppExtra.complete(ta, cell); }
     });
     if (!part.sql) return ta;
     // Highlighting: the coloured text is a <pre> behind a transparent textarea with the same metrics.
@@ -356,10 +360,7 @@ var App = (function () {
   // A chart spec of a query cell was edited: only that cell's charts need drawing again.
   A.specEdited = function (cell) {
     A.compose(cell);
-    A.dirty = true;
-    clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 500);
-    A.status('Unsaved changes');
+    unsaved(500);
   };
 
   A.addChart = function (cell, spec) {
@@ -396,7 +397,7 @@ var App = (function () {
   A.setCaching = function (on) {
     A.setFlag('cache', on);
     // Switching it off forgets what was kept: the server does so when it reads the new text.
-    if (!on) A.cells.forEach(function (c) { if (c.kept) { c.result = null; c.kept = null; c.state = 'stale'; } });
+    if (!on) A.cells.forEach(function (c) { if (c.kept) dropKept(c); });
     A.status(on ? 'Results will be kept from the next run on' : 'Results are no longer kept for this notebook');
     A.render();
   };
@@ -425,7 +426,7 @@ var App = (function () {
     query: ['▦', 'Query: its result is a table, with charts as tabs'], sql: ['✎', 'SQL that changes the database']
   };
   function kindMark(cell) {
-    var k = KINDS[cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind] || ['•', cell.kind];
+    var k = KINDS[NB.kindName(cell)] || ['•', cell.kind];
     return NB.el('span', { 'class': 'nb-kind', text: k[0], title: k[1], 'aria-label': k[1] });
   }
 
@@ -479,10 +480,7 @@ var App = (function () {
     var r = cell.result || {}, specs = cell.specs || [];
     var tab = specs.length ? Math.min(cell.tab || 0, specs.length) : specs.length;
     if (specs.length) {
-      var items = specs.map(function (_, k) {
-        var chart = (r.charts || [])[k];
-        return { label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) };
-      }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+      var items = NB.queryTabItems(r.charts, specs.length);
       out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; A.render(); },
         [NB.el('button', { 'class': 'nb-tab nb-tab-add nb-hide-reading', text: '+ chart', title: 'Add a chart of this result', onclick: function () { cell.tab = specs.length; cell.picking = true; A.render(); } })]));
     }
@@ -525,8 +523,8 @@ var App = (function () {
         onPageSize: function (next) { A.setOption(cell, 'rows', next); fetchPage(0, next); }
       });
       // The chart picker stays out of the way until asked for.
-      if (window.AppExtra && cell.picking) out.appendChild(AppExtra.switcher(cell, r.data.columns));
-      else if (window.AppExtra && !specs.length) {
+      if (cell.picking) out.appendChild(AppExtra.switcher(cell, r.data.columns));
+      else if (!specs.length) {
         out.appendChild(NB.el('button', { 'class': 'nb-tab nb-tab-add nb-pick-chart nb-hide-reading', text: '+ chart', title: 'Chart this result',
           onclick: function () { cell.picking = true; A.render(); } }));
       }
@@ -537,7 +535,7 @@ var App = (function () {
     var value = cell.result && cell.result.value !== undefined ? cell.result.value : cell.value;
     var view = Object.assign({}, cell, { value: value, choices: cell.choices });
     var box = NB.el('div');
-    var widget = A.inputWidget(view, function (c, v) { cell.value = v; if (cell.result) cell.result.value = v; A.setVariable(cell.name, v, cell); });
+    var widget = NB.inputWidget(view, function (c, v) { cell.value = v; if (cell.result) cell.result.value = v; A.setVariable(cell.name, v, cell); });
     box.appendChild(widget);
     if ((cell.widget === 'select' || cell.widget === 'multiselect') && !cell.choices && cell.name && !cell.fetching) {
       // Choices from a cell's column exist once that cell has run; /api/run refreshes them.
@@ -635,7 +633,7 @@ var App = (function () {
         box.addEventListener('mouseleave', function () { box.classList.remove('pointed'); }, { once: true });
       }
       var span = cell.options && cell.options.span;
-      if (span && A.reading) box.style.gridColumn = 'span ' + Math.max(1, Math.min(12, +span));
+      if (span && A.reading) box.style.gridColumn = 'span ' + NB.span(span);
       // Left margin: the cell's kind and name. Clicking either opens its -- %% line (name and options)
       // for editing. Right margin: its state. Its buttons show while the pointer or caret is in it.
       var head = NB.el('input', { 'class': 'nb-head', value: cell.head || '', placeholder: 'name and options', title: 'The -- %% marker line' });
@@ -683,7 +681,7 @@ var App = (function () {
       try { out = output(cell); } catch (e) {
         // A remembered result that cannot be drawn is dropped, never an error.
         if (!cell.kept) throw e;
-        cell.result = null; cell.kept = null; cell.state = 'stale';
+        dropKept(cell);
         box.classList.remove('outdated');
         out = output(cell);
       }
@@ -704,7 +702,7 @@ var App = (function () {
       var t = root.querySelectorAll('textarea')[focusIndex];
       if (t) { t.focus({ preventScroll: true }); t.selectionStart = t.selectionEnd = caret; }
     }
-    if (window.AppExtra) AppExtra.graph();
+    AppExtra.graph();
     main.scrollTop = scrollTop;
     if (Present.on) Present.finish(main, root, A.running ? 'Running…' : 'Nothing to show yet: leave (Esc) and run the notebook.');
     var timing = $('show-timing');
@@ -737,41 +735,6 @@ var App = (function () {
   }
 
   // Input widgets, shared with the exported viewer's look.
-  A.inputWidget = function (cell, onChange) {
-    var o = cell.options || {}, v = cell.value, w = cell.widget, box = NB.el('div', { 'class': 'nb-input' }), control;
-    box.appendChild(NB.el('label', { text: o.label || cell.name }));
-    var fire = function (value) { onChange(cell, value); };
-    if (w === 'select' || w === 'multiselect') {
-      var choices = cell.choices || (o.options ? o.options.split(',') : []);
-      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
-        var picked = Array.prototype.filter.call(control.options, function (x) { return x.selected; }).map(function (x) { return choices[+x.value]; });
-        fire(w === 'multiselect' ? picked : picked[0]);
-      } });
-      choices.forEach(function (x, i) {
-        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
-        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
-      });
-    } else if (w === 'checkbox') {
-      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
-    } else if (w === 'slider' || w === 'number') {
-      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : String(v) });
-      var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: o.min, max: o.max, step: o.step || 'any', value: v == null ? '' : v,
-        oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
-      box.appendChild(input);
-      box.appendChild(shown);
-    } else if (w === 'date') {
-      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: o.min, max: o.max, onchange: function () { fire(control.value); } });
-    } else if (w === 'daterange') {
-      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
-      a.onchange = b.onchange = function () { fire({ lo: a.value, hi: b.value }); };
-      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
-    } else {
-      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: o.placeholder, onchange: function () { fire(control.value); } });
-    }
-    if (control) box.appendChild(control);
-    return box;
-  };
-
   // ---- File sync ----------------------------------------------------------------------------
   A.watch = function () {
     if (!window.EventSource) return;
@@ -790,7 +753,7 @@ var App = (function () {
     });
   };
 
-  // ---- Start --------------------------------------------------------------------------------
+  // ---- Export and menu ----------------------------------------------------------------------
   A.exportUrl = function () {
     var f = $('export-format').value, code = $('export-code').checked, out = $('export-output').checked;
     var hide = !code && !out ? 'all' : !code ? 'code' : !out ? 'output' : 'none';
@@ -873,7 +836,7 @@ var App = (function () {
       NB.width.start({ render: function () { A.render(); } });
       Present.start(A.present);
       A.watch();
-      if (window.AppExtra) { AppExtra.catalog(); AppExtra.picker(); }
+      AppExtra.catalog(); AppExtra.picker();
       var kept = (data.cached || []).length;
       A.status(!kept ? 'Opened. Nothing has run yet: press Run all.' : A.live ? 'Showing the last results.' : 'Showing the last results. Nothing has run yet: press Run all.');
     }).catch(function (e) { A.status(e.message); $('cells').appendChild(NB.el('div', { 'class': 'nb-error', text: e.message })); });

@@ -13,8 +13,8 @@
 
 // notebook_run(path, params := {...}) runs a notebook headlessly, in a connection of its
 // own. Cells run in file order, except that a markdown cell waits for the cells its
-// `{{ }}` expressions read (notebook::RunOrder). It is the seed of the runner the server
-// will use.
+// `{{ }}` expressions read (notebook::RunOrder). Cells run through Runner (session.cpp), as in
+// the server and the exports.
 //
 // A run never reads the result cache: it exists to compute from the data as it is now. With
 // cache := true it writes it, so the next person to open the notebook sees these results at once.
@@ -73,8 +73,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 		}
 	}
 
-	auto cache = input.named_parameters.find("cache");
-	result->cache = cache != input.named_parameters.end() && !cache->second.IsNull() && cache->second.GetValue<bool>();
+	result->cache = NamedBool(input, "cache");
 
 	auto column = [&](const char *name, LogicalType type) {
 		names.emplace_back(name);
@@ -100,8 +99,7 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 	// the caller's attached databases.
 	state->runner = make_uniq<Runner>(DatabaseInstance::GetDatabase(context), state->session);
 	auto &bind_data = input.bind_data->Cast<RunBindData>();
-	state->runner->ApplyMetadata(bind_data.notebook, bind_data.path);
-	state->runner->InitializeVariables(bind_data.notebook, bind_data.params);
+	state->runner->Prepare(bind_data.notebook, bind_data.path, bind_data.params);
 	if (bind_data.cache) {
 		state->cache.Load(DatabaseInstance::GetDatabase(context), bind_data.path, bind_data.notebook);
 	}
@@ -136,14 +134,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		auto result = notebook::Json::Object();
 		outcome = RunForEditor(*state.runner, bind_data.notebook, cell, options, result);
 		outcome.output = StringUtil::Replace(StringUtil::Replace(outcome.output, VALUE_OPEN, ""), VALUE_CLOSE, "");
-		RanCell done;
-		done.index = cell.index;
-		done.status = outcome.status;
-		if (auto value = result.Get("value")) {
-			done.value = *value;
-		}
-		done.result = result.Dump();
-		state.ran.push_back(std::move(done));
+		state.ran.push_back(RanFromResult(cell.index, outcome.status, result));
 	} else {
 		outcome = state.runner->Run(bind_data.notebook, cell, options);
 	}

@@ -114,10 +114,9 @@ private:
 	void UpdateVariables(const SessionState &session);
 };
 
-//! Runs one cell as the editor does and builds the result the editor is sent: status, error, row
-//! count, timing, rendered markdown, result page, charts, and an input's value and choices.
-CellOutcome RunForEditor(Runner &runner, const notebook::Notebook &notebook, const notebook::Cell &cell,
-                         const RunnerOptions &options, notebook::Json &result);
+//! What a cell that ran (RunForEditor) leaves for the cache: its status, its result serialised once,
+//! and an input's value.
+RanCell RanFromResult(int index, const string &status, const notebook::Json &result);
 
 //! notebook_cache(path) and notebook_cache_clear(path).
 void RegisterNotebookCache(ExtensionLoader &loader);

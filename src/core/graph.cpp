@@ -2,6 +2,7 @@
 
 #include "notebook/chart.hpp"
 #include "notebook/yaml.hpp"
+#include "notebook/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -12,19 +13,6 @@
 namespace notebook {
 
 namespace {
-
-std::string Lower(std::string s) {
-	for (auto &c : s) {
-		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	}
-	return s;
-}
-
-void AddUnique(std::vector<std::string> &values, const std::string &value) {
-	if (std::find(values.begin(), values.end(), value) == values.end()) {
-		values.push_back(value);
-	}
-}
 
 //! How a name from `defines` or `reads` is shown in a message.
 std::string Describe(const std::string &name) {
@@ -114,10 +102,9 @@ std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &ex
 		}
 		analyse(cell.body, "this input's default");
 		// from=<cell>.<column>: the input reads the cell.
-		auto from = cell.Option("from");
-		auto dot = from.rfind('.');
-		if (dot != std::string::npos && dot > 0) {
-			AddUnique(cell.reads, Lower(from.substr(0, dot)));
+		std::string relation, column;
+		if (cell.InputFrom(relation, column) && !relation.empty()) {
+			AddUnique(cell.reads, Lower(relation));
 		}
 		break;
 	}

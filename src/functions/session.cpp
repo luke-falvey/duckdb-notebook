@@ -111,32 +111,6 @@ Json ResultToJson(QueryResult &result, idx_t limit, int64_t &total) {
 	    .Set("truncated", Json::Bool(NumericCast<idx_t>(total) > limit));
 }
 
-string ReplaySql(const notebook::Cell &cell) {
-	if (cell.kind != notebook::CellKind::SQL) {
-		return string();
-	}
-	auto sql = notebook::CellSql(cell);
-	if (cell.is_query && !cell.name.empty()) {
-		// The view (or temp table) the cell defines, plus anything else per-connection before it.
-		string replay;
-		auto statements = notebook::SplitStatements(cell.sql);
-		for (size_t i = 0; i + 1 < statements.size(); i++) {
-			if (notebook::IsConnectionState(statements[i].text)) {
-				replay += statements[i].text + ";\n";
-			}
-		}
-		auto wrapped = notebook::SplitStatements(sql);
-		return replay + (wrapped.empty() ? string() : wrapped.back().text + ";\n");
-	}
-	string replay;
-	for (auto &statement : notebook::SplitStatements(cell.sql)) {
-		if (notebook::IsConnectionState(statement.text)) {
-			replay += statement.text + ";\n";
-		}
-	}
-	return replay;
-}
-
 } // namespace
 
 Runner::Runner(DatabaseInstance &db, SessionState &state) : state(state) {
@@ -219,6 +193,17 @@ void Runner::ApplyMetadata(const notebook::Notebook &notebook, const string &sou
 	}
 }
 
+void Runner::Prepare(const notebook::Notebook &notebook, const string &source, const std::map<string, Value> &params) {
+	ApplyMetadata(notebook, source);
+	InitializeVariables(notebook, params);
+}
+
+void Runner::RunAll(const notebook::Notebook &notebook, const RunnerOptions &options) {
+	for (auto index : notebook::RunOrder(notebook)) {
+		Run(notebook, notebook.cells[NumericCast<idx_t>(index)], options);
+	}
+}
+
 void Runner::InitializeVariables(const notebook::Notebook &notebook, const std::map<string, Value> &params) {
 	auto &config = ClientConfig::GetConfig(*connection->context);
 	for (auto &name : notebook::UndefinedVariables(notebook)) {
@@ -229,17 +214,6 @@ void Runner::InitializeVariables(const notebook::Notebook &notebook, const std::
 			config.SetUserVariable(name, Value());
 		}
 	}
-}
-
-string Runner::DisplaySql(const notebook::Cell &cell) {
-	if (cell.kind != notebook::CellKind::SQL || !cell.is_query) {
-		return string();
-	}
-	if (!cell.name.empty()) {
-		return "SELECT * FROM " + notebook::QuoteIdentifier(cell.name);
-	}
-	auto statements = notebook::SplitStatements(cell.sql);
-	return statements.empty() ? string() : statements.back().text;
 }
 
 Json Runner::Page(const string &sql, idx_t limit, string &error) {
@@ -313,14 +287,9 @@ Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cel
 	context.height = std::atoi(cell.Option("height", "320").c_str());
 	auto relation = notebook::RelationSql(from);
 	{
-		auto described = connection->Query("DESCRIBE SELECT * FROM " + relation);
-		if (described->HasError()) {
-			return Json::Object().Set("error", Json::String(described->GetError()));
-		}
-		while (auto chunk = described->Fetch()) {
-			for (idx_t r = 0; r < chunk->size(); r++) {
-				context.columns.push_back({chunk->GetValue(0, r).ToString(), chunk->GetValue(1, r).ToString()});
-			}
+		string error;
+		if (!DescribeColumns(*connection, relation, context.columns, error)) {
+			return Json::Object().Set("error", Json::String(error));
 		}
 	}
 	{
@@ -331,14 +300,7 @@ Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cel
 			}
 		}
 	}
-	for (auto &other : notebook.cells) {
-		for (auto &other_spec : other.charts) {
-			auto selection = notebook::ChartSelectionInfo(other_spec);
-			if (!selection.name.empty()) {
-				context.selections[selection.name] = selection;
-			}
-		}
-	}
+	context.selections = notebook::NotebookSelections(notebook);
 	auto plan = notebook::CompileChart(spec, from, context);
 	if (!plan.error.empty()) {
 		return Json::Object().Set("error", Json::String(plan.error));
@@ -475,7 +437,7 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 		count.reset();
 		if (!failed && data && page_rows > 0) {
 			string error;
-			*data = Page(DisplaySql(cell), page_rows, error);
+			*data = Page(notebook::DisplaySql(cell), page_rows, error);
 		}
 	}
 	if (!failed && options.charts && !cell.charts.empty()) {
@@ -486,7 +448,7 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	outcome.status = failed ? "error" : "ok";
 	outcome.error = message;
 	if (!failed || !outcome.charts.IsNull()) {
-		auto replay = ReplaySql(cell);
+		auto replay = notebook::ReplaySql(cell);
 		if (replay.empty()) {
 			state.replay.erase(cell.index);
 		} else {
@@ -497,16 +459,28 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	return outcome;
 }
 
-static string ColumnType(Connection &connection, const string &relation, const string &column) {
+bool DescribeColumns(Connection &connection, const string &relation, std::vector<notebook::ColumnInfo> &columns,
+                     string &error) {
 	auto described = connection.Query("DESCRIBE SELECT * FROM " + relation);
 	if (described->HasError()) {
-		return string();
+		error = described->GetError();
+		return false;
 	}
 	while (auto chunk = described->Fetch()) {
 		for (idx_t r = 0; r < chunk->size(); r++) {
-			if (StringUtil::CIEquals(chunk->GetValue(0, r).ToString(), column)) {
-				return chunk->GetValue(1, r).ToString();
-			}
+			columns.push_back({chunk->GetValue(0, r).ToString(), chunk->GetValue(1, r).ToString()});
+		}
+	}
+	return true;
+}
+
+static string ColumnType(Connection &connection, const string &relation, const string &column) {
+	std::vector<notebook::ColumnInfo> columns;
+	string error;
+	DescribeColumns(connection, relation, columns, error);
+	for (auto &info : columns) {
+		if (StringUtil::CIEquals(info.name, column)) {
+			return info.type;
 		}
 	}
 	return string();
@@ -528,10 +502,9 @@ string VariableSqlType(Connection &connection, const notebook::Notebook &noteboo
 		if (w == "date" || w == "daterange") {
 			return "DATE";
 		}
-		auto from = cell.Option("from");
-		auto dot = from.rfind('.');
-		if (dot != string::npos) {
-			auto type = ColumnType(connection, notebook::RelationSql(from.substr(0, dot)), from.substr(dot + 1));
+		string relation, column;
+		if (cell.InputFrom(relation, column)) {
+			auto type = ColumnType(connection, notebook::RelationSql(relation), column);
 			return type.empty() ? type : (w == "multiselect" ? type + "[]" : type);
 		}
 		return string();
@@ -565,6 +538,41 @@ string VariableSqlType(Connection &connection, const notebook::Notebook &noteboo
 		return "STRUCT(lo " + types[0] + ", hi " + types[0] + ")";
 	}
 	return string();
+}
+
+CellOutcome RunForEditor(Runner &runner, const notebook::Notebook &notebook, const notebook::Cell &cell,
+                         const RunnerOptions &options, Json &result) {
+	Json data;
+	auto outcome = runner.Run(notebook, cell, options, &data);
+	result.Set("status", Json::String(outcome.status));
+	result.Set("error", outcome.status == "error" ? Json::String(outcome.error) : Json());
+	result.Set("row_count", outcome.row_count >= 0 ? Json::Number(static_cast<double>(outcome.row_count)) : Json());
+	result.Set("elapsed_ms", outcome.elapsed_ms >= 0 ? Json::Number(outcome.elapsed_ms) : Json());
+	if (outcome.has_output) {
+		result.Set("output", Json::String(outcome.output));
+	}
+	if (!data.IsNull()) {
+		result.Set("data", data);
+	}
+	if (!outcome.charts.IsNull()) {
+		result.Set("charts", outcome.charts);
+	}
+	if (cell.kind == notebook::CellKind::INPUT) {
+		auto value = runner.Conn().Query("SELECT getvariable(" + notebook::QuoteString(cell.name) + ")");
+		if (!value->HasError()) {
+			if (auto chunk = value->Fetch()) {
+				result.Set("value", ValueToJson(chunk->GetValue(0, 0)));
+			}
+		}
+	}
+	if (cell.kind == notebook::CellKind::INPUT && (cell.widget == "select" || cell.widget == "multiselect")) {
+		auto choices = Json::Array();
+		for (auto &choice : InputChoices(runner.Conn(), cell, 1000)) {
+			choices.Push(ValueToJson(choice));
+		}
+		result.Set("choices", choices);
+	}
+	return outcome;
 }
 
 } // namespace duckdb

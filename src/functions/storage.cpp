@@ -61,24 +61,9 @@ string FileStem(const string &path) {
 	return dot == string::npos || dot == 0 ? name : name.substr(0, dot);
 }
 
-string NamedString(TableFunctionBindInput &input, const char *key) {
-	auto found = input.named_parameters.find(key);
-	return found == input.named_parameters.end() || found->second.IsNull() ? string()
-	                                                                       : found->second.GetValue<string>();
-}
-
-bool NamedBool(TableFunctionBindInput &input, const char *key) {
-	auto found = input.named_parameters.find(key);
-	return found != input.named_parameters.end() && !found->second.IsNull() && found->second.GetValue<bool>();
-}
-
 struct SaveBindData : public TableFunctionData {
 	string path, name, message, database;
 	bool force = false;
-};
-
-struct OnceState : public GlobalTableFunctionState {
-	bool done = false;
 };
 
 unique_ptr<FunctionData> SaveBind(ClientContext &context, TableFunctionBindInput &input,
@@ -101,10 +86,6 @@ unique_ptr<FunctionData> SaveBind(ClientContext &context, TableFunctionBindInput
 	names.emplace_back("note");
 	return_types.push_back(LogicalType::VARCHAR);
 	return std::move(result);
-}
-
-unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<OnceState>();
 }
 
 void SaveScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {

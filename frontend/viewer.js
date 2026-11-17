@@ -10,10 +10,7 @@
   var payload, current, wasm = null, variables = {}, selected = {};
 
   function bytes(id) {
-    var text = document.getElementById(id).textContent.trim();
-    var bin = atob(text), out = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    return b64bytes(document.getElementById(id).textContent.trim());
   }
   function gunzip(u8) {
     return new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer().then(function (b) { return new Uint8Array(b); });
@@ -37,51 +34,10 @@
 
   function option(cell, key, fallback) { return cell.options && cell.options[key] != null ? cell.options[key] : fallback; }
 
-  function inputWidget(cell, onChange, enabled, values) {
-    var box = NB.el('div', { 'class': 'nb-input' });
-    box.appendChild(NB.el('label', { text: option(cell, 'label', cell.name) }));
-    var w = cell.widget, v = cell.value, control;
-    var fire = function (value) { onChange(cell, value); };
-    if (values) {
-      control = NB.el('select', { onchange: function () { fire(values[+control.value]); } });
-      values.forEach(function (x, i) { control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: NB.key(x) === NB.key(v) ? 'selected' : null })); });
-    } else if (w === 'select' || w === 'multiselect') {
-      var choices = cell.choices || (option(cell, 'options', '') ? option(cell, 'options', '').split(',') : []);
-      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
-        var picked = Array.prototype.filter.call(control.options, function (o) { return o.selected; }).map(function (o) { return choices[+o.value]; });
-        fire(w === 'multiselect' ? picked : picked[0]);
-      } });
-      choices.forEach(function (x, i) {
-        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
-        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
-      });
-    } else if (w === 'checkbox') {
-      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
-    } else if (w === 'slider' || w === 'number') {
-      var out = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : NB.formatNumber(v) });
-      control = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option(cell, 'min'), max: option(cell, 'max'), step: option(cell, 'step', 'any'), value: v, oninput: function () { out.textContent = control.value; }, onchange: function () { fire(Number(control.value)); } });
-      box.appendChild(control);
-      box.appendChild(out);
-      control = null;
-    } else if (w === 'date') {
-      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: option(cell, 'min'), max: option(cell, 'max'), onchange: function () { fire(control.value); } });
-    } else if (w === 'daterange') {
-      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
-      var both = function () { fire({ lo: a.value, hi: b.value }); };
-      a.onchange = both; b.onchange = both;
-      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
-    } else {
-      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: option(cell, 'placeholder'), onchange: function () { fire(control.value); } });
-    }
-    if (control) box.appendChild(control);
-    if (!enabled) box.querySelectorAll('input,select').forEach(function (e) { e.disabled = true; });
-    return box;
-  }
-
   // A query cell's charts as tabs, with its table last. The first chart shows until another is picked.
   function queryTabs(cell, out) {
     var charts = cell.charts, tab = Math.min(cell.tab || 0, charts.length);
-    var items = charts.map(function (c, k) { return { label: (c && c.error ? '⚠ ' : '') + NB.chartLabel(c, k) }; }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+    var items = NB.queryTabItems(charts, charts.length);
     out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; render(); }));
     var holder = NB.el('div', { 'class': 'nb-tab-body' });
     out.appendChild(holder);
@@ -103,9 +59,8 @@
   // a reader came for.
   function parts(cell) {
     var own = option(cell, 'hide', ''), global = payload.hide || '';
-    var hides = function (h, what) { return h === 'all' || h === what; };
-    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !hides(own, 'code') && !hides(global, 'code');
-    var output = cell.kind !== 'notebook' && !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
+    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !NB.hides(own, 'code') && !NB.hides(global, 'code');
+    var output = cell.kind !== 'notebook' && !NB.hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !NB.hides(global, 'output'));
     if (output && cell.kind === 'sql') output = !!((cell.charts && cell.charts.length) || cell.error || cell.table);
     return { code: code, output: output };
   }
@@ -141,10 +96,10 @@
     current.forEach(function (cell, i) {
       var showCode = shows[i].code, showOutput = shows[i].output;
       if ((!showCode && !showOutput) || (screen && !screen[i])) return;
-      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
+      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + NB.span(option(cell, 'span', 12)) });
       var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
       if (showCode) {
-        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
+        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: NB.kindName(cell) + (cell.name ? ' · ' + cell.name : '') }));
         box.appendChild(NB.el('pre', { 'class': 'nb-source', html: NB.highlightSql(cell.sql) }));
         shown++;
       }
@@ -162,7 +117,7 @@
           shown++;
         } else if (cell.kind === 'input') {
           var enabled = !!wasm || !!pre[cell.name];
-          box.appendChild(inputWidget(cell, onInput, enabled, wasm ? null : pre[cell.name]));
+          box.appendChild(NB.inputWidget(cell, onInput, { exported: true, enabled: enabled, values: wasm ? null : pre[cell.name] }));
           shown++;
         } else if (cell.kind === 'chart') {
           if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));

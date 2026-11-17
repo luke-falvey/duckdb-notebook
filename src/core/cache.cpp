@@ -3,6 +3,7 @@
 #include "notebook/chart.hpp"
 #include "notebook/graph.hpp"
 #include "notebook/yaml.hpp"
+#include "notebook/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -38,10 +39,6 @@ bool IsLayoutOption(const std::string &key) {
 //! Options that change what a cell shows but not what the cells reading it get.
 bool IsDisplayOption(const std::string &key) {
 	return key == "rows" || key == "width" || key == "height" || key == "label" || key == "placeholder";
-}
-
-bool Contains(const std::vector<std::string> &values, const std::string &value) {
-	return std::find(values.begin(), values.end(), value) != values.end();
 }
 
 //! Selections that only a query cell's charts read (filter:), not its SQL.

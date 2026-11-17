@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb/function/table_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "notebook/format.hpp"
 #include "notebook/graph.hpp"
@@ -27,6 +28,16 @@ void RegisterNotebookExport(ExtensionLoader &loader);
 void RegisterNotebookServer(ExtensionLoader &loader);
 //! notebook_peek(sql, cursor): the CTE or sub-query under a cursor position, and the query that selects from it.
 void RegisterNotebookPeek(ExtensionLoader &loader);
+
+//! Global state of a table function that emits all its rows in one call: `done` once it has.
+struct OnceState : public GlobalTableFunctionState {
+	bool done = false;
+};
+unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunctionInitInput &input);
+
+//! A named parameter as a string or bool; empty or false when absent or NULL.
+string NamedString(TableFunctionBindInput &input, const char *key);
+bool NamedBool(TableFunctionBindInput &input, const char *key);
 
 //! The text of a notebook source: a file path, or `db:<name>` / `db:<name>@<version>` for a notebook
 //! stored in the database. Throws if it cannot be read.

@@ -78,7 +78,7 @@ var AppExtra = (function () {
       r.style.cursor = 'pointer';
       r.addEventListener('click', function () { var el = document.querySelector('.nb-cell[data-idx="' + i + '"]'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
       var t = NB.svg('text', { x: 208, y: y + 16 }, svg);
-      t.textContent = (c.kind === 'sql' && c.is_query ? 'query' : c.kind) + '  ' + (c.name || '(line ' + c.start_line + ')') + '  [' + (c.state || 'stale') + ']';
+      t.textContent = NB.kindName(c) + '  ' + (c.name || '(line ' + c.start_line + ')') + '  [' + (c.state || 'stale') + ']';
       (c.depends_on || []).forEach(function (d, k) {
         var y0 = 5 + d * rowH + (rowH - 8) / 2, y1 = y + (rowH - 8) / 2, depth = 20 + ((i + d + k) % 8) * 20;
         maxDepth = Math.max(maxDepth, depth);
