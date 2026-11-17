@@ -24,7 +24,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | R1 | "Prepare a session and run every cell" written six times | Safe | low | −80 | done: `Runner::Prepare` and `Runner::RunAll`; callers that handle each outcome keep their loops; the extra html-wasm and precomputed runs stay (behaviour) |
 | R2 | Per-cell result JSON built twice (server, export) | Safe | low | −40 | done in part: `RunForEditor` moved to `session.cpp`, one `RanFromResult`; the export keeps its own JSON (it reads inputs after the whole run and orders keys differently, so sharing would change exported files) |
 | C1 | Core string helpers copied across files | Safe | low | −45 | done: `notebook/text.hpp` |
-| F1 | Input widget written twice (editor, viewer) | Safe | low | −35 | done: `NB.inputWidget`; its `exported` flag keeps two pages' differences, logged as B31 |
+| F1 | Input widget written twice (editor, viewer) | Safe | low | −35 | done: `NB.inputWidget`; the `exported` flag that kept two pages' differences went with B31 |
 | R3 | Table-function boilerplate (once-state, columns, named params) | Safe | low | −60 | done: `OnceState`/`OnceInit`, `NamedString`/`NamedBool` in `common.cpp`. Not done: the loop-and-compare parameter readers (their NULL handling differs) and the `column` lambdas (no gain) |
 | R4 | Server handler boilerplate (session lookup, runner, notebook) | Safe | low-med | −80 | done in part: `Source(req, body)`. Deferred: `WithRunner` and moving `/api/run`'s loop, which re-indent every handler lambda for little gain after R1 and R2 |
 | C2 | `from=<rel>.<col>` parsed three times | Safe | low | −10 | done: `Cell::InputFrom`, with a test |
@@ -39,7 +39,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | C5 | `chart.cpp` does too much (now ~1370 lines) | Safe | med | ±0 | done: a pure move into `chart.cpp` (513 lines), `chart_grammar.cpp`, `chart_references.cpp`, `chart_typed.cpp`, with the class in `chart_compiler.hpp`. The table of typed-chart handlers was not made: it would reword errors |
 | C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | deferred: one `NotebookMeta` touches the parser, the runner, the cache, the title and a regular expression in `app.js`; more than a structural change should, so left for its own PR |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
-| B1–B32 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features, B32 from review) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
+| B1–B32 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features, B32 from review) | Fix | low | small each | done in the bug-fix PR: one commit per bug ("Fix Bn: …"), each with a test that fails before it; B9 is not a bug; B15–B17 are docs only |
 | DOC1–DOC11 | Docs that disagree with the code | Docs | none | small | done, except DOC1 (`display=`), which is B15 |
 | N1 | Chart rules, bands and notes repeat their checks | Safe | low | −30 | deferred: C5 was kept a pure move so it can be reviewed as one; N1 is easy on top of it, alongside B28 in the same code |
 | N2 | Editor result handling repeated | Safe | low | −20 | done: `show()`, `dropKept()` |
@@ -277,7 +277,11 @@ added another copy of R1's run-every-cell loop. Earlier findings grew:
 ## Bugs found on the way (Fix: not in the refactor)
 
 Agreed with the parent session: after the refactor PR merges, a second PR fixes these, one commit per
-bug, each with a test that fails before the fix. Severity: **medium** = wrong results, a leak, or an
+bug, each with a test that fails before the fix. **Status: all fixed in that PR**, except B9, which
+measuring showed is not a bug. B15–B17 change only the docs, so they have no test. B14's test runs
+with the html-wasm checks (`NOTEBOOK_WASM_RUNTIME`). Two rows changed course while fixing: B13
+refuses `interpolate`, `stack` and `cornerRadius` instead of drawing them, and B16's `default=` does
+not exist, so FORMAT names the `SET VARIABLE` body as the default. Severity: **medium** = wrong results, a leak, or an
 accepted invalid notebook; **low** = an edge case, a wrong message, or an ignored option.
 
 | # | Severity | Bug | Where |
@@ -353,4 +357,4 @@ Unreferenced: `docs/handwriting/*.gif` (1.2 MB) are linked from nowhere; link th
 
 R1, R2, R3, R4, R5, C1, C2, C3, C4, F1, F2, F3, F4, D1, T1 and the T2 test additions, and docs
 DOC1–DOC8. C6 only if it stays purely structural. C5 last, after the chart reference-lines feature has
-merged. R6 deferred (a behaviour change for odd paths). B1–B31 in a second PR after this one. N1–N3 are in scope (N1 with C5).
+merged. R6 deferred (a behaviour change for odd paths). B1–B32 in a second PR after this one. N1–N3 are in scope (N1 with C5).
