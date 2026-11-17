@@ -126,12 +126,16 @@ var App = (function () {
     return A.api('POST', '/api/notebook', { text: text }).then(function (r) { A.merge(r.cells); A.render(); });
   };
   var analyseTimer = null;
-  A.edited = function (cell) {
+  // The text changed: mark it unsaved and parse it again once typing pauses for `ms`.
+  function unsaved(ms) {
     A.dirty = true;
-    A.markStale(cell);
     clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 500);
+    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, ms);
     A.status('Unsaved changes');
+  }
+  A.edited = function (cell) {
+    A.markStale(cell);
+    unsaved(500);
   };
 
   // ---- Graph helpers ------------------------------------------------------------------------
@@ -186,7 +190,7 @@ var App = (function () {
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'stale'; });
       if ($('banner').querySelector('.nb-problem')) $('banner').innerHTML = '';
       A.status('Ran ' + r.results.length + ' cell' + (r.results.length === 1 ? '' : 's') + ' in ' + Math.round(performance.now() - started) + ' ms');
-      if (window.AppExtra) AppExtra.catalog();
+      AppExtra.catalog();
     }).catch(function (e) {
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'failed'; });
       A.status('Run failed: see the message above the cells');
@@ -268,10 +272,7 @@ var App = (function () {
     cell.head = tokens.join(' ');
     cell.options = Object.assign({}, cell.options);
     if (value == null || value === '') delete cell.options[key]; else cell.options[key] = String(value);
-    A.dirty = true;
-    clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 300);
-    A.status('Unsaved changes');
+    unsaved(300);
   };
 
   // hide= as two switches.
@@ -334,7 +335,7 @@ var App = (function () {
         var s0 = ta.selectionStart;
         ta.setRangeText('    ', s0, ta.selectionEnd, 'end');
         ta.dispatchEvent(new Event('input'));
-      } else if (e.ctrlKey && e.key === ' ' && window.AppExtra) { e.preventDefault(); AppExtra.complete(ta, cell); }
+      } else if (e.ctrlKey && e.key === ' ') { e.preventDefault(); AppExtra.complete(ta, cell); }
     });
     if (!part.sql) return ta;
     // Highlighting: the coloured text is a <pre> behind a transparent textarea with the same metrics.
@@ -356,10 +357,7 @@ var App = (function () {
   // A chart spec of a query cell was edited: only that cell's charts need drawing again.
   A.specEdited = function (cell) {
     A.compose(cell);
-    A.dirty = true;
-    clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 500);
-    A.status('Unsaved changes');
+    unsaved(500);
   };
 
   A.addChart = function (cell, spec) {
@@ -522,8 +520,8 @@ var App = (function () {
         onPageSize: function (next) { A.setOption(cell, 'rows', next); fetchPage(0, next); }
       });
       // The chart picker stays out of the way until asked for.
-      if (window.AppExtra && cell.picking) out.appendChild(AppExtra.switcher(cell, r.data.columns));
-      else if (window.AppExtra && !specs.length) {
+      if (cell.picking) out.appendChild(AppExtra.switcher(cell, r.data.columns));
+      else if (!specs.length) {
         out.appendChild(NB.el('button', { 'class': 'nb-tab nb-tab-add nb-pick-chart nb-hide-reading', text: '+ chart', title: 'Chart this result',
           onclick: function () { cell.picking = true; A.render(); } }));
       }
@@ -699,7 +697,7 @@ var App = (function () {
       var t = root.querySelectorAll('textarea')[focusIndex];
       if (t) { t.focus({ preventScroll: true }); t.selectionStart = t.selectionEnd = caret; }
     }
-    if (window.AppExtra) AppExtra.graph();
+    AppExtra.graph();
     main.scrollTop = scrollTop;
     if (Present.on) Present.finish(main, root, A.running ? 'Running…' : 'Nothing to show yet: leave (Esc) and run the notebook.');
     var timing = $('show-timing');
@@ -784,7 +782,7 @@ var App = (function () {
     });
   };
 
-  // ---- Start --------------------------------------------------------------------------------
+  // ---- Export and menu ----------------------------------------------------------------------
   A.exportUrl = function () {
     var f = $('export-format').value, code = $('export-code').checked, out = $('export-output').checked;
     var hide = !code && !out ? 'all' : !code ? 'code' : !out ? 'output' : 'none';
@@ -862,7 +860,7 @@ var App = (function () {
       A.load(data);
       Present.start(A.present);
       A.watch();
-      if (window.AppExtra) { AppExtra.catalog(); AppExtra.picker(); }
+      AppExtra.catalog(); AppExtra.picker();
       var kept = (data.cached || []).length;
       A.status(!kept ? 'Opened. Nothing has run yet: press Run all.' : A.live ? 'Showing the last results.' : 'Showing the last results. Nothing has run yet: press Run all.');
     }).catch(function (e) { A.status(e.message); $('cells').appendChild(NB.el('div', { 'class': 'nb-error', text: e.message })); });
