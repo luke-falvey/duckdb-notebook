@@ -1,0 +1,4 @@
+# The documentation site's toolchain. Python 3.9 or later.
+mkdocs==1.6.1
+pymdown-extensions==10.16
+Pygments==2.19.2
