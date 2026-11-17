@@ -582,12 +582,12 @@
     // What notes should keep clear of: the lines and their labels.
     refs.boxes = [];
     var clamp = function (p, max) { return Math.max(0, Math.min(max, p)); };
-    var label = function (parent, text, px, py, anchor) {
+    // A label's candidate places, best first: [x, y, anchor]. The one that covers least data wins,
+    // once the marks are drawn (see the function returned below).
+    var label = function (parent, text, spots) {
       if (!text) return;
       text = text.length > 40 ? text.slice(0, 39) + '…' : text;
-      labels.push({ color: parent.style.color, text: text, x: f1(px), y: f1(py), anchor: anchor });
-      var wide = text.length * 7 + 4;
-      refs.boxes.push([anchor === 'end' ? px - wide : px, py - 12, anchor === 'end' ? px : px + wide, py + 4, 6]);
+      labels.push({ color: parent.style.color, text: text, spots: spots });
     };
     refs.bands.forEach(function (b) {
       var scale = b.axis === 'x' ? x : y, max = b.axis === 'x' ? w : h, a = span(scale, b.lo), c = span(scale, b.hi);
@@ -599,11 +599,11 @@
       var style = { stroke: 'none', fill: 'currentColor', gap: 9, hachure: 1.1, fillOpacity: 0.45 };
       if (b.axis === 'y') {
         Sketch.rect(e, 0, p0, w, p1 - p0, style);
-        label(e, text, 6, p1 - p0 >= 18 ? p0 + 14 : p0 - 4, 'start');
+        label(e, text, p1 - p0 >= 18 ? [[6, p0 + 14, 'start'], [w - 6, p0 + 14, 'end'], [6, p1 - 5, 'start'], [w - 6, p1 - 5, 'end'], [w / 2, p0 + 14, 'middle']]
+          : [[6, p0 - 4, 'start'], [w - 6, p0 - 4, 'end'], [6, p1 + 14, 'start'], [w - 6, p1 + 14, 'end']]);
       } else {
         Sketch.rect(e, p0, 0, p1 - p0, h, style);
-        var wide = text.length * 7 + 8;
-        if (p0 + wide <= w) label(e, text, p0 + 5, 12, 'start'); else label(e, text, p1 - 5, 12, 'end');
+        label(e, text, [[p0 + 5, 12, 'start'], [p1 - 5, 12, 'end'], [p0 + 5, h - 6, 'start'], [p1 - 5, h - 6, 'end']]);
       }
       if (text) e.setAttribute('data-ref', text);
     });
@@ -618,24 +618,63 @@
       if (r.axis === 'y') {
         Sketch.line(e, 0, p, w, p, style);
         refs.boxes.push([0, p - 3, w, p + 3, 2]);
-        label(e, text, w - 4, p < 16 ? p + 15 : p - 5, 'end');
+        label(e, text, [[w - 4, p - 5, 'end'], [w - 4, p + 15, 'end'], [6, p - 5, 'start'], [6, p + 15, 'start'], [w / 2, p - 5, 'middle'], [w / 2, p + 15, 'middle']]);
       } else {
         Sketch.line(e, p, 0, p, h, style);
         refs.boxes.push([p - 3, 0, p + 3, h, 2]);
-        if (p + text.length * 7 + 8 <= w) label(e, text, p + 5, 12, 'start'); else label(e, text, p - 5, 12, 'end');
+        label(e, text, [[p + 5, 12, 'start'], [p - 5, 12, 'end'], [p + 5, h - 6, 'start'], [p - 5, h - 6, 'end'], [p + 5, h / 2, 'start'], [p - 5, h / 2, 'end']]);
       }
       if (text) e.setAttribute('data-ref', text);
     });
-    return function () {
+    return function (plot) {
       if (!labels.length) return;
-      var over = s('g', { 'class': 'nb-ref-labels' }, g);
+      var over = s('g', { 'class': 'nb-ref-labels' }, g), taken = markObstacles(plot);
       labels.forEach(function (l) {
-        var t = s('text', { x: l.x, y: l.y, 'text-anchor': l.anchor, 'class': 'nb-ref nb-ref-label' }, over);
+        var wide = l.text.length * 7 + 4, best = null, bestScore = Infinity;
+        l.spots.forEach(function (spot, k) {
+          var x0 = spot[2] === 'end' ? spot[0] - wide : spot[2] === 'middle' ? spot[0] - wide / 2 : spot[0];
+          var box = [x0, spot[1] - 12, x0 + wide, spot[1] + 4];
+          var score = k * 4 + coverage(box, taken, w, h);
+          if (score < bestScore) { bestScore = score; best = { spot: spot, box: box }; }
+        });
+        taken.push(best.box.concat([6]));
+        refs.boxes.push(best.box.concat([6]));
+        var t = s('text', { x: f1(best.spot[0]), y: f1(best.spot[1]), 'text-anchor': best.spot[2], 'class': 'nb-ref nb-ref-label' }, over);
         if (l.color) t.style.color = l.color;
         t.textContent = l.text;
       });
     };
   }
+  // ---- Keeping text clear of the data ----------------------------------------------------------
+
+  // What the marks left behind for hover, as boxes [x0, y0, x1, y1, weight]: bars, dots, line points
+  // and the segments between them. Rule and band labels and notes are placed clear of these.
+  function markObstacles(plot) {
+    var out = [];
+    plot.__bars.forEach(function (b) { out.push([b.x0, b.y0, b.x1, b.y1, 1]); });
+    plot.__dots.forEach(function (d) { out.push([d.x - 5, d.y - 5, d.x + 5, d.y + 5, 3]); });
+    plot.__points.forEach(function (p, i) {
+      out.push([p.x - 5, p.y - 5, p.x + 5, p.y + 5, 3]);
+      var q = plot.__points[i + 1];
+      if (!q || q.series !== p.series) return;
+      var n = Math.ceil(Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) / 10);
+      for (var k = 1; k < n; k++) { var cx = p.x + (q.x - p.x) * k / n, cy = p.y + (q.y - p.y) * k / n; out.push([cx - 4, cy - 4, cx + 4, cy + 4, 3]); }
+    });
+    return out;
+  }
+
+  // How much a text box covers the boxes in the way, by area and weight. Outside the plot costs most
+  // of all: the text would be cut off or sit on the axes.
+  function coverage(box, obstacles, w, h) {
+    var total = 0;
+    obstacles.forEach(function (o) {
+      var ox = Math.min(box[2], o[2]) - Math.max(box[0], o[0]), oy = Math.min(box[3], o[3]) - Math.max(box[1], o[1]);
+      if (ox > 0 && oy > 0) total += ox * oy * o[4];
+    });
+    var inside = Math.max(0, Math.min(box[2], w) - Math.max(box[0], 0)) * Math.max(0, Math.min(box[3], h - 2) - Math.max(box[1], -M.top + 2));
+    return total + ((box[2] - box[0]) * (box[3] - box[1]) - inside) * 60;
+  }
+
   // ---- Notes ----------------------------------------------------------------------------------
 
   // Handwriting is wide: a note is a few short lines.
@@ -655,16 +694,7 @@
   function drawNotes(g, notes, x, y, w, h, plot, taken) {
     if (!notes || !notes.length) return;
     var layer = s('g', { 'class': 'nb-notes' }, g), CH = 7.4, LH = 17;
-    var obstacles = taken.slice();
-    plot.__bars.forEach(function (b) { obstacles.push([b.x0, b.y0, b.x1, b.y1, 1]); });
-    plot.__dots.forEach(function (d) { obstacles.push([d.x - 5, d.y - 5, d.x + 5, d.y + 5, 3]); });
-    plot.__points.forEach(function (p, i) {
-      obstacles.push([p.x - 5, p.y - 5, p.x + 5, p.y + 5, 3]);
-      var q = plot.__points[i + 1];
-      if (!q || q.series !== p.series) return;
-      var n = Math.ceil(Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) / 10);
-      for (var k = 1; k < n; k++) { var cx = p.x + (q.x - p.x) * k / n, cy = p.y + (q.y - p.y) * k / n; obstacles.push([cx - 4, cy - 4, cx + 4, cy + 4, 3]); }
-    });
+    var obstacles = taken.concat(markObstacles(plot));
     var mid = function (scale, v) { var p = span(scale, v); return p ? (p[0] + p[1]) / 2 : NaN; };
     // The marks at a position on one axis: their extreme on the other (the top of a bar, the highest
     // line), in pixels.
@@ -678,16 +708,7 @@
       pts.forEach(function (p) { var v = axis === 'x' ? p.x : p.y, d = v < lo ? lo - v : v > hi ? v - hi : 0; if (d <= near + 2) take(axis === 'x' ? p.y : p.x); });
       return best;
     };
-    var overlap = function (box) {
-      var total = 0;
-      obstacles.forEach(function (o) {
-        var ox = Math.min(box[2], o[2]) - Math.max(box[0], o[0]), oy = Math.min(box[3], o[3]) - Math.max(box[1], o[1]);
-        if (ox > 0 && oy > 0) total += ox * oy * o[4];
-      });
-      // Outside the plot costs most of all: the note would be cut off or sit on the axes.
-      var inside = Math.max(0, Math.min(box[2], w) - Math.max(box[0], 0)) * Math.max(0, Math.min(box[3], h - 2) - Math.max(box[1], -M.top + 2));
-      return total + ((box[2] - box[0]) * (box[3] - box[1]) - inside) * 60;
-    };
+    var overlap = function (box) { return coverage(box, obstacles, w, h); };
     var write = function (parent, lines, bx, by, anchor) {
       lines.forEach(function (line, i) {
         s('text', { x: f1(bx), y: f1(by + 13 + i * LH), 'text-anchor': anchor || 'start', 'class': 'nb-note-text' }, parent).textContent = line;
@@ -868,7 +889,7 @@
           });
           drawLayer(plot, Object.assign({}, l, { rows: rows }), x, y, color, w, h, size);
         });
-        refLabels();
+        refLabels(plot);
         drawNotes(g, render.notes, x, y, w, h, plot, refs.boxes || []);
         var sel = render.selection;
         if (sel && sel.type === 'interval') brush(g, sel, x, y, w, h, opts);

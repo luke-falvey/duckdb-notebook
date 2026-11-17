@@ -722,6 +722,15 @@ def test_chart_marks(browser, work):
     red = chart.locator(".nb-ref-rule").nth(5).locator("path").first.evaluate("e => getComputedStyle(e).stroke")
     check(muted == "rgb(134, 142, 150)" and red == "rgb(224, 49, 49)", f"they are in muted ink unless given a colour ({muted}, {red})")
     # y: 120 is above every point (n < 100): the axis grows to show it.
+    clear = chart.evaluate("""(cell) => {
+      const line = cell.querySelector('.nb-plot .nb-line'), n = line.getTotalLength(), m = line.getScreenCTM(), pts = [];
+      for (let i = 0; i <= 800; i++) { const p = line.getPointAtLength(n * i / 800).matrixTransform(m); pts.push([p.x, p.y]); }
+      return Array.from(cell.querySelectorAll('.nb-ref-labels text')).filter(t => {
+        const b = t.getBoundingClientRect();
+        return pts.some(p => p[0] > b.left && p[0] < b.right && p[1] > b.top && p[1] < b.bottom);
+      }).map(t => t.textContent);
+    }""")
+    check(clear == [], f"rule and band labels are placed clear of the line ({clear})")
     target = chart.locator(".nb-ref-rule[data-ref='Target'] path").first.bounding_box()
     frame, line = chart.locator("svg.nb-chart-svg").bounding_box(), chart.locator(".nb-plot .nb-line").bounding_box()
     check(target is not None and frame["y"] <= target["y"] < line["y"], "the axis grows to include a rule outside the data")
