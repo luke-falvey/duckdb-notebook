@@ -134,6 +134,15 @@ layers:
   - {mark: rule, y: {field: revenue, agg: avg}, color: {value: "#D55E00"}}
 */
 
+-- %% chart facets from=daily
+/*
+title: Monthly revenue, one panel per region
+mark: bar
+x: {field: day, timeunit: month}
+y: {field: revenue, agg: sum}
+facet: {col: region}
+*/
+
 -- %% chart references from=daily
 /*
 title: Monthly revenue against its average and a target range
@@ -145,15 +154,6 @@ rules:
   - {x: 2026-07-01, label: price change}
 bands:
   - {y: [136000, 141000], label: target}
-*/
-
--- %% chart facets from=daily
-/*
-title: Monthly revenue, one panel per region
-mark: bar
-x: {field: day, timeunit: month}
-y: {field: revenue, agg: sum}
-facet: {col: region}
 */
 
 -- %% chart kpi from=gallery_sales span=4
