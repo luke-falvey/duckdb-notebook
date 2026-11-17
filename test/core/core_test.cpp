@@ -257,6 +257,12 @@ static void TestGraph() {
 	// Markdown and charts may read cells below them.
 	CHECK((md.depends_on == std::vector<int> {2, 5}));
 	CHECK((RunOrder(nb) == std::vector<int> {1, 2, 3, 4, 5, 0}));
+	// B7: main. and temp. qualifiers name the same relation, wherever a cell names one.
+	auto qualified = Analyzed("-- %% monthly\nSELECT 1 AS n;\n-- %% chart from=main.Monthly\n/*\nmark: bar\n*/\n"
+	                          "-- %% input pick select from=temp.monthly.n\nSET VARIABLE pick = 1;\n");
+	CHECK(qualified.cells[1].reads == std::vector<std::string> {"monthly"});
+	CHECK((qualified.cells[1].depends_on == std::vector<int> {0}));
+	CHECK((qualified.cells[2].depends_on == std::vector<int> {0}));
 
 	// The input's own variable and what a cell creates for itself are not reads.
 	auto self = Analyzed("-- %%\nCREATE TABLE t AS SELECT 1; INSERT INTO t SELECT 2;\n");

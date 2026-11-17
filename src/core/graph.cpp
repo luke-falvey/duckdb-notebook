@@ -104,7 +104,7 @@ std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &ex
 		// from=<cell>.<column>: the input reads the cell.
 		std::string relation, column;
 		if (cell.InputFrom(relation, column) && !relation.empty()) {
-			AddUnique(cell.reads, Lower(relation));
+			AddUnique(cell.reads, RelationName(relation));
 		}
 		break;
 	}
@@ -116,7 +116,7 @@ std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &ex
 	case CellKind::CHART: {
 		auto from = cell.Option("from");
 		if (!from.empty()) {
-			AddUnique(cell.reads, Lower(from));
+			AddUnique(cell.reads, RelationName(from));
 		}
 		break;
 	}
@@ -164,6 +164,30 @@ std::vector<std::string> ChartFilters(const std::string &spec) {
 	auto yaml = ParseYaml(spec, error);
 	auto filter = yaml.Get("filter");
 	return filter ? filter->Strings() : std::vector<std::string>();
+}
+
+std::string RelationName(const std::string &dotted) {
+	std::vector<std::string> parts;
+	size_t start = 0;
+	while (true) {
+		auto dot = dotted.find('.', start);
+		parts.push_back(Lower(dotted.substr(start, dot == std::string::npos ? std::string::npos : dot - start)));
+		if (dot == std::string::npos) {
+			break;
+		}
+		start = dot + 1;
+	}
+	if (parts.size() >= 2 && parts[0] == "temp") {
+		parts.erase(parts.begin());
+	}
+	if (parts.size() >= 2 && parts[parts.size() - 2] == "main") {
+		parts.erase(parts.end() - 2);
+	}
+	std::string name;
+	for (auto &part : parts) {
+		name += (name.empty() ? "" : ".") + part;
+	}
+	return name;
 }
 
 void AnalyzeNotebook(Notebook &notebook, const ReferenceExtractor &extract) {

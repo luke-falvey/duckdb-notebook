@@ -32,6 +32,10 @@ using ReferenceExtractor = std::function<References(const std::string &sql)>;
 //! Cells with format errors are still analysed as far as possible.
 void AnalyzeNotebook(Notebook &notebook, const ReferenceExtractor &extract);
 
+//! A relation name as the graph knows it: lower case, without a leading `temp.` or a `main.` schema
+//! (`main.Monthly` and `temp.monthly` are both `monthly`). The same rule as for names DuckDB's parser finds.
+std::string RelationName(const std::string &dotted);
+
 //! The order in which running every cell executes them: file order, except that a
 //! markdown or chart cell waits until the cells it reads have run. Needs AnalyzeNotebook.
 std::vector<int> RunOrder(const Notebook &notebook);
