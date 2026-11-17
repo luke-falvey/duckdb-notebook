@@ -62,7 +62,27 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
   the gear's "timing" switch writes `timing: false` into the `[notebook]` cell.
 - Pointing at a chart shows the values under the pointer (the nearest point on lines).
 
+## Presenting
+
+- In the editor: ⚙ → **Present**. In an HTML export: the faint `present` control at the top right, or
+  open the file with `#present` at the end of its address (`revenue.html#present=3` starts on the third
+  screen). The address keeps the current screen, so a reload or a shared link comes back to it.
+- **→**, **Space**, **Page Down** or a click on the page move on; **←**, **Page Up** go back; **Home**
+  and **End** jump; **F** is full screen; **Esc** (or the faint ✕ by the page number) leaves, landing on
+  the cell that was showing.
+- Inputs, chart brushing, tabs and table paging work as usual and do not move on. In a static export
+  inputs are frozen as always; export with `interactive := 'precomputed'` or `format := 'html-wasm'` for
+  a presentation whose inputs work without the editor.
+- Code is never shown. A notebook that has not run is run first (editor).
+- Each screen is written by the pen when it first arrives; going back to one already shown is instant.
+  Any key or click finishes the writing. `ink=off` (`revenue.html?ink=off#present`) presents without it.
+- Printing leaves presenting: paper and PDF always get the whole notebook.
+- What goes on a screen: sketchbook-design, "Laying out for presenting".
+
 ## Looking at it (agents)
+
+- To check a presentation with Playwright, open `...#present=N` for each screen and screenshot; the page
+  number is `.nb-present-page`, and `Present.count` is the number of screens.
 
 - Check in the **reading view** and in an **HTML export**, which is what readers get.
 - Screenshots from the VS Code browser tools can be one render behind: take a second one before
