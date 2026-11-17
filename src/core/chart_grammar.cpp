@@ -34,12 +34,31 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 		Fail("unknown mark '" + mark + "'");
 		return Json();
 	}
-	// Vega-Lite mark options with no drawing here: refused, so a spec does not quietly look different.
-	for (auto key : {"interpolate", "stack", "cornerRadius"}) {
-		if (layer_spec.Get(key)) {
-			Fail(std::string(key) + ": is not drawn; the sketchbook renderer has no such mark option");
+	// Vega-Lite mark options: what the renderer draws anyway is accepted (bars coloured by a group are
+	// stacked, lines are straight), anything else refused, so a spec does not quietly look different. A
+	// layered chart's top-level option applies to every layer.
+	auto mark_option = [&](const char *key) -> const Yaml * {
+		auto own = layer_spec.Get(key);
+		return own ? own : top.Get(key);
+	};
+	auto value = [](const Yaml *option) {
+		return option->IsScalar() ? Lower(option->scalar) : std::string();
+	};
+	if (auto stack = mark_option("stack")) {
+		if (mark != "bar" || (value(stack) != "true" && value(stack) != "zero")) {
+			Fail("stack: only bars are stacked, and only as stack: true or zero");
 			return Json();
 		}
+	}
+	if (auto interpolate = mark_option("interpolate")) {
+		if (mark != "line" || value(interpolate) != "linear") {
+			Fail("interpolate: only lines are drawn, and only as interpolate: linear");
+			return Json();
+		}
+	}
+	if (mark_option("cornerRadius")) {
+		Fail("cornerRadius: is not drawn; the sketchbook renderer has no such mark option");
+		return Json();
 	}
 	static const char *const CHANNELS[] = {"x",       "y",     "x2",   "y2",    "color", "size",
 	                                       "opacity", "shape", "text", "order", "theta"};

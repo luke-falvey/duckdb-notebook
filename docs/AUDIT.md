@@ -298,7 +298,7 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B10 | low | Export: unknown `format` rejected only after the notebook has run; `data_format`/`interactive` unchecked; `params :=` names unchecked (run checks them); server `hide` unchecked | `export.cpp`, `server.cpp:547` |
 | B11 | low | Markdown export does not apply a prose cell's own `hide=output`; the viewer does | `export.cpp:496-508` |
 | B12 | low | Catalog columns are `draggable` with no `dragstart`; tooltip says click, code uses double-click | `app-extra.js:28-33` |
-| B13 | low | `mark_innerRadius` read by JS but never forwarded; `interpolate`, `stack`, `cornerRadius` forwarded but never drawn | `render-chart.js:469`, `chart.cpp:589` |
+| B13 | low | `mark_innerRadius` read by JS but never forwarded; `interpolate`, `stack`, `cornerRadius` forwarded but never drawn. Fixed: `innerRadius` is forwarded; `stack: true`/`zero` on bars and `interpolate: linear` on lines (what is drawn) are accepted, the rest refused | `render-chart.js:469`, `chart.cpp:589` |
 | B14 | medium | html-wasm viewer re-implements `JsonToSqlLiteral`/`VariableSqlType` partially and formats `{{ }}` differently | `viewer.js:26-34,92-94,166-204` |
 | B15 | low | `display=table\|none` is in the FORMAT §2 option table but nothing reads it. **Change the spec:** drop it; `hide=output` already does this | `docs/FORMAT.md` §2 |
 | B16 | low | FORMAT §3 says an input's file changes only on "save as default", a control that does not exist. **Change the spec:** say moving a widget never changes the file and the default is `default=` | `docs/FORMAT.md:201` |

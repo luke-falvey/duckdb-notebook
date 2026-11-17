@@ -318,7 +318,10 @@ color: category
 
 **Mark options**, beside `mark` in a spec or a layer: `opacity` (a number), `strokeWidth` (lines),
 `point: true` (dots on every point of a line) and `innerRadius` (an `arc` drawn as a donut, in pixels).
-Vega-Lite's `interpolate`, `stack` and `cornerRadius` are not drawn and are an error.
+Of Vega-Lite's options, those that match what is drawn are accepted: `stack: true` or `zero` on bars
+(bars coloured by a group are always stacked) and `interpolate: linear` on lines. Any other `stack` or
+`interpolate`, and `cornerRadius`, are an error. In a `layers:` chart, an option at the top applies to
+every layer.
 
 **Channels**: `x`, `y`, `x2`, `y2`, `theta`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`,
 and `facet` (`{row: …, col: …}`) for small multiples. A channel is a column name or a mapping:

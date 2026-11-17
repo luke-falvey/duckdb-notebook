@@ -441,11 +441,25 @@ static void TestChartErrors() {
 	auto inner = plan.error.empty() ? plan.render.Get("layers")->Items()[0].Get("mark_innerRadius") : nullptr;
 	CHECK(inner && inner->Num() == 40);
 	plan = CompileChart("mark: line\nx: g\ny: n\ninterpolate: step\n", "t", slices);
-	CHECK(plan.error == "interpolate: is not drawn; the sketchbook renderer has no such mark option");
+	CHECK(plan.error == "interpolate: only lines are drawn, and only as interpolate: linear");
 	plan = CompileChart("mark: bar\nx: g\ny: n\nstack: false\n", "t", slices);
-	CHECK(plan.error == "stack: is not drawn; the sketchbook renderer has no such mark option");
+	CHECK(plan.error == "stack: only bars are stacked, and only as stack: true or zero");
 	plan = CompileChart("layers:\n  - {mark: bar, x: g, y: n, cornerRadius: 4}\n", "t", slices);
 	CHECK(plan.error == "cornerRadius: is not drawn; the sketchbook renderer has no such mark option");
+	// What is drawn anyway is accepted: bars coloured by a group are stacked, and lines are straight.
+	for (auto spec : {"mark: bar\nx: g\ny: n\ncolor: g\nstack: true\n", "mark: bar\nx: g\ny: n\nstack: zero\n",
+	                  "mark: line\nx: g\ny: n\ninterpolate: linear\n"}) {
+		CHECK(CompileChart(spec, "t", slices).error.empty());
+	}
+	plan = CompileChart("mark: area\nx: g\ny: n\nstack: true\n", "t", slices);
+	CHECK(plan.error == "stack: only bars are stacked, and only as stack: true or zero");
+	plan = CompileChart("mark: bar\nx: g\ny: n\nstack: normalize\n", "t", slices);
+	CHECK(plan.error == "stack: only bars are stacked, and only as stack: true or zero");
+	plan = CompileChart("mark: area\nx: g\ny: n\ninterpolate: linear\n", "t", slices);
+	CHECK(plan.error == "interpolate: only lines are drawn, and only as interpolate: linear");
+	// A layered chart's top-level option applies to its layers.
+	plan = CompileChart("interpolate: step\nlayers:\n  - {mark: line, x: g, y: n}\n", "t", slices);
+	CHECK(plan.error == "interpolate: only lines are drawn, and only as interpolate: linear");
 	// B30: a map's binned colour is binned once (its step is one CTE, not two).
 	ChartContext columns;
 	columns.columns = {{"g", "GEOMETRY"}, {"n", "BIGINT"}};
