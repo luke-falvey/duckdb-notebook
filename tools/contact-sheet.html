@@ -1,0 +1,85 @@
+<!doctype html>
+<!-- Every glyph the handwriting animation knows, written over and over by the same painter the
+     notebook uses (Ink.paintGlyph in frontend/render-ink.js). For judging stroke order and direction by
+     eye; corrections go in tools/font_strokes_overrides.json. Serve the repository root and open
+     /tools/contact-sheet.html, e.g. python3 -m http.server 8790 --bind 127.0.0.1 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pen strokes: contact sheet</title>
+<style>
+@font-face { font-family: 'Excalifont'; src: url('../frontend/Excalifont.woff2') format('woff2'); }
+@font-face { font-family: 'Cascadia'; src: url('../frontend/CascadiaCode.woff2') format('woff2'); }
+body { margin: 24px; background: #fcfaf5; color: #1e1e1e; font: 14px/1.4 sans-serif; }
+h2 { font-weight: normal; margin: 24px 0 8px; }
+.grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.cell { width: 76px; text-align: center; }
+.cell canvas { display: block; background: #fff; border: 1px solid #e9ecef; }
+.cell span { font-size: 11px; color: #868e96; }
+.cell.wide span { color: #e8590c; }
+label { margin-right: 16px; }
+</style>
+</head>
+<body>
+<p>Each glyph is revealed through a fat copy of its recovered pen strokes, as in the notebook.
+Orange labels: glyphs whose reveal had to be widened to cover them (<code>r</code> in the data).</p>
+<p>
+  <label><input type="checkbox" id="lines"> show the strokes</label>
+  <label><input type="checkbox" id="slow"> slow</label>
+  <label>size <input type="range" id="size" min="24" max="72" value="48"></label>
+</p>
+<div id="sheets"></div>
+<script src="../frontend/ink-strokes.js"></script>
+<script src="../frontend/render-ink.js"></script>
+<script>
+(function () {
+  var cells = [], k = window.devicePixelRatio || 1;
+  var fonts = { Excalifont: "'Excalifont'", Cascadia: "'Cascadia'" };
+  Object.keys(fonts).forEach(function (fam) {
+    var h = document.createElement('h2');
+    h.textContent = fam + ' (' + Object.keys(InkStrokes[fam].glyphs).length + ' glyphs)';
+    document.getElementById('sheets').appendChild(h);
+    var grid = document.createElement('div');
+    grid.className = 'grid';
+    document.getElementById('sheets').appendChild(grid);
+    Object.keys(InkStrokes[fam].glyphs).sort().forEach(function (ch, i) {
+      var box = document.createElement('div'), c = document.createElement('canvas'), label = document.createElement('span');
+      box.className = 'cell' + (InkStrokes[fam].glyphs[ch].r ? ' wide' : '');
+      c.width = 76 * k; c.height = 76 * k; c.style.width = c.style.height = '76px';
+      label.textContent = ch + ' U+' + ch.codePointAt(0).toString(16).toUpperCase();
+      box.appendChild(c); box.appendChild(label); grid.appendChild(box);
+      cells.push({ fam: fam, ch: ch, ctx: c.getContext('2d'), g: Ink.glyph(fam, ch), phase: (i % 12) * 90 });
+    });
+  });
+  function draw(t) {
+    var size = +document.getElementById('size').value, lines = document.getElementById('lines').checked;
+    var period = document.getElementById('slow').checked ? 4000 : 1600;
+    cells.forEach(function (c) {
+      var p = Math.min(1, ((t + c.phase) % period) / (period * 0.75));
+      var u = { size: size, font: '400 ' + size + 'px ' + fonts[c.fam], color: '#1e1e1e', alpha: 1 };
+      var x = (76 - size * 0.6) / 2, base = 76 * 0.7;
+      c.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      c.ctx.clearRect(0, 0, c.ctx.canvas.width, c.ctx.canvas.height);
+      Ink.paintGlyph(c.ctx, c.g, c.ch, [1, 0, 0, 1, x, base], u, p, k);
+      if (lines) {
+        c.ctx.setTransform(k, 0, 0, k, x * k, base * k);
+        c.ctx.strokeStyle = 'rgba(224, 49, 49, .8)';
+        c.ctx.font = '9px sans-serif';
+        c.ctx.__inkFont = c.ctx.__inkColor = null;
+        c.ctx.lineWidth = 1;
+        c.g.s.forEach(function (s, n) {
+          c.ctx.beginPath();
+          for (var i = 0; i < s.length; i += 2) c.ctx[i ? 'lineTo' : 'moveTo'](s[i] * size / 1000, s[i + 1] * size / 1000);
+          c.ctx.stroke();
+          c.ctx.fillStyle = 'rgba(224, 49, 49, .9)';
+          c.ctx.fillText(String(n), s[0] * size / 1000 - 6, s[1] * size / 1000 - 2);
+        });
+      }
+    });
+    requestAnimationFrame(draw);
+  }
+  document.fonts.load('48px Excalifont').then(function () { return document.fonts.load('48px Cascadia'); }).then(function () { requestAnimationFrame(draw); });
+})();
+</script>
+</body>
+</html>

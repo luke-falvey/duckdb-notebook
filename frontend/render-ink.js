@@ -162,7 +162,16 @@ var Ink = (function () {
       if (job.state === 'running') step(job, t);
     });
     drain();
-    stats.frames.push([ts, now() - t0, jobs.filter(function (j) { return j.state === 'running'; }).length]);
+    var spent = now() - t0;
+    stats.frames.push([ts, spent, jobs.filter(function (j) { return j.state === 'running'; }).length]);
+    if (spent > 30) {
+      stats.slow = stats.slow || [];
+      if (stats.slow.length > 50) stats.slow.shift();
+      var snap = {};
+      for (var k in stats.ms) snap[k] = Math.round(stats.ms[k] - ((stats.last || {})[k] || 0));
+      stats.slow.push([Math.round(spent), JSON.stringify(snap)]);
+    }
+    stats.last = Object.assign({}, stats.ms);
     if (stats.frames.length > 4000) stats.frames.splice(0, 2000);
     if (jobs.some(function (j) { return j.state === 'running'; }) || pending.length) schedule();
   }
@@ -171,9 +180,13 @@ var Ink = (function () {
   function attach(job, el) {
     if (job.el) teardown(job);
     job.el = el;
+    var t0 = now();
     try {
       collect(job);
+      prof('collect', t0);
+      var t1 = now();
       hide(job);
+      prof('hide', t1);
     } catch (e) {
       if (window.console) console.warn('ink:', e);
       finish(job);
@@ -282,14 +295,15 @@ var Ink = (function () {
   // Too much in motion at once is slow to paint: write tables row by row, then everything as
   // sweeps; fade hatching instead of drawing it.
   function degrade(job) {
-    var levels = job.quick ? [2] : [0, 1, 2];
-    for (var i = 0; i < levels.length; i++) {
-      if (job.level !== levels[i]) { job.level = levels[i]; attach(job, job.el); if (job.state === 'done') return; }
+    var level = job.quick ? 2 : 0;
+    for (;;) {
+      if (job.level !== level) { job.level = level; attach(job, job.el); if (job.state === 'done') return; }
       timeline(job);
       var peak = concurrency(job);
-      job.peak = peak;
       (job.peaks = job.peaks || []).push(peak.glyph + '/' + peak.path);
-      if (peak.glyph <= C.capGlyphs && peak.path <= C.capPaths) return;
+      if (level >= 2 || (peak.glyph <= C.capGlyphs && peak.path <= C.capPaths)) return;
+      // Far too much writing at once: straight to sweeps rather than one level at a time.
+      level = peak.glyph > 2.5 * C.capGlyphs ? 2 : level + 1;
     }
   }
 
@@ -448,12 +462,24 @@ var Ink = (function () {
     }
     var SKIP = { clippath: 1, defs: 1, mask: 1, marker: 1, pattern: 1, lineargradient: 1, radialgradient: 1, title: 1, desc: 1, style: 1, filter: 1, symbol: 1 };
     function walkGroup(g) {
-      var fills = [], plain = 0;
-      for (var n = g.firstElementChild; n; n = n.nextElementSibling) if (isPlain(n)) plain++;
-      // Hundreds of plain marks fade in together.
-      if (plain > C.plainGroup && g.tagName.toLowerCase() !== 'svg') { add({ type: 'fade', el: g, to: 1, w: 60 }); return; }
+      var fills = [];
       for (var c = g.firstElementChild; c; c = c.nextElementSibling) {
         var tag = c.tagName.toLowerCase();
+        // Hundreds of plain marks in a row fade in together, gathered into one group while they do.
+        if (isPlain(c)) {
+          var run = [c];
+          for (var r = c.nextElementSibling; r && isPlain(r); r = r.nextElementSibling) run.push(r);
+          if (run.length > C.plainGroup) {
+            // Most of a group: the group fades, one element. Otherwise the run appears in chunks.
+            if (run.length >= 0.8 * g.childElementCount) { add({ type: 'fade', el: g, to: 1, w: 60, group: true }); fills = []; break; }
+            for (var k = 0; k < 8; k++) {
+              var chunk = run.slice(Math.floor(k * run.length / 8), Math.floor((k + 1) * run.length / 8));
+              if (chunk.length) add({ type: 'appear', nodes: chunk, w: 10 });
+            }
+            c = run[run.length - 1];
+            continue;
+          }
+        }
         if (SKIP[tag] || c.classList.contains('sk-hit')) continue;
         if (c.getAttribute('display') === 'none') continue;
         if (tag === 'g' && c.hasAttribute('clip-path')) { fills.push(c); continue; }
@@ -651,10 +677,12 @@ var Ink = (function () {
 
   function hide(job) {
     job.splits.forEach(function (s) { if (s.orig.parentNode) s.orig.parentNode.replaceChild(s.group, s.orig); });
+
     job.atoms.forEach(function (a) {
       if (a.type === 'path') { save(job, a.el); a.el.style.visibility = 'hidden'; }
       else if (a.type === 'fade') { save(job, a.el); a.el.style.opacity = '0'; }
       else if (a.type === 'pseudo') { save(job, a.el); a.el.style.setProperty('--ink-wipe', '0%'); }
+      else if (a.type === 'appear') a.nodes.forEach(function (n) { save(job, n); n.style.opacity = '0'; });
     });
     if (job.textRoot && !(job.el instanceof SVGElement)) { save(job, job.el); job.el.classList.add('ink-hide'); }
     job.svgTexts.forEach(function (t) { save(job, t); t.style.opacity = '0'; });
@@ -666,6 +694,7 @@ var Ink = (function () {
       if (job.layers) job.layers.forEach(function (c) { if (c.parentNode) c.parentNode.removeChild(c); });
       job.layers = null;
       if (job.splits) job.splits.forEach(function (s) { if (s.group.parentNode) s.group.parentNode.replaceChild(s.orig, s.group); });
+
       if (job.saved) job.saved.forEach(function (_, el) { restore(job, el); });
     } finally {
       job.splits = [];
@@ -705,10 +734,11 @@ var Ink = (function () {
           job.splits.splice(job.splits.indexOf(a.split), 1);
         }
       } else restore(job, a.el);
+    } else if (a.type === 'appear') {
+      a.nodes.forEach(function (n) { restore(job, n); });
     } else if (a.type === 'fade' || a.type === 'pseudo') {
-      // A background fades in under text that is still being written: keep the text hidden.
       restore(job, a.el);
-      if (a.el === job.el && job.textRoot) job.el.classList.add('ink-hide');
+
     } else if (a.text) {
       a.p = 1;
       drawDone(job, a);
