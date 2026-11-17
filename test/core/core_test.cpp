@@ -524,6 +524,12 @@ static void TestCellOptions() {
 	CHECK(shown.cells[0].errors.empty() && shown.cells[1].errors.empty() && shown.cells[2].errors.empty());
 	CHECK(shown.cells[1].Option("screen") == "join");
 	CHECK(shown.cells[3].errors.size() == 1 && shown.cells[3].errors[0].find("screen=next") != std::string::npos);
+	// from=<relation>.<column> splits at the last dot.
+	auto inputs =
+	    ParseNotebook("-- %% input r widget=select from=main.orders.region\n'EU'\n-- %% input s widget=text\n''\n");
+	std::string relation, column;
+	CHECK(inputs.cells[0].InputFrom(relation, column) && relation == "main.orders" && column == "region");
+	CHECK(!inputs.cells[1].InputFrom(relation, column));
 }
 
 static void TestQueryCharts() {

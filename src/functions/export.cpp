@@ -148,13 +148,12 @@ vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, i
 		}
 		return values;
 	}
-	auto from = cell.Option("from");
-	auto dot = from.rfind('.');
-	if (dot == string::npos) {
+	string relation, name;
+	if (!cell.InputFrom(relation, name)) {
 		return values;
 	}
-	auto column = notebook::QuoteIdentifier(from.substr(dot + 1));
-	return QueryValues(connection, "SELECT DISTINCT " + column + " FROM " + notebook::RelationSql(from.substr(0, dot)) +
+	auto column = notebook::QuoteIdentifier(name);
+	return QueryValues(connection, "SELECT DISTINCT " + column + " FROM " + notebook::RelationSql(relation) +
 	                                   " WHERE " + column + " IS NOT NULL ORDER BY 1 LIMIT " + std::to_string(limit));
 }
 

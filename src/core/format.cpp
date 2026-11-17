@@ -301,6 +301,17 @@ std::string Cell::Option(const std::string &key, const std::string &fallback) co
 	return fallback;
 }
 
+bool Cell::InputFrom(std::string &relation, std::string &column) const {
+	auto from = Option("from");
+	auto dot = from.rfind('.');
+	if (dot == std::string::npos) {
+		return false;
+	}
+	relation = from.substr(0, dot);
+	column = from.substr(dot + 1);
+	return true;
+}
+
 bool Notebook::HasErrors() const {
 	for (auto &cell : cells) {
 		if (!cell.errors.empty()) {

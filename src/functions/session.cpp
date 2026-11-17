@@ -528,10 +528,9 @@ string VariableSqlType(Connection &connection, const notebook::Notebook &noteboo
 		if (w == "date" || w == "daterange") {
 			return "DATE";
 		}
-		auto from = cell.Option("from");
-		auto dot = from.rfind('.');
-		if (dot != string::npos) {
-			auto type = ColumnType(connection, notebook::RelationSql(from.substr(0, dot)), from.substr(dot + 1));
+		string relation, column;
+		if (cell.InputFrom(relation, column)) {
+			auto type = ColumnType(connection, notebook::RelationSql(relation), column);
 			return type.empty() ? type : (w == "multiselect" ? type + "[]" : type);
 		}
 		return string();

@@ -102,10 +102,9 @@ std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &ex
 		}
 		analyse(cell.body, "this input's default");
 		// from=<cell>.<column>: the input reads the cell.
-		auto from = cell.Option("from");
-		auto dot = from.rfind('.');
-		if (dot != std::string::npos && dot > 0) {
-			AddUnique(cell.reads, Lower(from.substr(0, dot)));
+		std::string relation, column;
+		if (cell.InputFrom(relation, column) && !relation.empty()) {
+			AddUnique(cell.reads, Lower(relation));
 		}
 		break;
 	}
