@@ -31,7 +31,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	auto result = make_uniq<CellsBindData>();
 	result->notebook = ReadNotebook(context, input.inputs[0].GetValue<string>());
 
-	// Keep this list in step with the README and with Scan below.
+	// Keep this list in step with Scan below and with the notebook_cells row of DESIGN §4.
 	auto column = [&](const char *name, LogicalType type) {
 		names.emplace_back(name);
 		return_types.push_back(std::move(type));

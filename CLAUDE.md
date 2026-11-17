@@ -27,7 +27,8 @@ defines and reads, and `src/core/graph.cpp` does everything else (resolution, or
 run order). `ReadNotebook` runs both, so every function sees an analysed notebook.
 
 Running cells goes through one place, `Runner` in `src/functions/session.cpp`, used by `notebook_run`,
-the exports and the server. The chart compiler is `src/core/chart.cpp`; the browser draws its output
+the exports and the server: `Runner::Prepare` before the first cell, `Runner::RunAll` for every cell,
+`RunForEditor` for one cell with the result the editor is sent. The chart compiler is `src/core/chart.cpp`; the browser draws its output
 with `frontend/render-*.js`, all of it hand-drawn through the primitives in
 `frontend/render-sketch.js` (the "sketchbook" look, DESIGN §6 Themes).
 
@@ -58,7 +59,8 @@ tools/            Development tools whose output is checked in (pen strokes for 
 frontend/          The browser UI, export viewer, chart renderers and fonts: plain JS, CSS and woff2, no build
                    step. CMake compiles every file here into the extension (GetAsset).
 wasm/              The DuckDB-WASM runtime for html-wasm exports, built separately with Node.
-src/include/       Headers: notebook/*.hpp for core, notebook/functions.hpp for the SQL surface.
+src/include/       Headers: notebook/*.hpp for core; functions.hpp, session.hpp and result_cache.hpp (which
+                   include DuckDB) for the SQL surface.
 test/core/         Unit tests for src/core. No DuckDB needed.
 test/sql/          sqllogictest files: end-to-end tests through SQL.
 test/browser/      Playwright tests of the server, UI and exports in Chromium.
@@ -145,6 +147,10 @@ SQL text) goes there, takes strings in and returns plain structs, and gets a uni
 `test/core/core_test.cpp`. This keeps the fast test loop useful and the code portable. `src/functions`
 should stay thin: read the file, call core, shape the result.
 
+Small string helpers (`Trim`, `Lower`, `Contains`, `AddUnique`, `ReplaceAll`) are in
+`notebook/text.hpp`; use them rather than writing another. What an export makes as text (the Markdown
+document, the title) is in `src/core/document.cpp`.
+
 **Format errors are data, not exceptions.** `ParseNotebook` never throws. Problems are attached to the
 cell in `Cell::errors` so a UI can show all of them. Functions that cannot proceed on an invalid
 notebook call `ThrowIfInvalid`, which reports the first error and points at `notebook_cells`.
@@ -152,7 +158,8 @@ notebook call `ThrowIfInvalid`, which reports the first error and points at `not
 **Adding a SQL function.** Declare `RegisterX` in `src/include/notebook/functions.hpp`, implement it in
 `src/functions/x.cpp` as a table function (bind reads and parses, scan emits rows), add the file to
 `CMakeLists.txt`, call it from `src/notebook_extension.cpp`, and add `test/sql/x.test`. Copy
-`notebook_sql.cpp` as the smallest example.
+`notebook_sql.cpp` as the smallest example. A function that returns its rows in one call uses `OnceState`
+and `OnceInit`, and reads named parameters with `NamedString`/`NamedBool` (`common.cpp`).
 
 **The frontend has no build step.** Plain browser JavaScript (no modules, no npm), so the extension
 build needs nothing but CMake. Draw lines, boxes and fills with `Sketch` (`render-sketch.js`), not
@@ -160,7 +167,10 @@ raw SVG, so everything keeps the hand-drawn look; seed it (`Sketch.reseed`) so a
 Use `currentColor` for ink in SVG: attributes do not resolve CSS variables. Fonts in `frontend/` are
 SIL OFL; their licence is in `third_party/fonts/LICENSE.md`.
 Shared rendering lives in `frontend/render-*.js` and is used by both
-the editor (`app.js`, `app-extra.js`) and exports (`viewer.js`). Results travel as JSON.
+the editor (`app.js`, `app-extra.js`) and exports (`viewer.js`). Results travel as JSON. What both
+show of a cell is in `render-core.js` (`NB.inputWidget`, `NB.queryTabItems`, `NB.hides`, `NB.span`,
+`NB.kindName`): change it there, not in `app.js` or `viewer.js` alone. `app-extra.js` always loads with
+the editor; it is a split for size, not an optional part.
 
 **Every new piece of the page is handed to the pen.** After building a piece, the editor and the viewer
 call `Ink.present(element, key, signature)`; see `write()` in `app.js` and `viewer.js`. Give it a key
@@ -199,6 +209,8 @@ create, because all test files share one database.
   ends identical to `ink=off`. Its times are on the pen clock (`Ink.penNow()`), which `Ink.advance(ms)`
   moves at the reader's speed; `test_ink_watch` shows how to drive it. A piece is taken apart only when
   the pen reaches it, so a component that changes size or content while waiting needs nothing special.
+- Browser tests start a server with `serve()` and stop it with `stop()` (`test/browser/test_browser.py`),
+  which make sure no DuckDB shell is left running when a check fails.
 - Browser tests check the finished page and load every page with `ink=off` (`still()` in
   `test/browser/test_browser.py`). To test the animation itself, stop its clock (`window.__INK_PAUSE`
   in an init script, then `Ink.advance(ms)`); `test_ink` shows how. After changing the fonts, run

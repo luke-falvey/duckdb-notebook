@@ -263,7 +263,7 @@ should run. New checks, in Chromium through Playwright:
 8. **Switches.** Reduced motion, `ink=off`, and print each produce a complete page with no jobs.
 9. **PDF and Markdown exports** are unchanged.
 
-Add `frontend/render-ink.js` and `ink-strokes.js` to `make frontend_check`.
+`make frontend_check` checks every `frontend/*.js`, these two included.
 
 ## Order of work
 
@@ -396,8 +396,8 @@ In the editor, opening `revenue.sql` settles in 2.2 s and a Run all in 1.7 s.
 **Not done, or not verified.**
 - Only Chromium was available. Safari's `stroke-dashoffset` repaint cost, Firefox's canvas text
   rendering, and `-webkit-text-fill-color` with `::marker` outside Chromium are unverified.
-- The graph view, the catalog sidebar, the chart picker and the gear menu are tools rather than parts of
-  the notebook, and appear as before.
+- The graph view, the catalog sidebar and the gear menu are tools rather than parts of the notebook, and
+  appear as before. (The chart picker sits inside a cell's output, so the pen writes it with the rest.)
 - The few pixels by which a moving glyph's mask can reveal a moving neighbour (above).
 - Taking a very large chart apart still costs one long frame when it scrolls into view.
 

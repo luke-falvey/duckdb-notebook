@@ -21,26 +21,31 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 
 | # | Finding | Class | Risk | Size | Status |
 |---|---|---|---|---|---|
-| R1 | "Prepare a session and run every cell" written six times | Safe | low | −80 | todo |
-| R2 | Per-cell result JSON built twice (server, export) | Safe | low | −40 | todo |
-| C1 | Core string helpers copied across files | Safe | low | −45 | todo |
-| F1 | Input widget written twice (editor, viewer) | Safe | low | −35 | todo |
-| R3 | Table-function boilerplate (once-state, columns, named params) | Safe | low | −60 | todo |
-| R4 | Server handler boilerplate (session lookup, runner, notebook) | Safe | low-med | −80 | todo |
-| C2 | `from=<rel>.<col>` parsed three times | Safe | low | −10 | todo |
-| R5 | `DESCRIBE` into columns written three times | Safe | low | −25 | todo |
-| F2 | Query tabs, hide rules, span/seed, kind label re-derived in editor and viewer | Safe | low | −30 | todo |
-| F3 | `app-extra.js` guarded as optional although it always loads | Safe | low | −10 | todo |
-| F4 | Repeated "edited, re-analyse later" sequence in `app.js` | Safe | low | −12 | todo |
-| D1 | Dead code (C++ and JS) | Safe | low | −60 | todo |
-| C3 | Pure logic in `src/functions` that belongs in `src/core` | Safe | low | ~300 moved | todo |
-| C4 | Chart YAML parsed repeatedly; selection map rebuilt per chart | Safe | low | small | todo |
-| T1 | Browser test start/stop repeated, shells leak on failure | Safe | low | −40 | todo |
-| C5 | `chart.cpp` does too much (1016 lines) | Safe | med | ±0 | todo |
-| C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | todo |
+| R1 | "Prepare a session and run every cell" written six times | Safe | low | −80 | done: `Runner::Prepare` and `Runner::RunAll`; callers that handle each outcome keep their loops; the extra html-wasm and precomputed runs stay (behaviour) |
+| R2 | Per-cell result JSON built twice (server, export) | Safe | low | −40 | done in part: `RunForEditor` moved to `session.cpp`, one `RanFromResult`; the export keeps its own JSON (it reads inputs after the whole run and orders keys differently, so sharing would change exported files) |
+| C1 | Core string helpers copied across files | Safe | low | −45 | done: `notebook/text.hpp` |
+| F1 | Input widget written twice (editor, viewer) | Safe | low | −35 | done: `NB.inputWidget`; its `exported` flag keeps two pages' differences, logged as B31 |
+| R3 | Table-function boilerplate (once-state, columns, named params) | Safe | low | −60 | done: `OnceState`/`OnceInit`, `NamedString`/`NamedBool` in `common.cpp`. Not done: the loop-and-compare parameter readers (their NULL handling differs) and the `column` lambdas (no gain) |
+| R4 | Server handler boilerplate (session lookup, runner, notebook) | Safe | low-med | −80 | done in part: `Source(req, body)`. Deferred: `WithRunner` and moving `/api/run`'s loop, which re-indent every handler lambda for little gain after R1 and R2 |
+| C2 | `from=<rel>.<col>` parsed three times | Safe | low | −10 | done: `Cell::InputFrom`, with a test |
+| R5 | `DESCRIBE` into columns written three times | Safe | low | −25 | done: `DescribeColumns` |
+| F2 | Query tabs, hide rules, span/seed, kind label re-derived in editor and viewer | Safe | low | −30 | done: `NB.queryTabItems`, `NB.hides`, `NB.span`, `NB.kindName`. The Markdown export's hide rule is B11 |
+| F3 | `app-extra.js` guarded as optional although it always loads | Safe | low | −10 | done |
+| F4 | Repeated "edited, re-analyse later" sequence in `app.js` | Safe | low | −12 | done: `unsaved(ms)` |
+| D1 | Dead code (C++ and JS) | Safe | low | −60 | done, except `Json::Raw` and `Runner::Save`, which the features started using (see the correction below); a map's double `color` is B30 |
+| C3 | Pure logic in `src/functions` that belongs in `src/core` | Safe | low | ~300 moved | done in part: Markdown export and title (`document.cpp`), `ReplaySql` and `DisplaySql` (`script.cpp`), all with tests. Deferred: `VariableSqlType`'s type building, the `{{ }}` splice, the ATTACH SQL and the precomputed input space, which each need a callback threaded through for a few lines |
+| C4 | Chart YAML parsed repeatedly; selection map rebuilt per chart | Safe | low | small | done: one parse in `CompileChart`, `NotebookSelections` (tested). Still built once per chart: caching it would tie a Runner to one notebook |
+| T1 | Browser test start/stop repeated, shells leak on failure | Safe | low | −40 | done: `serve()`/`stop()`, same 280 checks |
+| C5 | `chart.cpp` does too much (now ~1370 lines) | Safe | med | ±0 | todo |
+| C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | deferred: one `NotebookMeta` touches the parser, the runner, the cache, the title and a regular expression in `app.js`; more than a structural change should, so left for its own PR |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
 | B1–B31 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
-| DOC1–DOC8 | Docs that disagree with the code | Docs | none | small | todo |
+| DOC1–DOC11 | Docs that disagree with the code | Docs | none | small | done, except DOC1 (`display=`), which is B15 |
+| N1 | Chart rules, bands and notes repeat their checks | Safe | low | −30 | with C5 |
+| N2 | Editor result handling repeated | Safe | low | −20 | done: `show()`, `dropKept()` |
+| N3 | Smaller server and cache items | Safe | low | small | rejected: `ParseOneQuery` would narrow what peek's `try` covers; the Value-to-text pair in `result_cache.cpp` is two short lines; moving `cache.Record` out of `NotebookJson` changes when the store is written |
+| T2 | Small test findings | Safe | low | small | done: `revenue.expanded.sql` regenerated (one line had drifted) and tested; the authoring template runs in `notebook_run.test`. The duplicate `CHECK` is gone since the feature merges |
+| F5 | Ink keys depend on child position | Fix | low | small | deferred: changes animation timing |
 
 \* Safe only if the single rule chosen is the one the current callers agree on; edge cases are listed.
 
