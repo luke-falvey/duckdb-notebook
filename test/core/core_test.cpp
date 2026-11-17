@@ -454,8 +454,10 @@ static void TestChartErrors() {
 	auto first = sql.find("__bin_color AS");
 	CHECK(plan.error.empty() && first != std::string::npos &&
 	      sql.find("__bin_color AS", first + 1) == std::string::npos);
-	// B32: every chart query orders all its rows, so the data a chart (or an export) gets is the same
-	// on every run, however DuckDB's parallel aggregate happens to return it.
+	// B32: a grouped or ordered chart query orders all its rows, so the data a chart (or an export) gets is
+	// the same on every run, however DuckDB's parallel aggregate happens to return it. An ungrouped query
+	// with no order of its own keeps its source's order. This is the exact guard; the SQL test that exports
+	// a gallery three times can only catch a difference when one happens.
 	ChartContext sales;
 	sales.columns = {{"region", "VARCHAR"}, {"category", "VARCHAR"}, {"amount", "DOUBLE"}};
 	auto ends_ordered = [](const std::string &sql, const std::string &order) {
@@ -468,8 +470,19 @@ static void TestChartErrors() {
 	};
 	plan = CompileChart("mark: bar\nx: region\ny: {field: amount, agg: sum}\ncolor: category\n", "t", sales);
 	CHECK(plan.error.empty() && ends_ordered(plan.queries.at(0), "x, color, 1, 2, 3"));
+	// A horizontal bar without sort: keeps its categories in order, not sorted by value.
 	plan = CompileChart("mark: bar\nx: {field: amount, agg: sum}\ny: region\n", "t", sales);
-	CHECK(plan.error.empty() && ends_ordered(plan.queries.at(0), "1, 2"));
+	CHECK(plan.error.empty() && ends_ordered(plan.queries.at(0), "y, 1, 2"));
+	// A table, a raw spec or ungrouped arc slices read their source in its own order: an ORDER BY there would
+	// change which rows the LIMIT keeps (the top 3 of an ORDER BY revenue DESC source).
+	for (auto spec :
+	     {"type: table\nlimit: 3\n", "type: vega-lite\nspec: {mark: bar}\n", "mark: arc\ntheta: amount\n"}) {
+		plan = CompileChart(spec, "(SELECT * FROM sales ORDER BY amount DESC)", sales);
+		CHECK(plan.error.empty() && plan.queries.at(0).find("ORDER BY 1") == std::string::npos);
+	}
+	plan = CompileChart("type: table\nlimit: 3\n", "t", sales);
+	CHECK(plan.queries.at(0).find("\nORDER BY") == std::string::npos &&
+	      plan.queries.at(0).find("\nLIMIT 3") != std::string::npos);
 }
 
 static void TestChartReferences() {

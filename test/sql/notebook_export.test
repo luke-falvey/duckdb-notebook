@@ -139,7 +139,9 @@ DROP TABLE nb_test_numbers
 statement ok
 DROP TABLE orders
 
-# Exports are the same on every run: chart queries order every row, and the example's data is exact
+# Exports are the same on every run: grouped and sorted chart queries have a total order, and the example's
+# data is exact (B32). This is probabilistic: three runs can agree by chance. The exact guard is the core
+# test of the ORDER BY each query gets (TestChartErrors).
 statement ok
 FROM notebook_export('examples/charts.sql', file := '{TEST_DIR}/det1.md', format := 'md')
 

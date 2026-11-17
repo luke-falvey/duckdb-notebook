@@ -270,11 +270,15 @@ std::string Compiler::Query(const std::vector<std::string> &items, bool group, c
 	if (group) {
 		sql += "\nGROUP BY ALL";
 	}
-	// A query a chart draws (it has an order or a limit; one inside a CTE has neither) orders every column by
-	// position after its own order: a total order, so the rows, and which of them survive the LIMIT, are the
-	// same on every run, whatever order a parallel aggregate produced them in.
-	if (!order.empty() || !limit.empty()) {
-		sql += "\nORDER BY " + (order.empty() ? "" : order + ", ") + Positions(items.size());
+	// Rows a chart draws come in a total order, so they, and which of them survive the LIMIT, are the same on
+	// every run: an explicit order is completed by every column's position, and a grouped query (whose rows a
+	// parallel aggregate returns in any order) is ordered by them. An ungrouped query with no order keeps its
+	// source's order, which DuckDB preserves through a scan and a LIMIT; one inside a CTE (no limit) is left
+	// alone.
+	if (!order.empty()) {
+		sql += "\nORDER BY " + order + ", " + Positions(items.size());
+	} else if (group && !limit.empty()) {
+		sql += "\nORDER BY " + Positions(items.size());
 	}
 	if (!limit.empty()) {
 		sql += "\nLIMIT " + limit;

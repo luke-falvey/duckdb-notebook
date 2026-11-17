@@ -212,8 +212,13 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 			order += (order.empty() ? "" : ", ") + o;
 		}
 	}
-	if (order.empty() && x.present && !x.constant && x.agg.empty()) {
-		order = "x";
+	// Unsorted marks follow their category or continuous axis: x, or y when only x is aggregated (horizontal
+	// bars), so the total order Query adds after it never sorts an axis by value.
+	auto axis = x.present && !x.constant && x.agg.empty()                     ? "x"
+	            : y.present && !y.constant && y.agg.empty() && !x.agg.empty() ? "y"
+	                                                                          : "";
+	if (order.empty() && *axis) {
+		order = axis;
 		if (channel("color").present && !channel("color").constant && channel("color").agg.empty()) {
 			order += ", color";
 		}
