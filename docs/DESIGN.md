@@ -1127,7 +1127,8 @@ around `LOAD` as well, or should use the base bundle.
 
 `test/wasm/run.cjs` loads the build into DuckDB-WASM in headless Chromium and runs the functions on
 `examples/revenue.sql`. CI runs it on the artifacts of the extension pipeline, which itself does not
-test wasm builds. The extension is 1.0 MB, or 360 KB gzip-compressed. It loads in about 0.1 to 0.2
+test wasm builds. The extension is 1.2 MB, or 400 KB gzip-compressed (CI's "Extension sizes" job; against 31 to 48 MB
+for the native builds, which link DuckDB in). It loads in about 0.1 to 0.2
 seconds once DuckDB-WASM has started (about 1.6 seconds).
 
 ### What it means for the html-wasm export
@@ -1142,7 +1143,7 @@ Nothing in the export changed yet. Two separate steps are open:
      variable returns NULL);
    - writing data with `STORAGE_VERSION 'v1.5.0'` (follows from the engine reading its own default
      storage version; not tested in the browser).
-2. **Inline the extension** (about 360 KB compressed, against 12 MB for DuckDB-WASM) and `LOAD` it
+2. **Inline the extension** (about 400 KB compressed, against 12 MB for DuckDB-WASM) and `LOAD` it
    through the same worker shim that serves the module from memory under `file://`. The page could
    then compile chart specs and run notebooks the way the server does, instead of replaying SQL that
    was compiled in advance. That makes an exported page editable: change a spec or a cell and see

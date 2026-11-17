@@ -342,6 +342,6 @@ create, because all test files share one database.
 
 Develop on a feature branch and open a pull request against `main`. CI runs the core tests and
 DuckDB's extension pipeline on every native platform: Linux amd64 and arm64 (glibc and musl), macOS
-amd64 and arm64, Windows amd64 and arm64 (MSVC) and amd64 with MinGW. The WebAssembly builds are in
-`exclude_archs` for now. The pipeline runs `test/sql` on most of them (not linux_arm64 or osx_amd64), so
+amd64 and arm64, Windows amd64 and arm64 (MSVC) and amd64 with MinGW, and the three WebAssembly
+targets, whose `wasm_eh` and `wasm_threads` builds the `wasm-test` job loads into DuckDB-WASM. The pipeline runs `test/sql` on most of them (not linux_arm64 or osx_amd64), so
 a test must pass on Windows too. A job takes about 5 to 15 minutes because DuckDB comes prebuilt.
