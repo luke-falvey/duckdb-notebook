@@ -700,6 +700,108 @@ def test_ink_editor(browser, work):
         shell.communicate(timeout=30)
 
 
+def test_chart_marks(browser, work):
+    """Rules and bands on charts (FORMAT 5.1), in an export of test/notebooks/references.sql."""
+    db = os.path.join(work, "marks.duckdb")
+    out = os.path.join(work, "references.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'test', 'notebooks', 'references.sql')}', file := '{out}')")
+    page = browser.new_page(viewport={"width": 1300, "height": 950})
+    errors = watch(page)
+    page.goto(still("file://" + out))
+    page.wait_for_function("window.__NB_READY === true")
+    chart = page.locator(".nb-cell[data-idx='1']")
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(chart.locator(".nb-ref-rule").count() == 6 and chart.locator(".nb-ref-band").count() == 2,
+          "a chart draws its rules and bands")
+    check("average 49.5" in labels and "24.75 to 74.25" in labels and "budget 100" in labels,
+          f"aggregates are computed by DuckDB and written into the labels ({labels})")
+    order = chart.locator("svg.nb-chart-svg > g").evaluate(
+        "g => Array.from(g.children).map(e => e.getAttribute('class')).filter(c => /nb-refs|nb-plot|nb-ref-labels/.test(c || ''))")
+    check(order == ["nb-refs", "nb-plot", "nb-ref-labels"], f"rules and bands are drawn behind the marks, their labels over them ({order})")
+    muted = chart.locator(".nb-ref-rule path").first.evaluate("e => getComputedStyle(e).stroke")
+    red = chart.locator(".nb-ref-rule").nth(5).locator("path").first.evaluate("e => getComputedStyle(e).stroke")
+    check(muted == "rgb(134, 142, 150)" and red == "rgb(224, 49, 49)", f"they are in muted ink unless given a colour ({muted}, {red})")
+    # y: 120 is above every point (n < 100): the axis grows to show it.
+    clear = chart.evaluate("""(cell) => {
+      const line = cell.querySelector('.nb-plot .nb-line'), n = line.getTotalLength(), m = line.getScreenCTM(), pts = [];
+      for (let i = 0; i <= 800; i++) { const p = line.getPointAtLength(n * i / 800).matrixTransform(m); pts.push([p.x, p.y]); }
+      return Array.from(cell.querySelectorAll('.nb-ref-labels text')).filter(t => {
+        const b = t.getBoundingClientRect();
+        return pts.some(p => p[0] > b.left && p[0] < b.right && p[1] > b.top && p[1] < b.bottom);
+      }).map(t => t.textContent);
+    }""")
+    check(clear == [], f"rule and band labels are placed clear of the line ({clear})")
+    target = chart.locator(".nb-ref-rule[data-ref='Target'] path").first.bounding_box()
+    frame, line = chart.locator("svg.nb-chart-svg").bounding_box(), chart.locator(".nb-plot .nb-line").bounding_box()
+    check(target is not None and frame["y"] <= target["y"] < line["y"], "the axis grows to include a rule outside the data")
+    chart.locator(".nb-tab", has_text="Bars by group").click()
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(labels == ["Target", "average 2,475"], f"a rule's label uses the axis's format ({labels})")
+    check(chart.locator(".nb-ref-rule").count() == 2, "a rule on a category axis runs through its category")
+
+    # Notes (FORMAT 5.1): handwriting attached to data positions, drawn after the marks.
+    boxes = """(cell) => {
+      const box = e => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; };
+      return { texts: Array.from(cell.querySelectorAll('.nb-note')).map(n => Array.from(n.querySelectorAll('text')).map(t => ({ text: t.textContent, box: box(t) }))),
+               bars: Array.from(cell.querySelectorAll('.nb-plot .nb-mark .sk-hit')).map(box),
+               paths: Array.from(cell.querySelectorAll('.nb-note')).map(n => n.querySelectorAll('path').length) }; }"""
+    geo = chart.evaluate(boxes)
+    note, bar = geo["texts"][0][0], max(geo["bars"], key=lambda b: b[3] - b[1])
+    check(note["text"] == "the bigger group" and note["box"][3] <= bar[1] + 2 and note["box"][0] < bar[2] + 60 and note["box"][2] > bar[0] - 60,
+          f"a note on a category sits above its bar ({note['box']} over {bar})")
+    chart.locator(".nb-tab", has_text="Notes").click()
+    geo = chart.evaluate(boxes)
+    lines = [t["text"] for t in geo["texts"][0]]
+    check(len(geo["texts"]) == 3 and len(lines) >= 2 and all(len(l) <= 18 for l in lines) and " ".join(lines) == "A note that is long enough to wrap",
+          f"a long note is wrapped into short lines ({lines})")
+    order = chart.locator("svg.nb-chart-svg > g").evaluate(
+        "g => Array.from(g.children).map(e => e.getAttribute('class')).filter(c => /nb-plot|nb-notes/.test(c || ''))")
+    check(order == ["nb-plot", "nb-notes"] and chart.locator(".nb-notes").evaluate("e => getComputedStyle(e).pointerEvents") == "none",
+          "notes are drawn after the marks and leave the pointer to them")
+    # The ring of the first note is on the line at its date; no note's text touches the line.
+    hits = chart.evaluate("""(cell) => {
+      const line = cell.querySelector('.nb-plot .nb-line'), n = line.getTotalLength(), m = line.getScreenCTM(), pts = [];
+      for (let i = 0; i <= 400; i++) { const p = line.getPointAtLength(n * i / 800).matrixTransform(m); pts.push([p.x, p.y]); }
+      const ring = cell.querySelector('.nb-note path').getBoundingClientRect(), cx = (ring.left + ring.right) / 2, cy = (ring.top + ring.bottom) / 2;
+      const near = Math.min(...pts.map(p => Math.hypot(p[0] - cx, p[1] - cy)));
+      const texts = Array.from(cell.querySelectorAll('.nb-note text')).map(t => t.getBoundingClientRect());
+      const touching = texts.filter(b => pts.some(p => p[0] > b.left && p[0] < b.right && p[1] > b.top && p[1] < b.bottom)).length;
+      return { near, touching, width: ring.width };
+    }""")
+    check(hits["near"] < 4 and 18 < hits["width"] < 34, f"a circled note rings its data point ({hits})")
+    check(hits["touching"] == 0, "notes are placed clear of the line they point at")
+    check(geo["paths"][0] >= 2 and geo["paths"][1] >= 1 and geo["paths"][2] == 3, f"a note has an arrow, a range has a bracket ({geo['paths']})")
+    bad = page.locator(".nb-cell[data-idx='2']")
+    check("rules: avg needs a numeric or date x axis" in bad.text_content(), "a bad rule is reported as the chart's error")
+    # The pen writes a chart in document order: rules and bands, then the marks, then the notes.
+    pen = browser.new_page(viewport={"width": 1300, "height": 950})
+    pen.add_init_script("window.__INK_PAUSE = true")
+    opened(pen, "file://" + out)
+    order = """() => {
+      const out = { refs: [], plot: [], notes: [] };
+      Ink.jobs().forEach(j => (j.atoms || []).forEach(a => {
+        const el = a.el || (a.unit && a.unit.el) || (a.nodes && a.nodes[0]);
+        if (!el || !el.closest || !el.isConnected || !el.closest('.nb-cell[data-idx="1"] svg.nb-chart-svg')) return;
+        const part = el.closest('.nb-notes') ? 'notes' : el.closest('.nb-plot') ? 'plot' : el.closest('.nb-refs') ? 'refs' : null;
+        if (part) out[part].push([a.t0, a.order]);
+      }));
+      const span = list => list.length ? [Math.min(...list.map(a => a[0])), Math.max(...list.map(a => a[0])), Math.min(...list.map(a => a[1])), Math.max(...list.map(a => a[1]))] : null;
+      return { refs: span(out.refs), plot: span(out.plot), notes: span(out.notes) };
+    }"""
+    starts = pen.evaluate(order)
+    check(starts["refs"] and starts["plot"] and starts["refs"][1] <= starts["plot"][0] and starts["refs"][3] < starts["plot"][2],
+          f"the pen draws rules and bands before the marks ({starts})")
+    pen.locator(".nb-cell[data-idx='1'] .nb-tab", has_text="Notes").click()
+    frames(pen, 3)
+    starts = pen.evaluate(order)
+    # What follows a click is drawn almost at once, but still in order.
+    check(starts["notes"] and starts["plot"] and starts["plot"][0] <= starts["notes"][0] and starts["plot"][3] < starts["notes"][2],
+          f"the pen writes notes after the marks ({starts})")
+    pen.close()
+    check(not errors, f"no browser errors drawing rules and bands {errors[:3]}")
+    page.close()
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -712,6 +814,7 @@ def main():
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
             chromium = shells[0] if shells else p.chromium.executable_path
             test_exports(browser, work, chromium)
+            test_chart_marks(browser, work)
             test_ink(browser, work, chromium)
             test_ink_editor(browser, work)
         finally:

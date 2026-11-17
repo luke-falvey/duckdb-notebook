@@ -1,0 +1,20 @@
+# name: test/sql/chart_references.test
+# description: rules and bands on charts: aggregates are computed by DuckDB when the chart runs
+# group: [notebook]
+
+require notebook
+
+# Averages, medians and percentiles on number and date axes, and an aggregate of another column, all run;
+# a rule that cannot be drawn is the chart's error and keeps the query's result
+query ITTI
+SELECT idx, status, error, row_count FROM notebook_run('test/notebooks/references.sql') WHERE kind = 'sql' ORDER BY idx
+----
+1	ok	NULL	100
+2	error	rules: avg needs a numeric or date x axis	100
+
+# The exports carry them
+statement ok
+FROM notebook_export('test/notebooks/references.sql', file := '__TEST_DIR__/references.html')
+
+statement ok
+FROM notebook_export('test/notebooks/references.sql', file := '__TEST_DIR__/references.md', format := 'md')
