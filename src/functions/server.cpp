@@ -444,7 +444,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            SendJson(res, Json::Object().Set("ok", Json::Bool(true)).Set("sql", Json::String(sql)));
 	            }));
 
-	// Peek under the pen: the first rows of the CTE or sub-query under the caret (DESIGN section 16).
+	// Peek under the pen: the first rows of the CTE or sub-query under the caret (DESIGN section 17).
 	// `sql` is the text being edited, which may be newer than the session's; `cursor` is a byte offset
 	// into it. Answers `{reason}` instead of an error when there is nothing to show.
 	server.Post("/api/peek", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {

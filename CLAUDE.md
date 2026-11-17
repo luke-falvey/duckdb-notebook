@@ -17,7 +17,7 @@ taught us and where it departs from the design.
 | `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
 | `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
 | `notebook_start`, `notebook_stop` | The HTTP server and browser UI | `src/functions/server.cpp` |
-| `notebook_peek(sql, cursor)` | The CTE or sub-query at a byte offset and the query that selects from it (DESIGN §16) | `src/functions/peek.cpp` |
+| `notebook_peek(sql, cursor)` | The CTE or sub-query at a byte offset and the query that selects from it (DESIGN §17) | `src/functions/peek.cpp` |
 
 Every path argument also accepts `db:<name>[@version]` for a stored notebook.
 
@@ -219,7 +219,7 @@ create, because all test files share one database.
   create or destroy connections from it.
 - Variables set from the browser arrive as JSON. Give them the SQL type of what produced them
   (`VariableSqlType`), or a brush on a timestamp axis compares text with timestamps.
-- Peek under the pen (`frontend/app-peek.js`, `POST /api/peek`, DESIGN §16): cursor positions sent to the
+- Peek under the pen (`frontend/app-peek.js`, `POST /api/peek`, DESIGN §17): cursor positions sent to the
   server are byte offsets, not JavaScript string indexes. A peek runs on a copy of the session's state,
   in a read-only transaction with `max_execution_time`; keep all three if you change `Runner::Peek`.
   The server refuses to peek until the reader has run something (`Session::ran`).
@@ -233,6 +233,24 @@ create, because all test files share one database.
 - The version of DuckDB in the `duckdb` submodule, the `duckdb_version` in
   `.github/workflows/MainDistributionPipeline.yml`, and the `extension-ci-tools` branch must all name
   the same release.
+
+## Rules, bands and notes on charts
+
+`rules:`, `bands:` and `notes:` are spec-level keys of grammar charts (FORMAT §5.1, DESIGN §16).
+
+- Aggregates for rules and bands (`y: avg`) are compiled in `Compiler::References` in
+  `src/core/chart.cpp` from each layer's query *before* downsampling (`LayerInfo::base`), into one extra
+  query whose index is `render.reference_data`. Never compute them in the browser.
+- Notes need no query: `Compiler::Notes` only validates them and types their values by axis. Placement
+  is `drawNotes` in `frontend/render-chart.js`, which avoids what the marks leave for hover
+  (`plot.__points`, `__bars`, `__dots`, gathered by `markObstacles`) plus rules and their labels
+  (`refs.boxes`). Rule and band labels pick the least-covered of a few spots the same way
+  (`coverage`). A new mark kind that text should avoid must push its geometry there too.
+- Order in the chart's SVG is the pen's order: `nb-refs` (behind), `nb-plot`, `nb-ref-labels`,
+  `nb-notes`. Keep it, and keep `pointer-events: none` on notes so hover and brushing still reach the
+  marks.
+- Browser tests find gallery charts by cell position. Add new gallery charts at the end of
+  `examples/charts.sql`, or the positional checks move.
 
 ## Git
 

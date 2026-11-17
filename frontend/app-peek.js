@@ -1,4 +1,4 @@
-// Peek under the pen (docs/DESIGN.md section 16). While a query cell is being edited, the first rows
+// Peek under the pen (docs/DESIGN.md section 17). While a query cell is being edited, the first rows
 // of the CTE or sub-query the caret is in appear in a small paper note beside the code. The server
 // finds the part with DuckDB's parser and runs it alone, read-only (POST /api/peek); this file only
 // decides when to ask and where to put the answer. Nothing is asked before the reader has run the
