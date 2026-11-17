@@ -44,9 +44,11 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started:
+      - Overview: start/index.md
       - Install: start/install.md
       - Your first notebook: start/first-notebook.md
   - Guides:
+      - Overview: guides/index.md
       - Writing a notebook: guides/writing.md
       - Inputs and parameters: guides/inputs.md
       - Charts: guides/charts.md
@@ -57,6 +59,7 @@ nav:
       - Exporting and sharing: guides/exporting.md
       - Running headless and in CI: guides/headless.md
   - Reference:
+      - Overview: reference/index.md
       - File format: reference/format.md
       - Chart spec: reference/charts.md
       - SQL functions: reference/functions.md
