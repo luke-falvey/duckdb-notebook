@@ -171,6 +171,19 @@ def shoot_editor(browser, server):
     page.evaluate("document.getElementById('main').scrollTo(0, 0)")
     page.wait_for_timeout(300)
     page.screenshot(path=os.path.join(IMAGES, "template-reading.png"))
+    menu_item(page, "#view-reading")
+
+    # Presenting the template: its third screen is the main chart.
+    # Not menu_item: its Escape would close the presentation as well as the menu.
+    page.click("#gear")
+    page.click("#view-present")
+    page.wait_for_timeout(600)
+    for _ in range(2):
+        page.keyboard.press("ArrowRight")
+        page.wait_for_timeout(300)
+    page.screenshot(path=os.path.join(IMAGES, "present.png"))
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
 
     page.set_viewport_size({"width": 1360, "height": 1000})
     page.goto(server.url("inputs.sql"))

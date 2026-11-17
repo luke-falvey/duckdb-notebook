@@ -26,6 +26,7 @@ These travel with the notebook and are reviewed like any edit.
 | `hide` | all | `code`, `output`, `all`, `none` | `none` |
 | `span` | all | `1`–`12` | `12` |
 | `rows` | all | `1`–`10000` | the reader's default, 25 |
+| `screen` | all | `new`, `join`, `skip` | the reading layout decides ([presenting](../guides/reading.md#presenting)) |
 | `run` | SQL | `auto`, `manual` | `auto` for queries, `manual` for effects |
 | `materialize` | SQL | `view`, `table` | `view` |
 | `width`, `height` | SQL with charts, chart | pixels | `640`, `320` |
@@ -36,7 +37,7 @@ These travel with the notebook and are reviewed like any edit.
 | `options` | `select`, `multiselect` | `a,b,c` | |
 | `from` | `select`, `multiselect` | `<cell>.<column>` | |
 
-`hide` and `rows` are checked: any other value is an error on the cell. The full rules are in the
+`hide`, `rows` and `screen` are checked: any other value is an error on the cell. The full rules are in the
 [format reference](format.md).
 
 ## In the reader's browser

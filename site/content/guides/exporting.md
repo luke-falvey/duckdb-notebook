@@ -48,6 +48,9 @@ FROM notebook_export('report.sql', file := 'report.html', hide := 'code');
 `hide :=` takes `'code'`, `'output'`, `'all'` or `'none'` and applies to every cell, on top of each
 cell's own `hide=`. Prose and inputs are always kept. A results-only report is `hide := 'code'`.
 
+Add `#present` to an exported page's address to [present](reading.md#presenting) it one screen
+at a time.
+
 Tables keep `page_rows` rows per query cell (default 100, and at least the cell's `rows=`), and the
 page lets readers page through them.
 

@@ -69,6 +69,60 @@ query hide=code rows=10                        the detail table
 The repository's [sketchbook template](https://github.com/luke-falvey/duckdb-notebook/blob/main/.github/skills/sketchbook-authoring/assets/template.sql)
 follows this shape.
 
+## Presenting
+
+A notebook can be shown one screen at a time, for a meeting or a talk. In the editor, open the ⚙ menu
+and press **Present**. An HTML export presents too: add `#present` to the end of its address, or
+`#present=3` to start at the third screen.
+
+<figure class="shot" markdown>
+![The sketchbook template presented: one screen holding its main chart, Revenue by month, scaled up to fill the window, with the page number in the corner](../images/present.webp)
+<figcaption>A presented screen: one row of the reading layout, scaled up to fill the window.</figcaption>
+</figure>
+
+Code is never shown, and what each screen holds follows from the reading layout, so a notebook that
+reads well presents well with no extra markup:
+
+- **A screen is a row of the reading layout**: one cell, or the consecutive cells whose `span`s share a
+  row (two `span=6` charts, three `span=4` KPIs).
+- **An input shares the screen of the next cell**, so the audience sees what it changes.
+- Cells that show nothing when reading have no screen: `hide=all`, `hide=output`, the `[notebook]`
+  cell, and SQL cells that return no rows.
+
+When that is not what you want, `screen=` on a cell overrides it:
+
+| Option | Effect |
+|---|---|
+| `screen=new` | Start a new screen here, even if the cell would share a row or follow an input |
+| `screen=join` | Stay on the screen of the cell before: a note under its chart, a table under its KPIs |
+| `screen=skip` | Leave the cell out of the presentation; it still shows when reading and in exports |
+
+```sql
+-- %% chart trend from=monthly
+-- %% [markdown] screen=join
+/* What the trend shows, on the same screen as the chart. */
+-- %% detail rows=10 screen=skip
+SELECT * FROM monthly;
+```
+
+**Moving around:**
+
+| Keys | Do |
+|---|---|
+| <kbd>→</kbd>, <kbd>Space</kbd>, <kbd>Page Down</kbd>, or a click on empty space | Next screen |
+| <kbd>←</kbd>, <kbd>Shift</kbd>+<kbd>Space</kbd>, <kbd>Page Up</kbd> | Previous screen |
+| <kbd>Home</kbd> / <kbd>End</kbd> | First / last screen |
+| <kbd>F</kbd> | Full screen |
+| <kbd>Esc</kbd> | Stop presenting |
+
+Inputs, chart tabs and brushing keep working on a screen (clicks on them act on them rather than
+moving on), so you can answer a question live. In an export they work as they do there: precomputed
+inputs switch, static ones stay frozen. The current screen is in the address (`#present=3`), so a
+reload or a shared link returns to it.
+
+A screen is laid out as in the reading view, centred and scaled up to fill the window. One that is
+too tall is scaled down, but not below four fifths of the reading size; past that it scrolls.
+
 ## Tables
 
 A result table pages through its rows, 25 at a time unless the reader picks another default in the ⚙

@@ -18,6 +18,7 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
 | <kbd>Tab</kbd> | in a cell | Insert four spaces |
 | <kbd>Enter</kbd> / <kbd>Esc</kbd> | in a cell's `-- %%` line | Keep / cancel the change |
 | <kbd>Esc</kbd> | ⚙ menu open | Close it |
+| <kbd>→</kbd> <kbd>←</kbd> <kbd>Space</kbd> <kbd>Home</kbd> <kbd>End</kbd> <kbd>F</kbd> <kbd>Esc</kbd> | presenting | Next, back, first, last, full screen, stop ([presenting](../guides/reading.md#presenting)) |
 
 ## A cell
 
@@ -73,6 +74,7 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
 | **keep results** | Keep each cell's last result so the notebook reopens showing it. Writes `cache:` into the `[notebook]` cell |
 | **Forget** | Clear the results kept for this notebook |
 | **Reading** | The [reading view](../guides/reading.md): no code, cells on the `span=` grid |
+| **Present** | [Present](../guides/reading.md#presenting) the notebook one screen at a time: arrows, Space or a click move, <kbd>F</kbd> for full screen, <kbd>Esc</kbd> leaves |
 | **Graph** | The dependency graph |
 | **Catalog** | A side panel of tables, views and their columns. Click a column to insert it; drag or double-click a table |
 | ◐ | Light or dark |

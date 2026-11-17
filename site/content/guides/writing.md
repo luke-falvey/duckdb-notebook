@@ -141,6 +141,7 @@ the first cell runs (`ATTACH IF NOT EXISTS` and `LOAD`); paths are relative to t
 | `hide` | `code`, `output`, `all`, `none` | What to hide in the reading view and in exports. The editor folds the hidden part to a line |
 | `span` | `1`–`12` | Width on a 12-column grid in the reading view and exports. Consecutive cells whose spans fit share a row |
 | `rows` | `1`–`10000` | Rows per page of the result table. Default: the reader's own setting, 25 unless changed |
+| `screen` | `new`, `join`, `skip` | Where the cell goes when the notebook is [presented](reading.md#presenting) |
 
 The editor writes these for you: the code and output switches on a cell write `hide=`, and the
 page-size picker under a table writes `rows=`. They are saved with the notebook. See
