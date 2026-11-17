@@ -1,8 +1,8 @@
 # Design audit
 
 An audit of the codebase for bad design and repeated structure, made before a simplification pass.
-Audited at `94eb001` (main, 2026-11-17). Line numbers refer to that commit; phase 2 re-checks every
-finding against the `main` it starts from.
+Audited at `94eb001` (main, 2026-11-17), then extended to the four features merged by `e49f765`. Line
+numbers in the first part refer to `94eb001`, in the features section to `e49f765`.
 
 Each finding has an id, where it is, why it is a problem, the proposed change, its **risk**, a rough
 **size**, and a **class**:
@@ -39,7 +39,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | C5 | `chart.cpp` does too much (1016 lines) | Safe | med | ±0 | todo |
 | C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | todo |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
-| B1–B19 | Bugs found on the way (B15–B19 from the docs-site PR #11) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
+| B1–B29 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
 | DOC1–DOC8 | Docs that disagree with the code | Docs | none | small | todo |
 
 \* Safe only if the single rule chosen is the one the current callers agree on; edge cases are listed.
@@ -197,11 +197,48 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 - **Change:** key by class and share one `Ink.presentCell`. Pixels unchanged but animation timing
   changes, so it is a Fix, not Safe.
 
+## The four merged features (audited at e49f765)
+
+Charts' reference lines, bands and notes (#5), the result cache (#7), presenting (#8) and peek (#9). None
+added another copy of R1's run-every-cell loop. Earlier findings grew:
+
+- **R2** is half done: the server's per-cell JSON moved into `RunForEditor` (`result_cache.cpp:488-521`),
+  runner code in the cache file; the export still builds its own, and `RanCell` is built twice
+  (`server.cpp:409-418`, `notebook_run.cpp:131-139`). R2 now moves `RunForEditor` into `session.cpp`.
+- **R3** grows: `PeekState` (`peek.cpp:612`) and `CacheScanState` reused as a once-state
+  (`result_cache.cpp:604-611`); another `column` lambda (`result_cache.cpp:558`); a fourth way of reading
+  named parameters (`notebook_run.cpp:76-77`).
+- **R6** grows: another `db:`/`@` parse (`result_cache.cpp:82-86`) and file-stem rule (`:95-98`). Still deferred.
+- **C6** grows: `[notebook]` metadata is also read by `CacheEnabled` (`cache.cpp:303`) and with a regular
+  expression in JS (`app.js:389`).
+- **C5** is unblocked (the reference-lines feature has merged), but `chart.cpp` is now ~1300 lines.
+
+### N1. Chart rules, bands and notes repeat their checks (Safe part)
+- **Where:** "first layer with this axis" twice (`chart.cpp` `ReferenceValue` and `AxisTypeOf`); "arc has
+  no axes" twice; unknown keys checked two ways (an if-chain and a set); `IsReferenceAgg`'s `pNN` test
+  repeats `Agg`'s.
+- **Change:** one `LayerOn(axis)`, one `NoAxes(what)`, one key set, one `IsPercentile`. Error messages
+  word for word unchanged. Safe, low risk, about −30. Folded into C5.
+
+### N2. Frontend result handling repeated (Safe)
+- **Where:** "apply a result to a cell" in both `A.kept` and `A.run` (`app.js`); "drop kept results" three
+  times (`A.forget`, `A.setCaching`, the render `catch`).
+- **Change:** `applyResult(cell, r)` and `dropKept()`. Safe, low risk, about −20.
+
+### N3. Smaller server and cache items (Safe)
+- `SameQuery`/`SameRecursiveQuery` (`peek.cpp:278-314`) repeat the parse-one-SELECT boilerplate → one
+  `ParseOneQuery`.
+- Value → `(type, text, null)` written twice in `result_cache.cpp:370-386` → one helper.
+- The redraw merge (`result_cache.cpp:419-431`) and the cache directory derived from a source
+  (`:95-100`) need no database → core (C3), with tests.
+- `NotebookJson` calls `cache.Record` while building JSON; `/api/variable` records with no cells and so
+  prunes (lists a directory) on every input change. Moving the call is Safe; skipping the prune is a
+  (harmless) behaviour change, deferred with the bugs.
+
 ## Dead code (grep-confirmed, all Safe)
 
 ### D1
-- C++: `Json::Raw` / `Type::RAW` (0 callers; `JsonToSqlLiteral`'s RAW case would mis-quote);
-  `Statement::line` (read only by a test); `Runner::Save` public but only called by the destructor;
+- C++: `Statement::line` (read only by a test);
   unused `value`/`value_enc` in the pivot (`chart.cpp:685`, kept for its validation side effect),
   `color` measured twice (`:711,714`); two identical branches at `export.cpp:345-354`; stale comment
   `notebook_run.cpp:174-177`.
@@ -212,6 +249,10 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 - **Not removed** without a decision: JSON fields nothing reads (`truncated` in results,
   `payload.wasm.tables`, `open` in `/api/notebooks`, `sql` from `/api/variable`). They are part of the
   HTTP API and payload; the brief forbids changing those. `Ink.pause` is documented API, kept.
+
+- **Corrected after the feature merge (e49f765):** `Json::Raw` now has three callers (`cache.cpp:349`,
+  `result_cache.cpp:470`, `server.cpp:416`) and `Runner::Save` is called from `server.cpp` and
+  `notebook_run.cpp`, so neither is dead any more. (`JsonToSqlLiteral`'s RAW case still mis-quotes; see B20.)
 
 ## Tests
 
@@ -256,6 +297,16 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B17 | low | `theme: light` appears in the FORMAT §6 metadata example; nothing reads it. **Change the spec:** remove it from the example (the theme is a viewer setting) | `docs/FORMAT.md` §6 |
 | B18 | low | The `hide=` error lists `code`, `output`, `all` but not `none`, which is valid. **Change the code:** list `none` too | `format.cpp:133` |
 | B19 | low | Graph view: a long-range edge's curve bends left by `depth * 2` px from x=200 and is clipped at the left edge. **Change the code:** cap the bend or widen the view box to fit the deepest edge | `app-extra.js:86` |
+| B20 | low | `JsonToSqlLiteral` quotes a RAW JSON value as a string; RAW values now exist (cache) | `script.cpp:96` |
+| B21 | medium | Opening the editor at `#present` runs the whole notebook, effect cells included, with no reader action; FORMAT §8 and DESIGN §17 say nothing runs until the reader asks | `app.js` present enter, `render-present.js:221-225` |
+| B22 | low | `screen=` is not a layout option for the cache key, so editing it makes the cell and everything below stale | `cache.cpp:34-36` |
+| B23 | low | Peek's refused-function list misses `notebook_cache_clear` (deletes files outside any transaction). Refuse every `notebook_*` but the read-only ones | `peek.cpp:419-422` |
+| B24 | low | A server session loads its cache once; results written later by `notebook_run(cache := true)` never appear and cleared entries keep showing | `server.cpp:158-183` |
+| B25 | low | Typed charts silently ignore `rules`, `bands`, `notes` (kpi/gauge `bands` have another shape) | `chart.cpp` typed branch |
+| B26 | low | A redraw marks a stale cache entry fresh (merges charts and takes the current key) | `result_cache.cpp:419-443` |
+| B27 | low | `trusted()` in peek counts cached results as runs, so a reopened page sends peeks the server refuses; `Session::ran` never clears on reload while `trusted` does | `app-peek.js:28`, `server.cpp` |
+| B28 | low | Reference values: `IsNumber` accepts `inf`, `nan`, `0x10` (YAML does not); `inf` dumps as null and the rule vanishes. A note's `color` is not checked to be a scalar | `chart.cpp` |
+| B29 | low | Presenting writes the requested screen to the hash, not the one shown (`#present=99` stays 99) | `render-present.js:136` |
 
 Also: graph de-duplicates the "defined twice" error by matching the parser's message text
 (`graph.cpp:209-213` against `format.cpp:421-423`); hidden code is not drawn in HTML exports but is
@@ -275,6 +326,9 @@ the editor and an export (`app.js:389` vs `viewer.js:140`); `wasm/runtime.js` ro
 | DOC6 | DESIGN §8 | Frontend size (132 KB) is now ~344 KB plus fonts |
 | DOC7 | HANDWRITING | "Add render-ink.js to frontend_check" already done; chart picker said excluded from the pen but is written |
 | DOC8 | CLAUDE.md | `src/include/notebook/*.hpp` "for core" but `session.hpp` includes DuckDB; `notebook_cells.cpp:84` says keep in step with the README, which has no column list |
+| DOC9 | DESIGN §18 | "In the editor a reload starts a new session": sessions persist per source and `ran` survives a reload |
+| DOC10 | FORMAT §8 | Display-layer options list `rows`, `width`, `height`; the code also has `label`, `placeholder` |
+| DOC11 | DESIGN §19 | Says every `notebook_*` function is refused by peek; not true (B23) |
 
 Unreferenced: `docs/handwriting/*.gif` (1.2 MB) are linked from nowhere; link them from HANDWRITING.
 
@@ -292,4 +346,4 @@ Unreferenced: `docs/handwriting/*.gif` (1.2 MB) are linked from nowhere; link th
 
 R1, R2, R3, R4, R5, C1, C2, C3, C4, F1, F2, F3, F4, D1, T1 and the T2 test additions, and docs
 DOC1–DOC8. C6 only if it stays purely structural. C5 last, after the chart reference-lines feature has
-merged. R6 deferred (a behaviour change for odd paths). B1–B19 in a second PR after this one.
+merged. R6 deferred (a behaviour change for odd paths). B1–B29 in a second PR after this one. N1–N3 are in scope (N1 with C5).
