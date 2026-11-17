@@ -74,6 +74,12 @@ async function testArch(browser, arch, pageScript) {
   check('engine is DuckDB v2.0.0', engine && engine.version === 'v2.0.0', info);
   check(`engine platform is ${arch}`, engine && engine.platform === arch, info);
 
+  // What the html-wasm export works around on DuckDB-WASM 1.5 (docs/DESIGN.md section 12).
+  const shorthand = await sql("SET VARIABLE nb_probe = 'x'; SELECT $nb_probe AS v");
+  check('engine: $name shorthand works', shorthand.rows && shorthand.rows[0].v === 'x', shorthand);
+  const untyped = await sql('SET VARIABLE nb_probe = NULL; SELECT $nb_probe.lo AS v');
+  check('engine: .lo of an untyped NULL variable', untyped.rows && untyped.rows[0].v === null, untyped);
+
   const t1 = Date.now();
   const load = await sql(`LOAD '${ORIGIN}/notebook.duckdb_extension.wasm'`);
   check('LOAD notebook', !load.error, load.error);
