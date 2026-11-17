@@ -71,7 +71,7 @@ A chart cell's body must be exactly one block comment: no `--` lines.
 | Distribution | `mark: histogram` (`bin: {maxbins: 25}`), `mark: boxplot`, `mark: density` |
 | Two measures | `mark: point` (binned automatically past 5,000 rows) or `mark: hexbin` |
 | Two categories and a measure | `mark: rect` with `color: {field, agg, scheme}`, or `type: pivot` with `heat: true` |
-| One headline number | `type: kpi` (with `sparkline`), `type: gauge` with `bands` |
+| One headline number | `type: kpi` (with `sparkline`; `bands` colour the value, e.g. errors red above 0), `type: gauge` with `bands` |
 | Flows | `type: sankey`, `type: chord`, `type: network` |
 | Hierarchy | `type: treemap`, `sunburst`, `icicle` with `path: [a, b]` |
 | Steps, schedules, prices | `type: funnel`, `type: gantt`, `type: candlestick` |

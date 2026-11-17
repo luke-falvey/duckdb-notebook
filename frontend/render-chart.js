@@ -257,7 +257,7 @@
       var e = layer.encoding[c];
       // Truncated dates read as their unit: a month bar says "Jun 2026", not its first day.
       var unit = { year: 'year', quarter: 'month', month: 'month', week: 'day', date: 'day' }[e && e.timeunit];
-      if (e && e.column && row[e.column] !== undefined) lines.push((e.title || c) + ': ' + (e.type === 'temporal' ? NB.formatDate(row[e.column], unit) : NB.formatValue(row[e.column], '', e.format)));
+      if (e && e.column && row[e.column] !== undefined) lines.push((e.title || e.column || c) + ': ' + (e.type === 'temporal' ? NB.formatDate(row[e.column], unit) : NB.formatValue(row[e.column], '', e.format)));
     });
     (layer.tooltip || []).forEach(function (e) { lines.push((e.title || e.column) + ': ' + NB.formatValue(row[e.column], '', e.format)); });
     if (layer.binned && row.count != null) lines.push('rows: ' + NB.formatNumber(row.count, ','));
@@ -573,7 +573,7 @@
     allLayers.forEach(function (l) {
       var e = l.encoding.y;
       if (!e || !e.column || (e.type !== 'nominal' && e.type !== 'ordinal')) return;
-      l.rows.forEach(function (r) { var v = r[e.column]; left = Math.max(left, Math.min(170, 26 + 7.2 * String(v == null ? 'NULL' : v).slice(0, 20).length)); });
+      l.rows.forEach(function (r) { var v = r[e.column]; left = Math.max(left, Math.min(180, 30 + 8.2 * String(v == null ? 'NULL' : v).slice(0, 20).length)); });
     });
     var w = panelW - left - M.right, h = panelH - M.top - M.bottom;
     var horizontalBars = allLayers.some(function (l) { return l.mark === 'bar' && l.encoding.y && (l.encoding.y.type === 'nominal' || l.encoding.y.type === 'ordinal'); });

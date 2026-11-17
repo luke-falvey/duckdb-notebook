@@ -225,7 +225,7 @@ td.nb-null { color: var(--nb-faint); }
 .nb-kpi { padding: 4px 0; }
 .nb-kpi-label { color: var(--nb-muted); font-size: 18px; }
 .nb-output { container-type: inline-size; }
-.nb-kpi-value { font-size: clamp(26px, 13cqw, 58px); line-height: 1.1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nb-kpi-value { font-size: clamp(30px, 22cqw, 76px); line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .nb-kpi-delta.up { color: var(--nb-ok); } .nb-kpi-delta.down { color: var(--nb-error); }
 /* A sparkline shrinks with a narrow cell (span=3 or 4) instead of scrolling it. */
 .nb-kpi svg.nb-sparkline { display: block; max-width: 100%; height: auto; }

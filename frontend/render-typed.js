@@ -33,7 +33,13 @@
     var spec = render.spec || {}, enc = render.encoding || {}, row = (data[0] || [])[0] || {};
     var box = NB.el('div', { 'class': 'nb-kpi' });
     box.appendChild(NB.el('div', { 'class': 'nb-kpi-label', text: spec.label || (enc.value && enc.value.title) || '' }));
-    box.appendChild(NB.el('div', { 'class': 'nb-kpi-value', text: fmt(row.value, enc.value) }));
+    var value = NB.el('div', { 'class': 'nb-kpi-value', text: fmt(row.value, enc.value) });
+    // bands: [{from, to, color}] colours the value by the band it falls in (ends inclusive; either may be omitted).
+    var v = Number(row.value), band = (spec.bands || []).filter(function (b) {
+      return isFinite(v) && (b.from == null || v >= +b.from) && (b.to == null || v <= +b.to);
+    })[0];
+    if (band && band.color) { value.style.color = band.color; box.classList.add('nb-kpi-banded'); }
+    box.appendChild(value);
     if (row.compare != null) {
       var delta = row.value - row.compare, pct = row.compare ? delta / Math.abs(row.compare) : null;
       box.appendChild(NB.el('div', { 'class': 'nb-kpi-delta ' + (delta >= 0 ? 'up' : 'down'), text: (delta >= 0 ? '▲ ' : '▼ ') + NB.formatNumber(Math.abs(delta), (enc.value || {}).format) + (pct != null ? ' (' + NB.formatNumber(pct, '.1%') + ')' : '') }));

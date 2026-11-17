@@ -149,6 +149,7 @@ type: kpi
 label: Revenue
 value: {field: amount, agg: sum, format: "$,.0f"}
 sparkline: {x: day, y: amount}
+bands: [{to: 1000000, color: "#e03131"}, {from: 1000000, color: "#2f9e44"}]
 */
 
 -- %% chart gauge from=gallery_sales span=4
