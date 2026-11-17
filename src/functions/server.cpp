@@ -452,7 +452,10 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            auto db = Database(state);
 		            Runner runner(*db, session->state);
 		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
-		            runner.ApplyMetadata(notebook, session->source);
+		            try { // setting an input never fails because of the [notebook] cell: a run reports that
+			            runner.ApplyMetadata(notebook, session->source);
+		            } catch (std::exception &) { // NOLINT
+		            }
 		            string type;
 		            if (auto cell = body.Get("cell")) {
 			            if (!cell->IsNull()) {

@@ -340,11 +340,15 @@ def test_metadata_error(browser, work):
     # A notebook whose [notebook] cell needs an extension this DuckDB lacks says so in full.
     notebook = os.path.join(work, "needs_ext.sql")
     with open(notebook, "w") as f:
-        f.write("-- %% [notebook]\n/*\ntitle: Needs an extension\nextensions: [no_such_extension_xyz]\n*/\n\n-- %% one\nSELECT 1 AS x;\n")
+        f.write("-- %% [notebook]\n/*\ntitle: Needs an extension\nextensions: [no_such_extension_xyz]\n*/\n\n-- %% one\nSELECT 1 AS x;\n\n"
+                "-- %% input n slider min=1 max=9\nSET VARIABLE n = 1;\n")
     shell, url = serve(work, notebook)
     page = browser.new_page()
     page.goto(still(url))
     page.wait_for_selector(".nb-cell")
+    # B3 follow-up: setting an input never fails because of the [notebook] cell; a run reports that.
+    moved = page.evaluate("() => App.api('POST', '/api/variable', {name: 'n', value: 3, cell: 2}).then(r => r.ok, e => 'error: ' + e.message)")
+    check(moved is True, f"an input can be set while the [notebook] cell's extension cannot load ({moved})")
     page.click("#run-all")
     page.wait_for_selector(".nb-problem", timeout=30000)
     text = page.locator(".nb-problem .nb-error").text_content()
