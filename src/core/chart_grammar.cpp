@@ -34,6 +34,32 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 		Fail("unknown mark '" + mark + "'");
 		return Json();
 	}
+	// Vega-Lite mark options: what the renderer draws anyway is accepted (bars coloured by a group are
+	// stacked, lines are straight), anything else refused, so a spec does not quietly look different. A
+	// layered chart's top-level option applies to every layer.
+	auto mark_option = [&](const char *key) -> const Yaml * {
+		auto own = layer_spec.Get(key);
+		return own ? own : top.Get(key);
+	};
+	auto value = [](const Yaml *option) {
+		return option->IsScalar() ? Lower(option->scalar) : std::string();
+	};
+	if (auto stack = mark_option("stack")) {
+		if (mark != "bar" || (value(stack) != "true" && value(stack) != "zero")) {
+			Fail("stack: only bars are stacked, and only as stack: true or zero");
+			return Json();
+		}
+	}
+	if (auto interpolate = mark_option("interpolate")) {
+		if (mark != "line" || value(interpolate) != "linear") {
+			Fail("interpolate: only lines are drawn, and only as interpolate: linear");
+			return Json();
+		}
+	}
+	if (mark_option("cornerRadius")) {
+		Fail("cornerRadius: is not drawn; the sketchbook renderer has no such mark option");
+		return Json();
+	}
 	static const char *const CHANNELS[] = {"x",       "y",     "x2",   "y2",    "color", "size",
 	                                       "opacity", "shape", "text", "order", "theta"};
 	std::vector<Channel> channels;
@@ -205,8 +231,13 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 			order += (order.empty() ? "" : ", ") + o;
 		}
 	}
-	if (order.empty() && x.present && !x.constant && x.agg.empty()) {
-		order = "x";
+	// Unsorted marks follow their category or continuous axis: x, or y when only x is aggregated (horizontal
+	// bars), so the total order Query adds after it never sorts an axis by value.
+	auto axis = x.present && !x.constant && x.agg.empty()                     ? "x"
+	            : y.present && !y.constant && y.agg.empty() && !x.agg.empty() ? "y"
+	                                                                          : "";
+	if (order.empty() && *axis) {
+		order = axis;
 		if (channel("color").present && !channel("color").constant && channel("color").agg.empty()) {
 			order += ", color";
 		}
@@ -232,7 +263,7 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 		      series + ", __p ORDER BY x) = 1 OR row_number() OVER (PARTITION BY " + series +
 		      ", __p ORDER BY x DESC) = 1 OR row_number() OVER (PARTITION BY " + series +
 		      ", __p ORDER BY y) = 1 OR row_number() OVER (PARTITION BY " + series +
-		      ", __p ORDER BY y DESC) = 1\nORDER BY x\nLIMIT " + limit;
+		      ", __p ORDER BY y DESC) = 1\nORDER BY x, " + Positions(items.size()) + "\nLIMIT " + limit;
 		flags.Set("m4", Json::Bool(true));
 	} else if (!has_agg && (mark == "hexbin" || ((draw == "point" || draw == "rect" || draw == "tick") && large)) &&
 	           x.type == "quantitative" && quantitative_y) {
@@ -270,9 +301,11 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 	for (auto &entry : flags.Entries()) {
 		layer.Set(entry.first, entry.second);
 	}
-	for (auto key : {"opacity", "strokeWidth", "interpolate", "point", "stack", "cornerRadius"}) {
+	// Mark options the renderer draws (render-chart.js reads them as mark_<key>). `opacity` as a mapping is a
+	// channel, read above.
+	for (auto key : {"opacity", "strokeWidth", "point", "innerRadius"}) {
 		if (auto option = layer_spec.Get(key)) {
-			if (!layer_spec.Get(key)->IsMap() || std::string(key) != "opacity") {
+			if (!option->IsMap() || std::string(key) != "opacity") {
 				layer.Set(std::string("mark_") + key, option->ToJson());
 			}
 		}

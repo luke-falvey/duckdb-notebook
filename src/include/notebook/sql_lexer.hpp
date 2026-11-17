@@ -71,6 +71,15 @@ bool IsQueryStatement(const std::string &statement);
 //! in order of first appearance. Positional parameters such as `$1` are ignored.
 std::vector<std::string> ReferencedVariables(const std::string &sql);
 
+//! One `$name` or `$"quoted name"` in SQL code: its byte range (from the `$`) and the name it reads.
+struct VariableRef {
+	size_t start;
+	size_t end;
+	std::string name;
+};
+//! Every variable reference in code, in order; strings, comments and `$tag$` strings are skipped.
+std::vector<VariableRef> VariableRefs(const std::string &sql);
+
 //! True if the statement changes state that belongs to one connection and is not a variable:
 //! `CREATE TEMP ...`, `SET`/`RESET` of a setting, `USE`. A session that runs each request on a
 //! fresh connection replays these.

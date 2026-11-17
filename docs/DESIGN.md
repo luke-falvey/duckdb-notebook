@@ -322,7 +322,7 @@ QUALIFY version = max(version) OVER (PARTITION BY name);
 - **A database carries its own analysis.** Send someone `sales.duckdb` and they get the data and the
   notebooks that explain it. `CALL notebook_start('db:revenue')` opens a stored notebook.
 - **Result cache.** For a database-backed notebook the cache goes in `_notebook.cache(name, cell,
-  format, key, saved_at, result)` in place of the sidecar directory (FORMAT.md §8, and §17 below).
+  format, key, data, saved_at, result)` in place of the sidecar directory (FORMAT.md §8, and §17 below).
 
 **File and database together.** A notebook session has one source of truth: the place it was opened
 from. `notebook_save` and `notebook_checkout` copy between the two explicitly. There is no automatic
@@ -902,8 +902,9 @@ draw the cells and only ask it which ones.
 - **State is the address.** `#present=3` is written with `history.replaceState` as the presenter moves,
   so a reload, a restored tab or a shared link opens the same screen, and Back is not filled with
   screens. In the editor a reload keeps the server's session for that notebook: the result cache (§17)
-  puts the last results on screen at once, and presenting runs the notebook so its inputs and brushes
-  are live again.
+  puts the last results on screen at once, and a session that has run stays live. A page opened at
+  `#present` runs nothing until the reader asks (§17); pressing Present runs a notebook that has not
+  run, so its inputs and brushes are live.
 - **Print is unchanged.** `beforeprint` leaves presenting before the browser lays out the page, so paper
   and PDF get the whole notebook.
 

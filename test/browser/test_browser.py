@@ -109,6 +109,9 @@ def test_server(browser, work):
     check(tokens == ["kw", "str", "comment", "str", "var", "kw", "ident", "fn", "op", "ident", "op", "ident", "op", "ident",
                      "kw", "ident", "kw", "name"],
           f"the tokenizer follows DuckDB's lexer and keyword list ({tokens})")
+    classes = page.evaluate("() => ['INTERVAL', 'INTEGER[]', 'POINT', 'INT', 'DECIMAL(9,2)', 'TIMESTAMP WITH TIME ZONE', 'VARCHAR'].map(NB.typeClass)")
+    check(classes == ["nominal", "nominal", "nominal", "quantitative", "quantitative", "temporal", "nominal"],
+          f"column types are classed by their whole name, as the chart compiler does ({classes})")
     page.click("#gear")
     check(page.locator("#menu").is_visible() and page.locator("#view-graph").is_visible(), "the gear opens the options menu")
     page.keyboard.press("Escape")
@@ -308,6 +311,8 @@ def test_server(browser, work):
     page.click("#gear")
     page.click("#view-graph")
     check(page.locator(".nb-graph path.edge").count() >= 8, "the graph view draws the dependencies")
+    left = page.evaluate("Math.min(...[...document.querySelectorAll('.nb-graph path.edge')].map(p => p.getBBox().x))")
+    check(left >= 0, f"no dependency curve bends out of the graph's view box (leftmost x {left:.1f})")
     page.click("#view-reading")
     check(page.locator("textarea.nb-code:visible").count() == 0, "reading view hides the code")
     page.click("#view-reading")
@@ -335,17 +340,187 @@ def test_metadata_error(browser, work):
     # A notebook whose [notebook] cell needs an extension this DuckDB lacks says so in full.
     notebook = os.path.join(work, "needs_ext.sql")
     with open(notebook, "w") as f:
-        f.write("-- %% [notebook]\n/*\ntitle: Needs an extension\nextensions: [no_such_extension_xyz]\n*/\n\n-- %% one\nSELECT 1 AS x;\n")
+        f.write("-- %% [notebook]\n/*\ntitle: Needs an extension\nextensions: [no_such_extension_xyz]\n*/\n\n-- %% one\nSELECT 1 AS x;\n\n"
+                "-- %% input n slider min=1 max=9\nSET VARIABLE n = 1;\n")
     shell, url = serve(work, notebook)
     page = browser.new_page()
     page.goto(still(url))
     page.wait_for_selector(".nb-cell")
+    # B3 follow-up: setting an input never fails because of the [notebook] cell; a run reports that.
+    moved = page.evaluate("() => App.api('POST', '/api/variable', {name: 'n', value: 3, cell: 2}).then(r => r.ok, e => 'error: ' + e.message)")
+    check(moved is True, f"an input can be set while the [notebook] cell's extension cannot load ({moved})")
     page.click("#run-all")
     page.wait_for_selector(".nb-problem", timeout=30000)
     text = page.locator(".nb-problem .nb-error").text_content()
     check("no_such_extension_xyz" in text and "LOAD no_such_extension_xyz works" in text and page.locator(".nb-problem").is_visible(),
           "a run that fails before any cell shows the whole message, naming the missing extension")
     stop(shell)
+
+
+def test_metadata_first(browser, work):
+    # B3: the [notebook] cell's attach: applies to every request, not only runs: here an input's choices come from
+    # an attached database before anything has run.
+    folder = os.path.join(work, "attached")
+    os.makedirs(folder)
+    sql(os.path.join(folder, "extra.duckdb"), "CREATE TABLE picks AS SELECT unnest(['b', 'a']) AS c")
+    notebook = os.path.join(folder, "attach_first.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% [notebook]\n/*\nattach:\n  - {path: extra.duckdb, as: extra, read_only: true}\n*/\n\n"
+                "-- %% input pick select from=extra.picks.c\nSET VARIABLE pick = 'a';\n")
+    shell, url = serve(folder, notebook)
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        options = page.evaluate("() => App.api('GET', '/api/options?cell=1').then(r => r.values, e => 'error: ' + e.message)")
+        check(options == ["a", "b"], f"an input's choices from an attached database load before anything runs ({options})")
+        catalog = page.evaluate("() => App.api('GET', '/api/catalog').then(r => r.tables.map(t => t.qualified), e => 'error: ' + e.message)")
+        check(isinstance(catalog, list) and any("picks" in t for t in catalog), f"the catalog lists the attached database's tables ({catalog})")
+        # B12: what the catalog offers to drag can be dragged, and its tooltips name the gestures that work.
+        page.wait_for_selector("#sidebar details .nb-col", state="attached")
+        dragged = page.evaluate("""() => [...document.querySelectorAll('#sidebar details')].map(d => {
+          const col = d.querySelector('.nb-col'), t = new DataTransfer();
+          col.dispatchEvent(new DragEvent('dragstart', {dataTransfer: t, bubbles: true}));
+          return [d.querySelector('summary').title, col.title, t.getData('text/plain')];
+        })""")
+        check(any(row[2] == "c" for row in dragged) and all("ouble-click" in row[0] and "rag" in row[1] for row in dragged),
+              f"a catalog column drags its name, and the tooltips say double-click and drag ({dragged})")
+        page.close()
+    finally:
+        stop(shell)
+
+
+def test_cache_written_later(browser, work):
+    # B24: a session reads the store again until it has run, so results a scheduled
+    # notebook_run(cache := true) writes after the editor opened appear on the next reload.
+    folder = os.path.join(work, "cache_later")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "later.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% answer\nSELECT 42 AS answer;\n")
+    shell, url = serve(folder, notebook, os.path.join(folder, "later.duckdb"))
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        check(page.locator("table.nb-grid").count() == 0, "a notebook never run shows no results")
+        shell.stdin.write(f"SELECT count(*) FROM notebook_run('{notebook}', cache := true);\n")
+        shell.stdin.flush()
+        shell.stdout.readline()
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        grid = page.locator("table.nb-grid")
+        check(grid.count() == 1 and "42" in grid.text_content(), "results kept by notebook_run after the editor opened show on reload")
+        page.close()
+    finally:
+        stop(shell)
+
+
+def test_cache_variables_reloaded(browser, work):
+    # B24 follow-up: reading the store again refreshes the input values it restored, and keeps the ones the
+    # reader set in this session.
+    folder = os.path.join(work, "cache_vars")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "vars.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% input n slider min=1 max=9\nSET VARIABLE n = 1;\n\n-- %% q\nSELECT $n AS v\n")
+    db = os.path.join(folder, "vars.duckdb")
+    sql(db, f"SELECT count(*) FROM notebook_run('{notebook}', cache := true, params := {{n: 2}})")
+    shell, url = serve(folder, notebook, db)
+
+    def scheduled(n):
+        shell.stdin.write(f"SELECT count(*) FROM notebook_run('{notebook}', cache := true, params := {{n: {n}}});\n")
+        shell.stdin.flush()
+        shell.stdout.readline()
+
+    def reopened():
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        return page.evaluate("""async () => {
+          const opened = await App.api('GET', '/api/notebook');
+          const r = await App.api('POST', '/api/run', {text: App.text(), cells: [1]});
+          return [opened.variables.n, JSON.stringify(r)];
+        }""")
+
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        scheduled(3)
+        shown, ran = reopened()
+        check(shown == 3 and '"rows":[[3]]' in ran, f"a restored input follows the store when it is read again ({shown}, {ran[:300]})")
+        page.close()
+    finally:
+        stop(shell)
+    # The reader moves the input without running; a scheduled run then writes another value.
+    shell, url = serve(folder, notebook, db)
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.evaluate("() => App.api('POST', '/api/variable', {name: 'n', value: 7, cell: 0})")
+        scheduled(4)
+        shown, ran = reopened()
+        check(shown == 7 and '"rows":[[7]]' in ran, f"an input the reader set outlives the store's copy ({shown}, {ran[:300]})")
+        page.close()
+    finally:
+        stop(shell)
+
+
+def test_cache_redraw_stale(browser, work):
+    # B26: drawing a stale result's charts again does not make its rows fresh.
+    folder = os.path.join(work, "cache_redraw")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "redraw.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% input n slider min=1 max=5\nSET VARIABLE n = 1;\n\n"
+                "-- %% q\nSELECT $n AS v\n\n/* chart\nmark: bar\nx: v\ny: v\n*/\n")
+    db = os.path.join(folder, "redraw.duckdb")
+    sql(db, f"SELECT count(*) FROM notebook_run('{notebook}', cache := true)")
+    shell, url = serve(folder, notebook, db)
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        # Everything runs (v = 1); the input changes without running, so q's kept result is stale; then only
+        # q's charts are drawn again, from its view, which now gives v = 2.
+        page.evaluate("() => App.api('POST', '/api/run', {text: App.text(), cells: null, redraw: []})")
+        page.evaluate("() => App.api('POST', '/api/variable', {name: 'n', value: 2, cell: 0})")
+        page.evaluate("() => App.api('POST', '/api/run', {text: App.text(), cells: [], redraw: [1]})")
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        state = page.evaluate("() => { const c = document.querySelector(\".nb-cell[data-idx='1']\"); return {outdated: c.classList.contains('outdated'), kept: !!c.querySelector('.nb-output svg, table.nb-grid')} }")
+        check(state["kept"] and state["outdated"], f"a stale result whose charts were drawn again is still stale ({state})")
+        page.close()
+    finally:
+        stop(shell)
+
+
+def test_brush_listeners(browser, work):
+    # B4: drawing a brushable chart again does not add window listeners each time.
+    notebook = os.path.join(work, "brush.sql")
+    shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
+    shell, url = serve(work, notebook)
+    try:
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.add_init_script("""(() => { window.__moves = 0; const add = window.addEventListener;
+            window.addEventListener = function (type) { if (type === 'mousemove') window.__moves++; return add.apply(this, arguments); }; })()""")
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.click("#run-all")
+        page.wait_for_function("!App.running && document.getElementById('status').textContent.startsWith('Ran')", timeout=60000)
+        check(page.locator(".nb-brush-overlay").count() > 0, "the notebook has a brushable chart")
+        before = page.evaluate("window.__moves")
+        page.evaluate("() => { App.render(); App.render(); App.render(); }")
+        after = page.evaluate("window.__moves")
+        check(after == before, f"drawing brushable charts again adds no window listeners ({before} -> {after})")
+        page.close()
+    finally:
+        stop(shell)
 
 
 def test_cache(browser, work):
@@ -660,6 +835,25 @@ def test_exports(browser, work, chromium):
     page.locator(".nb-input select").first.select_option(label="APAC")
     page.wait_for_function("document.querySelector('.nb-md').textContent.includes('APAC')", timeout=30000)
     check(True, "html-wasm: DuckDB-WASM re-runs the notebook's SQL in the page, offline")
+    check(not errors, f"no browser errors in the html-wasm export {errors[:3]}")
+
+    # B14: a variable set in the page has the type the editor gives it, and {{ }} shows a value as the
+    # editor does (DuckDB's own text for it).
+    values = os.path.join(work, "wasm_values.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'test', 'notebooks', 'wasm_values.sql')}', file := '{values}', "
+            f"format := 'html-wasm', wasm_runtime := '{runtime}')")
+    sql(db, "DROP TABLE IF EXISTS w_days")
+    page.goto(still("file://" + values))
+    page.wait_for_function("window.__NB_WASM === true", timeout=60000)
+    page.locator(".nb-input select").first.select_option(index=1)
+    page.wait_for_timeout(500)
+    number = page.locator(".nb-input input[type=number]")
+    number.fill("7")
+    number.dispatch_event("change")
+    page.wait_for_function("document.querySelector('.nb-md').textContent.includes(' 7')", timeout=30000)
+    page.wait_for_timeout(500)
+    text = page.locator(".nb-md").text_content().strip()
+    check(text == "values DOUBLE 7.0 DATE [1, 2] 1.50", f"html-wasm: variables and {{{{ }}}} values match the editor ({text})")
     check(not errors, f"no browser errors in the html-wasm export {errors[:3]}")
 
 
@@ -1311,6 +1505,11 @@ def test_present(browser, work):
     page.goto("file://" + screens + "?ink=off#present=3")
     page.wait_for_function("window.__NB_READY === true")
     moves(lambda: None, "3 / 5", [4, 5], "#present=3 in a link opens the third screen")
+    page.goto("about:blank")
+    page.goto("file://" + screens + "?ink=off#present=99")
+    page.wait_for_function("window.__NB_READY === true")
+    st = present_state(page)
+    check(st["page"] == "5 / 5" and st["hash"] == "#present=5", f"#present=99 shows the last screen and says so in the URL ({st})")
     page.evaluate("window.dispatchEvent(new Event('beforeprint'))")
     st = present_state(page)
     check(not st["on"] and len(st["cells"]) == 8, "printing leaves presenting, so paper gets the whole notebook")
@@ -1406,7 +1605,14 @@ def test_present_editor(browser, work):
     try:
         page = browser.new_page(viewport={"width": 1366, "height": 768})
         errors = watch(page)
-        page.goto(still(url))
+        # A link that opens straight into presenting is not the reader asking to run anything (FORMAT §8).
+        runs = []
+        page.on("request", lambda r: runs.append(r.url) if "/api/run" in r.url else None)
+        page.goto(still(url) + "#present")
+        page.wait_for_selector(".nb-present-page")
+        page.wait_for_timeout(1500)
+        check(not runs and not page.evaluate("App.live"), f"opening the editor at #present runs nothing ({len(runs)} runs)")
+        page.keyboard.press("Escape")
         page.wait_for_selector(".nb-cell")
         page.click("#gear")
         check(page.locator("#view-present").is_visible(), "the gear menu has Present")
@@ -1457,7 +1663,7 @@ def test_present_editor(browser, work):
         page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent === '7 / 7'", timeout=30000)
         check(present_state(page)["cells"] == [10], "a reload comes back to the same screen")
         page.wait_for_function("App.live && !App.running", timeout=30000)
-        check(True, "presenting after a reload runs the notebook, so cached results become live again")
+        check(True, "after a reload the session is still live: inputs and brushes keep working")
         page.keyboard.press("Escape")
         st = present_state(page)
         check(not st["on"] and len(st["cells"]) == 11 and page.locator(".nb-toolbar").is_visible() and page.locator("textarea:visible").count() > 3
@@ -1468,6 +1674,34 @@ def test_present_editor(browser, work):
         check(not errors, f"no browser errors presenting in the editor {errors[:3]}")
     finally:
         stop(shell)
+
+def test_input_widget(browser, work):
+    """B31: an input cell's widget is the same in the editor and in an export (NB.inputWidget)."""
+    db = os.path.join(work, "widget.duckdb")
+    out = os.path.join(work, "widget.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'examples', 'revenue.sql')}', file := '{out}')")
+    page = browser.new_page()
+    page.goto(still("file://" + out))
+    page.wait_for_function("window.__NB_READY === true")
+    differ = page.evaluate("""() => {
+      const cells = [
+        {name: 'n', widget: 'slider', value: 1000, options: {min: '0', max: '5000'}},
+        {name: 'n', widget: 'number', value: null, options: {label: '', step: ''}},
+        {name: 'n', widget: 'text', value: 'x', options: {label: 'Name', placeholder: ''}},
+        {name: 'n', widget: 'date', value: '2026-01-02', options: {min: ''}},
+      ];
+      return cells.map(c => [NB.inputWidget(c, () => {}).outerHTML, NB.inputWidget(c, () => {}, {exported: true}).outerHTML])
+                  .filter(([a, b]) => a !== b);
+    }""")
+    check(not differ, f"an input looks the same in the editor and an export ({differ})")
+    shown = page.evaluate("""() => [1000, 2026, 123.45].map(v =>
+      NB.inputWidget({name: 'n', widget: 'slider', value: v, options: {}}, () => {}).querySelector('.nb-input-value').textContent)""")
+    check(shown == ["1000", "2026", "123.45"], f"a slider shows its exact value: a year is not 2,026, a fraction is not rounded ({shown})")
+    empty = page.evaluate("NB.inputWidget({name: 'n', widget: 'number', value: null, options: {label: '', step: ''}}, () => {}).outerHTML")
+    check("<label>n</label>" in empty and 'step="any"' in empty and "value=" not in empty,
+          f"an empty label= or step= is not set, and an empty number has no value ({empty})")
+    page.close()
+
 
 def test_chart_marks(browser, work):
     """Rules and bands on charts (FORMAT 5.1), in an export of test/notebooks/references.sql."""
@@ -1820,11 +2054,14 @@ def test_peek_cached(browser, work):
         errors = watch(page)
         page.goto(still(url))
         page.wait_for_function("document.querySelectorAll(\".nb-cell[data-idx='3'] table.nb-grid tbody tr\").length === 4", timeout=10000)
+        peeks = []
+        page.on("request", lambda r: peeks.append(r.url) if "/api/peek" in r.url else None)
         area = page.locator(".nb-cell[data-idx='3'] textarea.nb-code-over")
         area.click()
         area.evaluate("e => { const i = e.value.indexOf('count(*)') - 1; e.setSelectionRange(i, i); }")
         page.keyboard.press("ArrowRight")
         page.wait_for_timeout(900)
+        check(not peeks, f"the editor does not ask for peeks the server would refuse ({len(peeks)} sent)")
         refused = page.evaluate(probe)
         check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
               f"a notebook reopened with its cached results is not peeked at until it is run ({refused})")
@@ -2092,7 +2329,13 @@ def main():
         try:
             test_server(browser, work)
             test_metadata_error(browser, work)
+            test_metadata_first(browser, work)
             test_cache(browser, work)
+            test_cache_written_later(browser, work)
+            test_cache_redraw_stale(browser, work)
+            test_cache_variables_reloaded(browser, work)
+            test_input_widget(browser, work)
+            test_brush_listeners(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))

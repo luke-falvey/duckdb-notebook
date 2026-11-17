@@ -16,6 +16,7 @@ namespace notebook {
 
 void Compiler::Typed(const Yaml &spec, Json &render) {
 	auto type = Lower(spec.Str("type"));
+	chart_type = spec.Str("type");
 	render.Set("kind", Json::String(type));
 	auto limit = Limit(spec);
 	auto encodings = Json::Object();
@@ -90,10 +91,9 @@ void Compiler::Typed(const Yaml &spec, Json &render) {
 		render.Set("rows", spec.Get("rows")->ToJson());
 	} else if (type == "map") {
 		std::vector<std::string> items;
-		auto color = Measure(spec.Get("color"), "color", "", nullptr);
 		Json color_enc, size_enc;
+		auto color = Measure(spec.Get("color"), "color", "", &color_enc);
 		if (spec.Get("color")) {
-			Measure(spec.Get("color"), "color", "", &color_enc);
 			encodings.Set("color", color_enc);
 		}
 		auto size = Measure(spec.Get("size"), "size", "", &size_enc);

@@ -24,7 +24,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | R1 | "Prepare a session and run every cell" written six times | Safe | low | −80 | done: `Runner::Prepare` and `Runner::RunAll`; callers that handle each outcome keep their loops; the extra html-wasm and precomputed runs stay (behaviour) |
 | R2 | Per-cell result JSON built twice (server, export) | Safe | low | −40 | done in part: `RunForEditor` moved to `session.cpp`, one `RanFromResult`; the export keeps its own JSON (it reads inputs after the whole run and orders keys differently, so sharing would change exported files) |
 | C1 | Core string helpers copied across files | Safe | low | −45 | done: `notebook/text.hpp` |
-| F1 | Input widget written twice (editor, viewer) | Safe | low | −35 | done: `NB.inputWidget`; its `exported` flag keeps two pages' differences, logged as B31 |
+| F1 | Input widget written twice (editor, viewer) | Safe | low | −35 | done: `NB.inputWidget`; the `exported` flag that kept two pages' differences went with B31 |
 | R3 | Table-function boilerplate (once-state, columns, named params) | Safe | low | −60 | done: `OnceState`/`OnceInit`, `NamedString`/`NamedBool` in `common.cpp`. Not done: the loop-and-compare parameter readers (their NULL handling differs) and the `column` lambdas (no gain) |
 | R4 | Server handler boilerplate (session lookup, runner, notebook) | Safe | low-med | −80 | done in part: `Source(req, body)`. Deferred: `WithRunner` and moving `/api/run`'s loop, which re-indent every handler lambda for little gain after R1 and R2 |
 | C2 | `from=<rel>.<col>` parsed three times | Safe | low | −10 | done: `Cell::InputFrom`, with a test |
@@ -39,7 +39,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | C5 | `chart.cpp` does too much (now ~1370 lines) | Safe | med | ±0 | done: a pure move into `chart.cpp` (513 lines), `chart_grammar.cpp`, `chart_references.cpp`, `chart_typed.cpp`, with the class in `chart_compiler.hpp`. The table of typed-chart handlers was not made: it would reword errors |
 | C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | deferred: one `NotebookMeta` touches the parser, the runner, the cache, the title and a regular expression in `app.js`; more than a structural change should, so left for its own PR |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
-| B1–B31 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
+| B1–B32 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features, B32 from review) | Fix | low | small each | done in the bug-fix PR: one commit per bug ("Fix Bn: …"), each with a test that fails before it; B9 is not a bug; B15–B17 are docs only |
 | DOC1–DOC11 | Docs that disagree with the code | Docs | none | small | done, except DOC1 (`display=`), which is B15 |
 | N1 | Chart rules, bands and notes repeat their checks | Safe | low | −30 | deferred: C5 was kept a pure move so it can be reviewed as one; N1 is easy on top of it, alongside B28 in the same code |
 | N2 | Editor result handling repeated | Safe | low | −20 | done: `show()`, `dropKept()` |
@@ -277,7 +277,11 @@ added another copy of R1's run-every-cell loop. Earlier findings grew:
 ## Bugs found on the way (Fix: not in the refactor)
 
 Agreed with the parent session: after the refactor PR merges, a second PR fixes these, one commit per
-bug, each with a test that fails before the fix. Severity: **medium** = wrong results, a leak, or an
+bug, each with a test that fails before the fix. **Status: all fixed in that PR**, except B9, which
+measuring showed is not a bug. B15–B17 change only the docs, so they have no test. B14's test runs
+with the html-wasm checks (`NOTEBOOK_WASM_RUNTIME`). Two rows changed course while fixing: B13
+refuses `interpolate`, `stack` and `cornerRadius` instead of drawing them, and B16's `default=` does
+not exist, so FORMAT names the `SET VARIABLE` body as the default. Severity: **medium** = wrong results, a leak, or an
 accepted invalid notebook; **low** = an edge case, a wrong message, or an ignored option.
 
 | # | Severity | Bug | Where |
@@ -290,11 +294,11 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B6 | low | `SET VARIABLE "lim"` (quoted): graph sees a setter, `ParameterError` does not | `sql_lexer.cpp:354`, `script.cpp:169-219` |
 | B7 | medium | `chart from=main.monthly` gets no edge; FORMAT says `main.` is ignored | `graph.cpp:120,132` vs `references.cpp:30-44` |
 | B8 | low | Sparkline field error has an empty chart type | `chart.cpp:623,664` |
-| B9 | medium | `/api/catalog` runs a query while a result is live on the same connection | `server.cpp:467-479` |
+| B9 | medium | `/api/catalog` runs a query while a result is live on the same connection | `server.cpp:467-479` Not a bug, checked in the bug-fix PR: `Connection::Query` materialises its result, so the second query cannot disturb the first (a catalog of 2,100 views lists them all). No change. |
 | B10 | low | Export: unknown `format` rejected only after the notebook has run; `data_format`/`interactive` unchecked; `params :=` names unchecked (run checks them); server `hide` unchecked | `export.cpp`, `server.cpp:547` |
 | B11 | low | Markdown export does not apply a prose cell's own `hide=output`; the viewer does | `export.cpp:496-508` |
 | B12 | low | Catalog columns are `draggable` with no `dragstart`; tooltip says click, code uses double-click | `app-extra.js:28-33` |
-| B13 | low | `mark_innerRadius` read by JS but never forwarded; `interpolate`, `stack`, `cornerRadius` forwarded but never drawn | `render-chart.js:469`, `chart.cpp:589` |
+| B13 | low | `mark_innerRadius` read by JS but never forwarded; `interpolate`, `stack`, `cornerRadius` forwarded but never drawn. Fixed: `innerRadius` is forwarded; `stack: true`/`zero` on bars and `interpolate: linear` on lines (what is drawn) are accepted, the rest refused | `render-chart.js:469`, `chart.cpp:589` |
 | B14 | medium | html-wasm viewer re-implements `JsonToSqlLiteral`/`VariableSqlType` partially and formats `{{ }}` differently | `viewer.js:26-34,92-94,166-204` |
 | B15 | low | `display=table\|none` is in the FORMAT §2 option table but nothing reads it. **Change the spec:** drop it; `hide=output` already does this | `docs/FORMAT.md` §2 |
 | B16 | low | FORMAT §3 says an input's file changes only on "save as default", a control that does not exist. **Change the spec:** say moving a widget never changes the file and the default is `default=` | `docs/FORMAT.md:201` |
@@ -305,14 +309,15 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B21 | medium | Opening the editor at `#present` runs the whole notebook, effect cells included, with no reader action; FORMAT §8 and DESIGN §17 say nothing runs until the reader asks | `app.js` present enter, `render-present.js:221-225` |
 | B22 | low | `screen=` is not a layout option for the cache key, so editing it makes the cell and everything below stale | `cache.cpp:34-36` |
 | B23 | low | Peek's refused-function list misses `notebook_cache_clear` (deletes files outside any transaction). Refuse every `notebook_*` but the read-only ones | `peek.cpp:419-422` |
-| B24 | low | A server session loads its cache once; results written later by `notebook_run(cache := true)` never appear and cleared entries keep showing | `server.cpp:158-183` |
+| B24 | low | A server session loads its cache once; results written later by `notebook_run(cache := true)` never appear and cleared entries keep showing. Found while fixing it: restoring a cached input value always failed (DuckDB 2.0 resolves a type name only in a transaction), so a reopened session's inputs were unset until a run | `server.cpp:158-183` |
 | B25 | low | Typed charts silently ignore `rules`, `bands`, `notes` (kpi/gauge `bands` have another shape) | `chart.cpp` typed branch |
 | B26 | low | A redraw marks a stale cache entry fresh (merges charts and takes the current key) | `result_cache.cpp:419-443` |
 | B27 | low | `trusted()` in peek counts cached results as runs, so a reopened page sends peeks the server refuses; `Session::ran` never clears on reload while `trusted` does | `app-peek.js:28`, `server.cpp` |
 | B28 | low | Reference values: `IsNumber` accepts `inf`, `nan`, `0x10` (YAML does not); `inf` dumps as null and the rule vanishes. A note's `color` is not checked to be a scalar | `chart.cpp` |
 | B29 | low | Presenting writes the requested screen to the hash, not the one shown (`#present=99` stays 99) | `render-present.js:136` |
 | B30 | low | A map chart measures `color` twice (`Measure` with and without an encoding); a binned colour adds its `__bin_color` CTE twice | `chart.cpp` map branch |
-| B31 | low | An input looks different in the editor and an export: a slider shows `1000` in one and `1,000` in the other, and an empty `label=` or `step=` counts as unset in one and set in the other (`NB.inputWidget`'s `exported` flag keeps both until fixed) | `render-core.js` `NB.inputWidget` |
+| B31 | low | An input looks different in the editor and an export: a slider shows `1000` in one and `1,000` in the other, and an empty `label=` or `step=` counts as unset in one and set in the other (`NB.inputWidget`'s `exported` flag keeps both until fixed). Fixed on one behaviour: an empty option is unset, and a number shows its exact value (not `2,026` for a year) | `render-core.js` `NB.inputWidget` |
+| B32 | medium | Exports differ between runs: chart queries order only by `x` (and `color`) or not at all, so a parallel aggregate's row order leaks into the data; `examples/charts.sql` sums `DOUBLE` amounts (low bits vary) and two of its queries have no `ORDER BY`. Found by the parent session's review (6 of 6 Markdown exports differed). Fixed by a total order on grouped and sorted queries only: an ungrouped query keeps its source's order (a typed table over `ORDER BY revenue DESC` keeps the top rows), and unsorted horizontal bars order by their category axis | `chart.cpp` `Query`, `examples/charts.sql` |
 
 Also: graph de-duplicates the "defined twice" error by matching the parser's message text
 (`graph.cpp:209-213` against `format.cpp:421-423`); hidden code is not drawn in HTML exports but is
@@ -352,4 +357,4 @@ Unreferenced: `docs/handwriting/*.gif` (1.2 MB) are linked from nowhere; link th
 
 R1, R2, R3, R4, R5, C1, C2, C3, C4, F1, F2, F3, F4, D1, T1 and the T2 test additions, and docs
 DOC1–DOC8. C6 only if it stays purely structural. C5 last, after the chart reference-lines feature has
-merged. R6 deferred (a behaviour change for odd paths). B1–B31 in a second PR after this one. N1–N3 are in scope (N1 with C5).
+merged. R6 deferred (a behaviour change for odd paths). B1–B32 in a second PR after this one. N1–N3 are in scope (N1 with C5).

@@ -85,6 +85,9 @@ static void TestCacheKeys() {
 	// hide=, span= and run= change nothing; an option the cache does not know counts as data.
 	edited = CacheKeys(Analyzed(Replaced(CACHE_NOTEBOOK, "rows=10", "rows=10 hide=code span=6 run=manual")), variables);
 	CHECK(Changed(keys, edited).empty());
+	// B22: nor does screen=, which only says where the cell goes when presenting.
+	edited = CacheKeys(Analyzed(Replaced(CACHE_NOTEBOOK, "rows=10", "rows=10 screen=new")), variables);
+	CHECK(Changed(keys, edited).empty());
 	edited = CacheKeys(Analyzed(Replaced(CACHE_NOTEBOOK, "rows=10", "rows=10 materialize=table")), variables);
 	CHECK(Changed(keys, edited) == "2d 2r 3d 3r 4d 4r 5d 5r ");
 
@@ -137,6 +140,7 @@ static void TestCacheSetting() {
 static void TestCacheEntries() {
 	CacheEntry entry;
 	entry.key = "0123456789abcdef";
+	entry.data = "fedcba9876543210";
 	entry.saved_at = "2026-11-17 10:00:00";
 	entry.result = "{\"status\":\"ok\",\"row_count\":2,\"elapsed_ms\":1.5,\"data\":{\"columns\":[{\"name\":\"a\","
 	               "\"type\":\"INTEGER\"}],\"rows\":[[1],[2]],\"total\":2,\"truncated\":false}}";
@@ -144,7 +148,10 @@ static void TestCacheEntries() {
 	auto text = DumpCacheEntry("monthly", entry);
 	CacheEntry read;
 	CHECK(ParseCacheEntry(text, "monthly", read));
-	CHECK(read.key == entry.key && read.saved_at == entry.saved_at && read.result == entry.result);
+	CHECK(read.key == entry.key && read.data == entry.data && read.saved_at == entry.saved_at &&
+	      read.result == entry.result);
+	// B26: an entry without its data key is from before it was kept, and is not used.
+	CHECK(!ParseCacheEntry(Replaced(text, ",\"data\":\"fedcba9876543210\"", ""), "monthly", read));
 
 	// Anything that is not a whole entry of this format for this cell is ignored.
 	CacheEntry untouched;
@@ -155,9 +162,9 @@ static void TestCacheEntries() {
 	}
 	CHECK(!ParseCacheEntry("not json at all", "monthly", untouched));
 	CHECK(!ParseCacheEntry("[1, 2]", "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1", "\"format\":0"), "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1", "\"format\":2"), "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1,", ""), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2", "\"format\":1"), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2", "\"format\":3"), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2,", ""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"key\":\"0123456789abcdef\"", "\"key\":7"), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"status\":\"ok\"", "\"status\":\"done\""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "[[1],[2]]", "[[1],[2,3]]"), "monthly", untouched));
@@ -194,8 +201,8 @@ static void TestCacheEntries() {
 	      parsed.variables["region"].shown.Str() == "US" && parsed.variables["cutoff"].is_null &&
 	      parsed.variables["cutoff"].type == "DATE" && parsed.variables["cutoff"].shown.IsNull());
 	CHECK(CacheVariableKeys(parsed)["region"] == CacheVariableKey("VARCHAR", "US", false));
-	CHECK(!ParseCacheState("{\"format\":1}", parsed));
-	CHECK(!ParseCacheState("{\"format\":1,\"variables\":{\"a\":{\"type\":\"X\"}}}", parsed));
+	CHECK(!ParseCacheState("{\"format\":2}", parsed));
+	CHECK(!ParseCacheState("{\"format\":2,\"variables\":{\"a\":{\"type\":\"X\"}}}", parsed));
 	CHECK(!ParseCacheState(DumpCacheState(state).substr(0, 20), parsed));
 	CHECK(parsed.variables.size() == 2);
 }
@@ -207,7 +214,7 @@ static void TestCacheFreshness() {
 	auto ids = CacheCellIds(nb);
 	std::map<std::string, CacheEntry> entries;
 	for (size_t i = 0; i < ids.size(); i++) {
-		entries[ids[i]] = CacheEntry {keys[i].result, "2026-11-17 10:00:00", "{\"status\":\"ok\"}"};
+		entries[ids[i]] = CacheEntry {keys[i].result, keys[i].data, "2026-11-17 10:00:00", "{\"status\":\"ok\"}"};
 	}
 	auto stale = [&](const Notebook &notebook, const std::map<std::string, std::string> &values) {
 		std::string result;

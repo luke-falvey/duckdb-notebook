@@ -120,10 +120,13 @@ bool ResultCacheStore::Prepare() {
 		if (in_database) {
 			Connection connection(db);
 			Execute(connection, "CREATE SCHEMA IF NOT EXISTS _notebook");
-			Execute(connection, string("CREATE TABLE IF NOT EXISTS ") + CACHE_TABLE +
-			                        " (name VARCHAR NOT NULL, cell VARCHAR NOT NULL, format INTEGER NOT NULL, key "
-			                        "VARCHAR NOT NULL, saved_at TIMESTAMP NOT NULL, result VARCHAR NOT NULL, PRIMARY "
-			                        "KEY (name, cell))");
+			Execute(connection,
+			        string("CREATE TABLE IF NOT EXISTS ") + CACHE_TABLE +
+			            " (name VARCHAR NOT NULL, cell VARCHAR NOT NULL, format INTEGER NOT NULL, key "
+			            "VARCHAR NOT NULL, data VARCHAR, saved_at TIMESTAMP NOT NULL, result VARCHAR NOT NULL, "
+			            "PRIMARY KEY (name, cell))");
+			// A table made before entries kept their data key (cache format 1).
+			Execute(connection, string("ALTER TABLE ") + CACHE_TABLE + " ADD COLUMN IF NOT EXISTS data VARCHAR");
 		} else {
 			auto &fs = FileSystem::GetFileSystem(db);
 			if (!fs.DirectoryExists(root)) {
@@ -160,11 +163,12 @@ void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, Cac
 			if (!CacheTableExists(connection)) {
 				return;
 			}
-			auto result = Execute(connection,
-			                      string("SELECT cell, key, strftime(saved_at, '%Y-%m-%d %H:%M:%S'), result FROM ") +
-			                          CACHE_TABLE + " WHERE name = ? AND format = ? AND length(result) <= ?",
-			                      {Value(name), Value::INTEGER(notebook::CACHE_FORMAT),
-			                       Value::BIGINT(NumericCast<int64_t>(notebook::CACHE_MAX_RESULT_BYTES))});
+			auto result = Execute(
+			    connection,
+			    string("SELECT cell, key, strftime(saved_at, '%Y-%m-%d %H:%M:%S'), result, coalesce(data, '') FROM ") +
+			        CACHE_TABLE + " WHERE name = ? AND format = ? AND length(result) <= ?",
+			    {Value(name), Value::INTEGER(notebook::CACHE_FORMAT),
+			     Value::BIGINT(NumericCast<int64_t>(notebook::CACHE_MAX_RESULT_BYTES))});
 			while (auto chunk = result->Fetch()) {
 				for (idx_t r = 0; r < chunk->size(); r++) {
 					auto id = chunk->GetValue(0, r).ToString();
@@ -172,8 +176,8 @@ void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, Cac
 					if (id == notebook::CACHE_STATE_ID) {
 						notebook::ParseCacheState(text, state);
 					} else if (std::find(ids.begin(), ids.end(), id) != ids.end() && notebook::ValidCacheResult(text)) {
-						entries[id] = CacheEntry {chunk->GetValue(1, r).ToString(), chunk->GetValue(2, r).ToString(),
-						                          std::move(text)};
+						entries[id] = CacheEntry {chunk->GetValue(1, r).ToString(), chunk->GetValue(4, r).ToString(),
+						                          chunk->GetValue(2, r).ToString(), std::move(text)};
 					}
 				}
 			}
@@ -197,7 +201,8 @@ void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, Cac
 	}
 }
 
-bool ResultCacheStore::Write(const string &id, const string &key, const string &saved_at, const string &text) {
+bool ResultCacheStore::Write(const string &id, const string &key, const string &data, const string &saved_at,
+                             const string &text) {
 	if (!Prepare()) {
 		return false;
 	}
@@ -206,9 +211,9 @@ bool ResultCacheStore::Write(const string &id, const string &key, const string &
 			Connection connection(db);
 			Execute(connection,
 			        string("INSERT OR REPLACE INTO ") + CACHE_TABLE +
-			            " (name, cell, format, key, saved_at, result) VALUES (?, ?, ?, ?, ?::TIMESTAMP, ?)",
-			        {Value(name), Value(id), Value::INTEGER(notebook::CACHE_FORMAT), Value(key), Value(saved_at),
-			         Value(text)});
+			            " (name, cell, format, key, data, saved_at, result) VALUES (?, ?, ?, ?, ?, ?::TIMESTAMP, ?)",
+			        {Value(name), Value(id), Value::INTEGER(notebook::CACHE_FORMAT), Value(key), Value(data),
+			         Value(saved_at), Value(text)});
 			return true;
 		}
 		// Written beside the entry and moved over it, so a reader never sees half an entry.
@@ -223,11 +228,12 @@ bool ResultCacheStore::Write(const string &id, const string &key, const string &
 }
 
 bool ResultCacheStore::Put(const string &id, const CacheEntry &entry) {
-	return Write(id, entry.key, entry.saved_at, in_database ? entry.result : notebook::DumpCacheEntry(id, entry));
+	return Write(id, entry.key, entry.data, entry.saved_at,
+	             in_database ? entry.result : notebook::DumpCacheEntry(id, entry));
 }
 
 bool ResultCacheStore::PutState(const CacheState &state) {
-	return Write(notebook::CACHE_STATE_ID, string("state"), Now(), notebook::DumpCacheState(state));
+	return Write(notebook::CACHE_STATE_ID, string("state"), string(), Now(), notebook::DumpCacheState(state));
 }
 
 void ResultCacheStore::Remove(const string &id) {
@@ -349,10 +355,11 @@ void ResultCache::Load(DatabaseInstance &db, const string &source, const noteboo
 	store.Load(notebook::CacheCellIds(notebook), entries, state);
 }
 
-void ResultCache::RestoreVariables(DatabaseInstance &db, const notebook::Notebook &notebook,
-                                   SessionState &session) const {
+std::set<string> ResultCache::RestoreVariables(DatabaseInstance &db, const notebook::Notebook &notebook,
+                                               SessionState &session) const {
+	std::set<string> restored;
 	if (state.variables.empty()) {
-		return;
+		return restored;
 	}
 	unique_ptr<Connection> connection;
 	for (auto &name : notebook::SettableVariables(notebook)) {
@@ -365,12 +372,16 @@ void ResultCache::RestoreVariables(DatabaseInstance &db, const notebook::Noteboo
 			if (!connection) {
 				connection = make_uniq<Connection>(db);
 			}
-			auto type = TransformStringToLogicalType(found->second.type, *connection->context);
+			// ParseLogicalType binds the type in a transaction of its own (DuckDB 2.0 needs one to resolve a
+			// type name); TransformStringToLogicalType without one always threw here.
+			auto type = connection->context->ParseLogicalType(found->second.type);
 			session.variables[name] =
 			    found->second.is_null ? Value(type) : Value(found->second.text).DefaultCastAs(type);
+			restored.insert(name);
 		} catch (...) { // NOLINT: a value that cannot be restored leaves the variable unset
 		}
 	}
+	return restored;
 }
 
 void ResultCache::UpdateVariables(const SessionState &session) {
@@ -425,7 +436,9 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 		if (!cell.redraw.IsNull()) {
 			// Only the charts were drawn again: the rest of the stored result still stands.
 			auto found = entries.find(id);
-			if (found == entries.end()) {
+			// Only the charts are new: the rows in the entry are those of its data key. If the data has changed
+			// since, the entry stays as it is, stale.
+			if (found == entries.end() || found->second.data != keys[NumericCast<idx_t>(cell.index)].data) {
 				continue;
 			}
 			string error;
@@ -446,6 +459,7 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 		}
 		auto &entry = entries[id];
 		entry.key = keys[NumericCast<idx_t>(cell.index)].result;
+		entry.data = keys[NumericCast<idx_t>(cell.index)].data;
 		entry.saved_at = now;
 		entry.result = std::move(text);
 		store.Put(id, entry);

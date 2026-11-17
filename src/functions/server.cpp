@@ -50,6 +50,9 @@ struct Session {
 	ResultCache cache;
 	//! True once the session has run a cell. Until then the page shows the last results only.
 	bool ran = false;
+	//! The variables whose values came from the store, not from the reader: reading the store again
+	//! refreshes these and keeps the rest.
+	std::set<string> restored;
 	//! Trust (DESIGN section 3): true once the reader has run something. Until then, and again
 	//! after the text is replaced by the file on disk, nothing runs by itself: no peeks.
 	std::atomic<bool> trusted {false};
@@ -118,11 +121,6 @@ string Param(const http::Request &req, const string &key) {
 	return req.has_param(key) ? req.get_param_value(key) : string();
 }
 
-notebook::Notebook Analyze(DatabaseInstance &db, const string &text) {
-	Connection connection(db);
-	return AnalyzeText(*connection.context, text);
-}
-
 Json CellsJson(const notebook::Notebook &notebook) {
 	auto cells = Json::Array();
 	for (auto &cell : notebook.cells) {
@@ -134,12 +132,13 @@ Json CellsJson(const notebook::Notebook &notebook) {
 //! The notebook as the editor shows it. With `results`, also the cached result of every cell that has
 //! one and the input values that go with them: sent when a notebook is opened, not on every edit.
 Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) {
-	auto notebook = Analyze(db, session.text);
+	auto notebook = AnalyzeText(db, session.text);
 	auto json = Json::Object()
 	                .Set("source", Json::String(session.source))
 	                .Set("text", Json::String(session.text))
 	                .Set("preamble", Json::String(notebook.preamble))
 	                .Set("title", Json::String(notebook::NotebookTitle(notebook, session.source)))
+	                .Set("trusted", Json::Bool(session.trusted))
 	                .Set("cells", CellsJson(notebook))
 	                .Set("sql_words", [&]() {
 		                Connection connection(db);
@@ -161,6 +160,24 @@ string Source(const http::Request &req, const Json &body) {
 	return body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb");
 }
 
+//! The last results and input values kept for the session's notebook, to show without running anything.
+void LoadKept(DatabaseInstance &db, Session &session) {
+	auto notebook = notebook::ParseNotebook(session.text);
+	// What the reader set in this session (an input moved before any run) outlives the store's copy.
+	auto shown = session.cache.ShownJson(notebook);
+	for (auto &name : session.restored) {
+		session.state.variables.erase(name);
+	}
+	session.cache = ResultCache();
+	session.cache.Load(db, session.source, notebook);
+	session.restored = session.cache.RestoreVariables(db, notebook, session.state);
+	for (auto &entry : shown.Entries()) {
+		if (session.state.variables.count(entry.first) && !session.restored.count(entry.first)) {
+			session.cache.SetShown(entry.first, entry.second);
+		}
+	}
+}
+
 shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	if (source.empty()) {
 		throw InvalidInputException("No notebook given: add nb=<path> or nb=db:<name> to the URL");
@@ -176,10 +193,7 @@ shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	bool exists = source.compare(0, 3, "db:") == 0 || FileSystem::GetFileSystem(*db).FileExists(source);
 	if (exists) {
 		session->text = ReadNotebookText(*db, source);
-		// The last results and input values, to show without running anything.
-		auto notebook = notebook::ParseNotebook(session->text);
-		session->cache.Load(*db, source, notebook);
-		session->cache.RestoreVariables(*db, notebook, session->state);
+		LoadKept(*db, *session);
 	} else {
 		// A new notebook: it becomes a file when first saved.
 		session->text = "-- %% [markdown]\n/*\n# Untitled\n*/\n\n-- %%\nSELECT 42 AS answer;\n";
@@ -306,6 +320,11 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto session = GetSession(state, Param(req, "nb"));
 		           std::lock_guard<std::mutex> guard(session->lock);
 		           auto db = Database(state);
+		           if (!session->ran) {
+			           // Until this session runs something, the store is the truth: a scheduled notebook_run(cache :=
+			           // true) may have written results since, or notebook_cache_clear removed them.
+			           LoadKept(*db, *session);
+		           }
 		           SendJson(res, NotebookJson(*db, *session, true));
 	           }));
 
@@ -433,6 +452,10 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            auto db = Database(state);
 		            Runner runner(*db, session->state);
 		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		            try { // setting an input never fails because of the [notebook] cell: a run reports that
+			            runner.ApplyMetadata(notebook, session->source);
+		            } catch (std::exception &) { // NOLINT
+		            }
 		            string type;
 		            if (auto cell = body.Get("cell")) {
 			            if (!cell->IsNull()) {
@@ -452,6 +475,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            // The value goes with the cached results, so a reopened notebook shows the same input.
 		            runner.Save();
 		            session->cache.SetShown(name, value);
+		            session->restored.erase(name);
 		            session->cache.Record(*db, session->source, notebook, session->state, {});
 		            SendJson(res, Json::Object().Set("ok", Json::Bool(true)).Set("sql", Json::String(sql)));
 	            }));
@@ -512,6 +536,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto db = Database(state);
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		           runner.ApplyMetadata(notebook, session->source);
 		           auto sql = notebook::DisplaySql(CellAt(notebook, Param(req, "cell")));
 		           if (sql.empty()) {
 			           throw InvalidInputException("That cell has no result to page through");
@@ -534,6 +559,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto db = Database(state);
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		           runner.ApplyMetadata(notebook, session->source);
 		           auto values = Json::Array();
 		           for (auto &value : InputChoices(runner.Conn(), CellAt(notebook, Param(req, "cell")), 1000)) {
 			           values.Push(ValueToJson(value));
@@ -547,6 +573,10 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    std::lock_guard<std::mutex> guard(session->lock);
 		    auto db = Database(state);
 		    Runner runner(*db, session->state);
+		    try { // the catalog lists what is there: a metadata failure is reported by a run, not here
+			    runner.ApplyMetadata(AnalyzeText(*runner.Conn().context, session->text), session->source);
+		    } catch (std::exception &) { // NOLINT
+		    }
 		    auto tables = Json::Array();
 		    auto result = runner.Conn().Query(
 		        "SELECT t.database_name, t.schema_name, t.table_name, t.kind, list({'name': c.column_name, 'type': "
@@ -639,6 +669,11 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    ExportOptions options;
 		    options.format = Param(req, "format").empty() ? "html" : Param(req, "format");
 		    options.interactive = Param(req, "interactive");
+		    auto problem =
+		        notebook::ExportOptionError(options.format, Param(req, "interactive"), string(), Param(req, "hide"));
+		    if (!problem.empty()) {
+			    throw InvalidInputException("%s", problem);
+		    }
 		    options.hide = Param(req, "hide") == "none" ? string() : Param(req, "hide");
 		    string note;
 		    auto document = ExportDocument(*db, text, session->source, options, note);

@@ -326,7 +326,25 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 			}
 		}
 	}
-	return Json::Object().Set("db", Json::String(Base64(Gzip(bytes)))).Set("tables", exported).Set("setup", setup);
+	// The SQL type of every variable the page can set, as the editor gives it (VariableSqlType), so a value
+	// set in the page is the same value.
+	auto types = Json::Object();
+	for (auto &cell : notebook.cells) {
+		if (cell.kind == notebook::CellKind::INPUT && !cell.name.empty()) {
+			types.Set(cell.name, Json::String(VariableSqlType(connection, notebook, cell, cell.name)));
+		}
+		for (auto &spec : cell.charts) {
+			auto name = notebook::ChartSelectionInfo(spec).name;
+			if (!name.empty()) {
+				types.Set(name, Json::String(VariableSqlType(connection, notebook, cell, name)));
+			}
+		}
+	}
+	return Json::Object()
+	    .Set("db", Json::String(Base64(Gzip(bytes))))
+	    .Set("tables", exported)
+	    .Set("setup", setup)
+	    .Set("types", types);
 }
 
 //! The SQL a viewer running DuckDB-WASM needs per cell to refresh it.
@@ -423,7 +441,7 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
                       string &note) {
 	auto &format = options.format;
 	if (format == "sql") {
-		auto notebook = notebook::ParseNotebook(text);
+		auto notebook = AnalyzeText(db, text);
 		ThrowIfInvalid(notebook, source);
 		return notebook::ExpandNotebook(notebook, source);
 	}
@@ -447,7 +465,7 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 			throw InvalidInputException("html-wasm export needs the DuckDB-WASM runtime: build it with wasm/build.sh "
 			                            "and pass wasm_runtime := '<directory>' (or set NOTEBOOK_WASM_RUNTIME)");
 		}
-		auto notebook = notebook::ParseNotebook(text);
+		auto notebook = AnalyzeText(db, text);
 		auto cells = Json::Array();
 		for (auto &cell_json : payload.Get("cells")->Items()) {
 			auto copy = cell_json;
@@ -653,12 +671,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 		} else if (key == "chrome") {
 			result->options.chrome = value.GetValue<string>();
 		} else if (key == "hide") {
-			auto hide = value.GetValue<string>();
-			if (hide != "code" && hide != "output" && hide != "all" && hide != "none") {
-				throw InvalidInputException("notebook_export: hide must be 'code', 'output', 'all' or 'none', not '%s'",
-				                            hide);
-			}
-			result->options.hide = hide == "none" ? string() : hide;
+			result->options.hide = value.GetValue<string>();
 		} else if (key == "data_format") {
 			result->options.data_format = value.GetValue<string>();
 		} else if (key == "params") {
@@ -671,7 +684,25 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 			}
 		}
 	}
-	auto &format = result->options.format;
+	auto &options = result->options;
+	auto problem = notebook::ExportOptionError(options.format, options.interactive, options.data_format, options.hide);
+	if (!problem.empty()) {
+		throw InvalidInputException("notebook_export: %s", problem);
+	}
+	if (options.hide == "none") {
+		options.hide.clear();
+	}
+	// Parameters must name inputs or variables nothing sets, as notebook_run checks them.
+	if (!options.params.empty()) {
+		auto notebook = ReadNotebook(context, result->source);
+		for (auto &param : options.params) {
+			auto error = notebook::ParameterError(notebook, param.first);
+			if (!error.empty()) {
+				throw InvalidInputException("notebook_export: %s", error);
+			}
+		}
+	}
+	auto &format = options.format;
 	if (result->to.empty()) {
 		auto stem = result->source.compare(0, 3, "db:") == 0 ? result->source.substr(3) : result->source;
 		auto dot = stem.rfind('.');

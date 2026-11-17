@@ -166,7 +166,6 @@ statements create. Effect cells run only when asked (see [DESIGN.md §3](DESIGN.
 |---|---|---|
 | `run` | `auto`, `manual` | Default `auto` for query cells, `manual` for effect cells |
 | `materialize` | `view`, `table` | `view` (default) keeps the result lazy. `table` stores it as a temp table: use for slow queries that many cells read |
-| `display` | `table`, `none` | Whether to show the result grid |
 
 ### Ordering
 
@@ -234,7 +233,8 @@ SET VARIABLE <name> = <default>;
 
 The body is a real statement that sets the default, so the file still works outside the notebook. When
 someone moves the widget, the runner sets the variable for that session and re-runs the cells that read
-it. The file changes only if they choose "save as default".
+it. Moving a widget never changes the file: the default is the `SET VARIABLE` statement in the body,
+edited like any other text.
 
 | Widget | Variable type | Options |
 |---|---|---|
@@ -316,6 +316,13 @@ color: category
 **`mark`**: `line`, `area`, `bar`, `point` (or `circle`, `square`), `rect`, `rule`, `tick`, `text`,
 `arc`, `boxplot`, `histogram`, `density`, `hexbin`.
 
+**Mark options**, beside `mark` in a spec or a layer: `opacity` (a number), `strokeWidth` (lines),
+`point: true` (dots on every point of a line) and `innerRadius` (an `arc` drawn as a donut, in pixels).
+Of Vega-Lite's options, those that match what is drawn are accepted: `stack: true` or `zero` on bars
+(bars coloured by a group are always stacked) and `interpolate: linear` on lines. Any other `stack` or
+`interpolate`, and `cornerRadius`, are an error. In a `layers:` chart, an option at the top applies to
+every layer.
+
 **Channels**: `x`, `y`, `x2`, `y2`, `theta`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`,
 and `facet` (`{row: …, col: …}`) for small multiples. A channel is a column name or a mapping:
 
@@ -375,7 +382,8 @@ Optional keys: `label` (short text by the line or in the band; `{value}`, or `{f
 band, is replaced by the value in the axis's format) and `color`. The axis grows to include a rule or
 band outside the data. Quote a category that reads as an aggregate (`x: "max"`). `rules` and `bands`
 are read from the top level of the spec only and need a chart with axes (not `arc`); `boxplot` takes
-values but not aggregates. Any other key or shape is a chart error.
+values but not aggregates. Any other key or shape is a chart error, and so are `rules`, `bands` and
+`notes` on a typed chart (§5.3), apart from the `bands` of a `kpi` or `gauge`, which colour its value.
 
 **Notes.** `notes:` writes short remarks on the chart, each attached to a data position, so they stay
 with the data when the chart is resized or its query returns other rows:
@@ -501,7 +509,6 @@ format: 1
 attach:
   - {path: warehouse.duckdb, as: wh, read_only: true}
 extensions: [spatial]
-theme: light
 timing: false
 cache: false
 width: wide
@@ -567,12 +574,13 @@ whole directory, so it never needs adding to a project's own:
 ```
 
 For a notebook stored in a database (`db:<name>`), in that database's `_notebook.cache` table,
-`(name, cell, format, key, saved_at, result)` with one row per cell and one for `@state`. A remote
+`(name, cell, format, key, data, saved_at, result)` with one row per cell and one for `@state`. A remote
 notebook (a URL, an object store) and a notebook not saved yet have no cache. A location that cannot be
 written means no cache, quietly; a run never fails because of it.
 
-**An entry** is JSON: `{format, cell, key, saved_at, result}`. `result` is exactly what the editor was
-sent when the cell ran: its status and error, row count and timing, the rendered prose, the first page
+**An entry** is JSON: `{format, cell, key, data, saved_at, result}`. `key` and `data` are the cell's keys when the
+result was made (a redraw of its charts may refresh it only while `data` still matches). `result` is exactly
+what the editor was sent when the cell ran: its status and error, row count and timing, the rendered prose, the first page
 of a query's rows (as many as the page shows), each chart's render description and data, an input's
 value and choices. Rows and chart data are JSON, as everywhere else in the editor (DESIGN §12), not
 Parquet or Arrow. A result larger than **4 MiB** of JSON is not kept: that cell reopens empty, as
@@ -586,7 +594,7 @@ edited. This is why naming cells you care about matters (§2).
 **The key.** Every entry records the key of the cell when its result was made. The key is a hash of:
 
 - the cell's kind, name, widget and SQL (or text), and its options except the ones that only lay it
-  out (`hide`, `span`, `run`);
+  out (`hide`, `span`, `run`, `screen`);
 - the keys of the cells it reads, so a change anywhere upstream reaches every cell below it;
 - the type and value of every variable its SQL reads (unset, `NULL` and a value are all different).
 

@@ -51,6 +51,8 @@ void WriteTextFile(DatabaseInstance &db, const string &path, const string &conte
 
 //! Parses and analyses notebook text with DuckDB's parser available through `context`.
 notebook::Notebook AnalyzeText(ClientContext &context, const string &text);
+//! Same, through a connection of its own, for code that has no ClientContext.
+notebook::Notebook AnalyzeText(DatabaseInstance &db, const string &text);
 
 //! Creates the `_notebook` schema, tables and view if they are missing.
 void EnsureStorage(Connection &connection, const string &database);

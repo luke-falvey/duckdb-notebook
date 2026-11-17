@@ -21,15 +21,40 @@
     return out;
   }
 
-  // A SQL literal for a value set by a widget or a chart selection.
+  // A SQL literal for a value set by a widget or a chart selection, of the variable's SQL type as the export
+  // recorded it (payload.wasm.types). The same literal the server makes: JsonToSqlLiteral in script.cpp.
+  function quote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
+  // `DATE[]` -> `DATE`; any other type is its own element type.
+  function elementType(type) { return /\[\]$/.test(type) ? type.slice(0, -2) : type; }
+  // The type of one field of `STRUCT(lo DATE, hi DATE)`; any other type applies to every field.
+  function fieldType(type, field) {
+    var open = type.indexOf('(');
+    if (type.slice(0, 6) !== 'STRUCT' || open < 0) return type;
+    for (var i = open + 1, depth = 0, start = i; i < type.length; i++) {
+      var c = type[i];
+      if (c === '(') depth++;
+      else if ((c === ',' || c === ')') && depth === 0) {
+        var part = type.slice(start, i).replace(/^ +/, ''), space = part.indexOf(' ');
+        var name = part.slice(0, space);
+        if (name.length >= 2 && name[0] === '"') name = name.slice(1, -1);
+        if (space >= 0 && name === field) return part.slice(space + 1);
+        start = i + 1;
+      } else if (c === ')') depth--;
+    }
+    return '';
+  }
   function literal(v, type) {
-    if (v === null || v === undefined) return 'NULL';
-    if (Array.isArray(v)) return '[' + v.map(function (x) { return literal(x, type); }).join(', ') + ']';
-    if (typeof v === 'object') return '{' + Object.keys(v).map(function (k) { return "'" + k.replace(/'/g, "''") + "': " + literal(v[k], type); }).join(', ') + '}';
+    type = type || '';
+    var cast = type ? '::' + type : '';
+    if (v === null || v === undefined) return 'NULL' + cast;
     if (typeof v === 'boolean') return v ? 'true' : 'false';
-    if (typeof v === 'number') return String(v);
-    var s = "'" + String(v).replace(/'/g, "''") + "'";
-    return type ? s + '::' + type : s;
+    if (Array.isArray(v)) return '[' + v.map(function (x) { return literal(x, elementType(type)); }).join(', ') + ']';
+    if (typeof v === 'object') return '{' + Object.keys(v).map(function (k) { return quote(k) + ': ' + literal(v[k], fieldType(type, k)); }).join(', ') + '}';
+    return (typeof v === 'number' ? String(v) : quote(v)) + cast;
+  }
+  function setVariable(name, value) {
+    var types = payload.wasm.types || {};
+    return wasm.query('SET VARIABLE "' + name.replace(/"/g, '""') + '" = ' + literal(value, types[name])).then(refresh);
   }
 
   function option(cell, key, fallback) { return cell.options && cell.options[key] != null ? cell.options[key] : fallback; }
@@ -48,10 +73,6 @@
     } else if (cell.error) {
       holder.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
     }
-  }
-
-  function widgetType(cell) {
-    return { date: 'DATE', daterange: 'DATE', number: 'DOUBLE', slider: 'DOUBLE' }[cell.widget] || '';
   }
 
   // What a cell shows: its code (never while presenting, as in the editor's reading view) and its
@@ -117,7 +138,7 @@
           shown++;
         } else if (cell.kind === 'input') {
           var enabled = !!wasm || !!pre[cell.name];
-          box.appendChild(NB.inputWidget(cell, onInput, { exported: true, enabled: enabled, values: wasm ? null : pre[cell.name] }));
+          box.appendChild(NB.inputWidget(cell, onInput, { enabled: enabled, values: wasm ? null : pre[cell.name] }));
           shown++;
         } else if (cell.kind === 'chart') {
           if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
@@ -157,7 +178,7 @@
   function onInput(cell, value) {
     if (wasm) {
       cell.value = value;
-      wasm.query('SET VARIABLE "' + cell.name.replace(/"/g, '""') + '" = ' + literal(value, widgetType(cell))).then(refresh);
+      setVariable(cell.name, value);
       return;
     }
     var p = payload.precomputed;
@@ -173,20 +194,8 @@
 
   // ---- html-wasm ----
   function onSelect(name, value) {
-    var type = '';
-    current.forEach(function (c) {
-      (c.chart ? [c.chart] : []).concat(c.charts || []).forEach(function (chart) {
-        var r = chart && chart.render;
-        if (r && r.selection && r.selection.as === name) {
-          (r.layers || []).forEach(function (l) {
-            var e = l.encoding[(r.selection.channels || ['x'])[0]];
-            if (e && e.type === 'temporal') type = 'TIMESTAMP';
-          });
-        }
-      });
-    });
     selected[name] = value;
-    wasm.query('SET VARIABLE "' + name.replace(/"/g, '""') + '" = ' + literal(value, type)).then(refresh);
+    setVariable(name, value);
   }
 
   function refresh() {
@@ -196,11 +205,12 @@
         return Promise.all([table].concat((cell.charts || []).map(redrawChart)));
       }
       if (cell.kind === 'markdown' && cell.expressions && cell.expressions.length) {
-        return Promise.all(cell.expressions.map(function (x) { return wasm.query('SELECT (' + x.sql + ')'); })).then(function (results) {
+        // DuckDB writes the value as text, as the server does (Value::ToString).
+        return Promise.all(cell.expressions.map(function (x) { return wasm.query('SELECT CAST((' + x.sql + ') AS VARCHAR)'); })).then(function (results) {
           var text = '', at = 0;
           cell.expressions.forEach(function (x, i) {
             var v = results[i].rows[0] ? results[i].rows[0][0] : null;
-            text += cell.content.slice(at, x.begin) + '\uE000' + (v === null ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v)) + '\uE001';
+            text += cell.content.slice(at, x.begin) + '\uE000' + (v === null ? 'NULL' : String(v)) + '\uE001';
             at = x.end;
           });
           cell.output = text + cell.content.slice(at);

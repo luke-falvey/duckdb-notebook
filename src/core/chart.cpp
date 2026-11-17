@@ -245,6 +245,14 @@ Json Compiler::Encoding(const Channel &channel, const std::string &column) {
 	return json;
 }
 
+std::string Positions(size_t count) {
+	std::string positions;
+	for (size_t i = 1; i <= count; i++) {
+		positions += (i > 1 ? ", " : "") + std::to_string(i);
+	}
+	return positions;
+}
+
 std::string Compiler::Query(const std::vector<std::string> &items, bool group, const std::string &order,
                             const std::string &limit) {
 	std::string sql = "WITH __src AS (" + source + ")";
@@ -262,8 +270,15 @@ std::string Compiler::Query(const std::vector<std::string> &items, bool group, c
 	if (group) {
 		sql += "\nGROUP BY ALL";
 	}
+	// Rows a chart draws come in a total order, so they, and which of them survive the LIMIT, are the same on
+	// every run: an explicit order is completed by every column's position, and a grouped query (whose rows a
+	// parallel aggregate returns in any order) is ordered by them. An ungrouped query with no order keeps its
+	// source's order, which DuckDB preserves through a scan and a LIMIT; one inside a CTE (no limit) is left
+	// alone.
 	if (!order.empty()) {
-		sql += "\nORDER BY " + order;
+		sql += "\nORDER BY " + order + ", " + Positions(items.size());
+	} else if (group && !limit.empty()) {
+		sql += "\nORDER BY " + Positions(items.size());
 	}
 	if (!limit.empty()) {
 		sql += "\nLIMIT " + limit;
@@ -299,7 +314,7 @@ std::string Compiler::Field(const Yaml &spec, const std::string &key, bool requi
 	auto channel = ParseChannel(key, spec.Get(key));
 	if (!channel.present) {
 		if (required) {
-			Fail(spec.Str("type") + " chart needs " + key + ":");
+			Fail((spec.Get("type") ? spec.Str("type") : chart_type) + " chart needs " + key + ":");
 		}
 		return "";
 	}
@@ -324,18 +339,19 @@ std::string SelectionField(const Yaml &spec, const std::string &channel) {
 
 std::string TypeClass(const std::string &duckdb_type) {
 	auto t = Lower(duckdb_type);
-	if (t.compare(0, 4, "date") == 0 || t.compare(0, 9, "timestamp") == 0 || t.compare(0, 4, "time") == 0) {
-		return "temporal";
+	if (t.find('[') != std::string::npos) {
+		return "nominal"; // a list or array of anything
 	}
-	static const char *const NUMERIC[] = {"tinyint",   "smallint", "integer", "bigint",   "hugeint", "utinyint",
-	                                      "usmallint", "uinteger", "ubigint", "uhugeint", "float",   "double",
-	                                      "decimal",   "real",     "int",     "numeric"};
-	for (auto n : NUMERIC) {
-		if (t.compare(0, std::char_traits<char>::length(n), n) == 0) {
-			return "quantitative";
-		}
+	if (t.compare(0, 4, "date") == 0 || t.compare(0, 4, "time") == 0) {
+		return "temporal"; // date, time, timestamp, timestamp_ns, ... with time zone
 	}
-	return "nominal";
+	// Numbers are matched by their whole name (DECIMAL's width and scale aside), so INTERVAL is not INT.
+	auto base = Trim(t.substr(0, t.find('(')));
+	static const std::set<std::string> NUMERIC = {"tinyint",   "smallint", "integer", "bigint",   "hugeint", "utinyint",
+	                                              "usmallint", "uinteger", "ubigint", "uhugeint", "float",   "double",
+	                                              "decimal",   "real",     "int",     "numeric",  "int1",    "int2",
+	                                              "int4",      "int8",     "float4",  "float8",   "varint",  "bignum"};
+	return NUMERIC.count(base) ? "quantitative" : "nominal";
 }
 
 std::string RelationSql(const std::string &from) {
@@ -419,6 +435,15 @@ ChartPlan CompileChart(const std::string &spec_text, const std::string &from, co
 		render.Set("title", title->ToJson());
 	}
 	if (spec.Get("type")) {
+		// Rules, bands and notes are drawn on a grammar chart's axes. KPIs and gauges have bands of their
+		// own ({from, to, color}), which colour the value.
+		auto type = Lower(spec.Str("type"));
+		for (auto key : {"rules", "bands", "notes"}) {
+			if (spec.Get(key) && !(std::string(key) == "bands" && (type == "kpi" || type == "gauge"))) {
+				compiler.Fail(std::string(key) +
+				              ": needs a grammar chart (mark: or layers:), not type: " + spec.Str("type"));
+			}
+		}
 		compiler.Typed(spec, render);
 		render.Set("spec", spec.ToJson());
 	} else {
@@ -473,39 +498,10 @@ ChartPlan CompileChart(const std::string &spec_text, const std::string &from, co
 
 std::string RewriteVariables(const std::string &sql) {
 	std::string out;
-	SqlScanner scan(sql);
 	size_t copied = 0;
-	while (!scan.Done()) {
-		auto state = scan.CurrentState();
-		size_t at = scan.Position();
-		scan.Advance();
-		if (state != SqlScanner::State::CODE || sql[at] != '$' ||
-		    scan.CurrentState() == SqlScanner::State::DOLLAR_STRING) {
-			continue;
-		}
-		size_t p = at + 1;
-		std::string name;
-		size_t end = p;
-		if (p < sql.size() && sql[p] == '"') {
-			end = p + 1;
-			while (end < sql.size() && sql[end] != '"') {
-				name += sql[end++];
-			}
-			end++;
-		} else {
-			while (end < sql.size() && (std::isalnum(static_cast<unsigned char>(sql[end])) || sql[end] == '_')) {
-				end++;
-			}
-			name = sql.substr(p, end - p);
-			if (name.empty() || std::isdigit(static_cast<unsigned char>(name[0]))) {
-				continue;
-			}
-		}
-		out += sql.substr(copied, at - copied) + "getvariable(" + QuoteString(name) + ")";
-		copied = end;
-		while (scan.Position() < end && !scan.Done()) {
-			scan.Advance();
-		}
+	for (auto &ref : VariableRefs(sql)) {
+		out += sql.substr(copied, ref.start - copied) + "getvariable(" + QuoteString(ref.name) + ")";
+		copied = ref.end;
 	}
 	return out + sql.substr(copied);
 }

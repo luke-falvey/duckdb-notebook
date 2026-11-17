@@ -69,6 +69,11 @@ notebook::Notebook AnalyzeText(ClientContext &context, const string &text) {
 	return notebook;
 }
 
+notebook::Notebook AnalyzeText(DatabaseInstance &db, const string &text) {
+	Connection connection(db);
+	return AnalyzeText(*connection.context, text);
+}
+
 notebook::Notebook ReadNotebook(ClientContext &context, const string &path) {
 	return AnalyzeText(context, ReadNotebookText(context, path));
 }

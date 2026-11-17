@@ -461,7 +461,7 @@
   function arcChart(svgEl, layer, color, w, h) {
     var enc = layer.encoding, value = enc.theta || enc.y || enc.size;
     var total = layer.rows.reduce(function (a, r) { return a + Math.max(0, Number(r[value.column]) || 0); }, 0) || 1;
-    var cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 10, inner = layer.mark_innerRadius || 0, angle = -Math.PI / 2;
+    var cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 10, inner = Math.max(0, Math.min(Number(layer.mark_innerRadius) || 0, R - 4)), angle = -Math.PI / 2;
     layer.rows.forEach(function (r) {
       var v = Math.max(0, Number(r[value.column]) || 0), a2 = angle + v / total * Math.PI * 2;
       var large = a2 - angle > Math.PI ? 1 : 0;
@@ -487,6 +487,16 @@
     return scale.kind === 'time' ? { lo: isoLocal(v1), hi: isoLocal(v2) } : { lo: v1, hi: v2 };
   }
 
+  // The brush being dragged, if any. One pair of window listeners serves every brush on the page, so drawing
+  // a chart again adds none.
+  var dragging = null, listening = false;
+  function listenForBrushes() {
+    if (listening) return;
+    listening = true;
+    window.addEventListener('mousemove', function (e) { if (dragging) dragging.move(e); });
+    window.addEventListener('mouseup', function (e) { var b = dragging; dragging = null; if (b) b.end(e); });
+  }
+
   function brush(g, sel, x, y, w, h, opts) {
     var channels = sel.channels || ['x'], onX = channels.indexOf('x') >= 0, onY = channels.indexOf('y') >= 0;
     var overlay = s('rect', { x: 0, y: 0, width: w, height: h, fill: 'transparent', 'class': 'nb-brush-overlay' }, g);
@@ -498,9 +508,7 @@
       var y0 = onY ? Math.min(a[1], b[1]) : 0, y1 = onY ? Math.max(a[1], b[1]) : h;
       rect.setAttribute('x', x0); rect.setAttribute('y', y0); rect.setAttribute('width', x1 - x0); rect.setAttribute('height', y1 - y0);
     }
-    overlay.addEventListener('mousedown', function (e) { start = local(e); draw(start, start); e.preventDefault(); });
-    window.addEventListener('mousemove', function (e) { if (start) draw(start, local(e)); });
-    window.addEventListener('mouseup', function (e) {
+    function finish(e) {
       if (!start) return;
       var end = local(e), a = start;
       start = null;
@@ -510,6 +518,13 @@
       else if (onY) value = invertRange(y, a[1], end[1]);
       else value = invertRange(x, a[0], end[0]);
       opts.onSelect && opts.onSelect(sel.as, value);
+    }
+    listenForBrushes();
+    overlay.addEventListener('mousedown', function (e) {
+      start = local(e);
+      draw(start, start);
+      dragging = { move: function (m) { if (start) draw(start, local(m)); }, end: finish };
+      e.preventDefault();
     });
     // Show the current selection after a redraw.
     var cur = opts.selected && opts.selected[sel.as];

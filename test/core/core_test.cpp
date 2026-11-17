@@ -74,6 +74,9 @@ static void TestReferencedVariables() {
 	std::string name;
 	CHECK(IsSetVariable("-- default\nset variable Region = 'EU'", name) && name == "Region");
 	CHECK(!IsSetVariable("SET threads = 4", name));
+	// B6: a quoted variable name is a variable too, with "" read as one quote.
+	CHECK(IsSetVariable("SET VARIABLE \"lim\" = 5", name) && name == "lim");
+	CHECK(IsSetVariable("SET VARIABLE \"my \"\"x\"\"\" = 5", name) && name == "my \"x\"");
 }
 
 static void TestParseNotebook() {
@@ -254,6 +257,12 @@ static void TestGraph() {
 	// Markdown and charts may read cells below them.
 	CHECK((md.depends_on == std::vector<int> {2, 5}));
 	CHECK((RunOrder(nb) == std::vector<int> {1, 2, 3, 4, 5, 0}));
+	// B7: main. and temp. qualifiers name the same relation, wherever a cell names one.
+	auto qualified = Analyzed("-- %% monthly\nSELECT 1 AS n;\n-- %% chart from=main.Monthly\n/*\nmark: bar\n*/\n"
+	                          "-- %% input pick select from=temp.monthly.n\nSET VARIABLE pick = 1;\n");
+	CHECK(qualified.cells[1].reads == std::vector<std::string> {"monthly"});
+	CHECK((qualified.cells[1].depends_on == std::vector<int> {0}));
+	CHECK((qualified.cells[2].depends_on == std::vector<int> {0}));
 
 	// The input's own variable and what a cell creates for itself are not reads.
 	auto self = Analyzed("-- %%\nCREATE TABLE t AS SELECT 1; INSERT INTO t SELECT 2;\n");
@@ -302,6 +311,8 @@ static void TestParameters() {
 	CHECK(ParameterError(nb, "region").empty());
 	CHECK(ParameterError(nb, "picked").empty());
 	CHECK(ParameterError(nb, "lim").find("set by the SQL cell at line 3") != std::string::npos);
+	auto quoted = ParseNotebook("-- %% q\nSET VARIABLE \"lim\" = 5;\nSELECT $lim;\n");
+	CHECK(!ParameterError(quoted, "lim").empty() && UndefinedVariables(quoted).empty());
 	CHECK(ParameterError(nb, "nope").find("no input or variable named 'nope'") != std::string::npos);
 }
 
@@ -342,6 +353,9 @@ static void TestLiterals() {
 	CHECK(JsonToSqlLiteral(ParseJson("\"it's\"", error)) == "'it''s'");
 	CHECK(JsonToSqlLiteral(ParseJson("5", error), "DOUBLE") == "5::DOUBLE");
 	CHECK(JsonToSqlLiteral(ParseJson("[\"a\", \"b\"]", error), "VARCHAR[]") == "['a'::VARCHAR, 'b'::VARCHAR]");
+	// B20: raw JSON text (kept by the result cache) becomes the literal of the value it holds.
+	CHECK(JsonToSqlLiteral(Json::Raw("[1, 2]"), "INTEGER[]") == "[1::INTEGER, 2::INTEGER]");
+	CHECK(JsonToSqlLiteral(Json::Raw("\"EU\"")) == "'EU'");
 	CHECK(JsonToSqlLiteral(ParseJson("{\"lo\": \"2026-01-01\", \"hi\": null}", error), "STRUCT(lo DATE, hi DATE)") ==
 	      "{'lo': '2026-01-01'::DATE, 'hi': NULL::DATE}");
 	CHECK(JsonToSqlLiteral(ParseJson("{\"x\": {\"lo\": 1, \"hi\": 2}}", error),
@@ -352,6 +366,9 @@ static void TestLiterals() {
 	CHECK(!IsConnectionState("SET VARIABLE x = 1") && !IsConnectionState("CREATE TABLE t (a INT)"));
 	CHECK(RewriteVariables("SELECT $a, '$b', $\"c d\", $1 -- $e") ==
 	      "SELECT getvariable('a'), '$b', getvariable('c d'), $1 -- $e");
+	// B5: a quoted name with a doubled quote is one variable, as ReferencedVariables reads it.
+	CHECK(RewriteVariables("SELECT $\"a\"\"b\" + 1") == "SELECT getvariable('a\"b') + 1");
+	CHECK(ReferencedVariables("SELECT $\"a\"\"b\"") == std::vector<std::string> {"a\"b"});
 }
 
 static void TestChartCompiler() {
@@ -395,6 +412,91 @@ static void TestChartCompiler() {
 	CHECK(CompileChart("mark: bar\nfilter: unknown\n", "orders", context).error.find("not the selection") !=
 	      std::string::npos);
 	CHECK(TypeClass("TIMESTAMP WITH TIME ZONE") == "temporal" && TypeClass("DECIMAL(9,2)") == "quantitative");
+	// B2: a type is matched by its whole name, not a prefix: INTERVAL is not an integer, nor a list a number.
+	CHECK(TypeClass("INTERVAL") == "nominal" && TypeClass("INTEGER[]") == "nominal" &&
+	      TypeClass("INT") == "quantitative");
+	CHECK(TypeClass("TIME WITH TIME ZONE") == "temporal" && TypeClass("TIMESTAMP_NS") == "temporal" &&
+	      TypeClass("BIGINT") == "quantitative");
+}
+
+static void TestChartErrors() {
+	ChartContext context;
+	// B8: a field missing inside a sparkline names the chart's type, not an empty one.
+	auto plan = CompileChart("type: kpi\nvalue: n\nsparkline: {y: n}\n", "t", context);
+	CHECK(plan.error == "kpi chart needs x:");
+	// B25: rules, bands and notes belong to grammar charts; a typed chart says so rather than drop them.
+	plan = CompileChart("type: table\nrules: [{y: 5}]\n", "t", context);
+	CHECK(plan.error == "rules: needs a grammar chart (mark: or layers:), not type: table");
+	plan = CompileChart("type: sankey\nsource: a\ntarget: b\nvalue: n\nnotes: [{text: hi, x: 1}]\n", "t", context);
+	CHECK(plan.error == "notes: needs a grammar chart (mark: or layers:), not type: sankey");
+	// KPIs and gauges colour their value by bands of their own: {from, to, color}.
+	plan = CompileChart("type: kpi\nvalue: n\nbands: [{from: 0, to: 5, color: red}]\n", "t", context);
+	CHECK(plan.error.empty());
+	// B13: a donut's innerRadius reaches the renderer; mark options the renderer does not draw are refused
+	// rather than dropped.
+	ChartContext slices;
+	slices.columns = {{"g", "VARCHAR"}, {"n", "BIGINT"}};
+	plan = CompileChart("mark: arc\ntheta: n\ncolor: g\ninnerRadius: 40\n", "t", slices);
+	CHECK(plan.error.empty());
+	auto inner = plan.error.empty() ? plan.render.Get("layers")->Items()[0].Get("mark_innerRadius") : nullptr;
+	CHECK(inner && inner->Num() == 40);
+	plan = CompileChart("mark: line\nx: g\ny: n\ninterpolate: step\n", "t", slices);
+	CHECK(plan.error == "interpolate: only lines are drawn, and only as interpolate: linear");
+	plan = CompileChart("mark: bar\nx: g\ny: n\nstack: false\n", "t", slices);
+	CHECK(plan.error == "stack: only bars are stacked, and only as stack: true or zero");
+	plan = CompileChart("layers:\n  - {mark: bar, x: g, y: n, cornerRadius: 4}\n", "t", slices);
+	CHECK(plan.error == "cornerRadius: is not drawn; the sketchbook renderer has no such mark option");
+	// What is drawn anyway is accepted: bars coloured by a group are stacked, and lines are straight.
+	for (auto spec : {"mark: bar\nx: g\ny: n\ncolor: g\nstack: true\n", "mark: bar\nx: g\ny: n\nstack: zero\n",
+	                  "mark: line\nx: g\ny: n\ninterpolate: linear\n"}) {
+		CHECK(CompileChart(spec, "t", slices).error.empty());
+	}
+	plan = CompileChart("mark: area\nx: g\ny: n\nstack: true\n", "t", slices);
+	CHECK(plan.error == "stack: only bars are stacked, and only as stack: true or zero");
+	plan = CompileChart("mark: bar\nx: g\ny: n\nstack: normalize\n", "t", slices);
+	CHECK(plan.error == "stack: only bars are stacked, and only as stack: true or zero");
+	plan = CompileChart("mark: area\nx: g\ny: n\ninterpolate: linear\n", "t", slices);
+	CHECK(plan.error == "interpolate: only lines are drawn, and only as interpolate: linear");
+	// A layered chart's top-level option applies to its layers.
+	plan = CompileChart("interpolate: step\nlayers:\n  - {mark: line, x: g, y: n}\n", "t", slices);
+	CHECK(plan.error == "interpolate: only lines are drawn, and only as interpolate: linear");
+	// B30: a map's binned colour is binned once (its step is one CTE, not two).
+	ChartContext columns;
+	columns.columns = {{"g", "GEOMETRY"}, {"n", "BIGINT"}};
+	plan = CompileChart("type: map\ngeometry: g\ncolor: {field: n, bin: true}\n", "t", columns);
+	auto &sql = plan.queries.at(0);
+	auto first = sql.find("__bin_color AS");
+	CHECK(plan.error.empty() && first != std::string::npos &&
+	      sql.find("__bin_color AS", first + 1) == std::string::npos);
+	// B32: a grouped or ordered chart query orders all its rows, so the data a chart (or an export) gets is
+	// the same on every run, however DuckDB's parallel aggregate happens to return it. An ungrouped query
+	// with no order of its own keeps its source's order. This is the exact guard; the SQL test that exports
+	// a gallery three times can only catch a difference when one happens.
+	ChartContext sales;
+	sales.columns = {{"region", "VARCHAR"}, {"category", "VARCHAR"}, {"amount", "DOUBLE"}};
+	auto ends_ordered = [](const std::string &sql, const std::string &order) {
+		auto at = sql.rfind("\nORDER BY ");
+		if (at == std::string::npos) {
+			return false;
+		}
+		auto end = sql.find('\n', at + 1);
+		return sql.substr(at + 10, end == std::string::npos ? std::string::npos : end - at - 10) == order;
+	};
+	plan = CompileChart("mark: bar\nx: region\ny: {field: amount, agg: sum}\ncolor: category\n", "t", sales);
+	CHECK(plan.error.empty() && ends_ordered(plan.queries.at(0), "x, color, 1, 2, 3"));
+	// A horizontal bar without sort: keeps its categories in order, not sorted by value.
+	plan = CompileChart("mark: bar\nx: {field: amount, agg: sum}\ny: region\n", "t", sales);
+	CHECK(plan.error.empty() && ends_ordered(plan.queries.at(0), "y, 1, 2"));
+	// A table, a raw spec or ungrouped arc slices read their source in its own order: an ORDER BY there would
+	// change which rows the LIMIT keeps (the top 3 of an ORDER BY revenue DESC source).
+	for (auto spec :
+	     {"type: table\nlimit: 3\n", "type: vega-lite\nspec: {mark: bar}\n", "mark: arc\ntheta: amount\n"}) {
+		plan = CompileChart(spec, "(SELECT * FROM sales ORDER BY amount DESC)", sales);
+		CHECK(plan.error.empty() && plan.queries.at(0).find("ORDER BY 1") == std::string::npos);
+	}
+	plan = CompileChart("type: table\nlimit: 3\n", "t", sales);
+	CHECK(plan.queries.at(0).find("\nORDER BY") == std::string::npos &&
+	      plan.queries.at(0).find("\nLIMIT 3") != std::string::npos);
 }
 
 static void TestChartReferences() {
@@ -464,6 +566,11 @@ static void TestChartReferences() {
 	CHECK(fails("rules:\n  - {label: x}\n", "needs x: or y:"));
 	CHECK(fails("rules:\n  - {x: 2026-01-01, y: 3}\n", "needs x: or y:"));
 	CHECK(fails("rules:\n  - {y: lots}\n", "must be a number or one of avg"));
+	// B28: a number is written in decimal; inf, nan and 0x10 are not numbers (inf would vanish as null).
+	CHECK(fails("rules:\n  - {y: inf}\n", "must be a number or one of avg"));
+	CHECK(fails("rules:\n  - {y: nan}\n", "must be a number or one of avg"));
+	CHECK(fails("rules:\n  - {y: 0x10}\n", "must be a number or one of avg"));
+	CHECK(CompileChart(base + "rules:\n  - {y: -1.5e3}\n", "orders", context).error.empty());
 	CHECK(fails("rules:\n  - {y: avg, lable: Average}\n", "unknown key 'lable'"));
 	CHECK(fails("rules:\n  - {x: avg}\n", "not defined for dates"));
 	CHECK(fails("rules:\n  - {y: {field: nope, agg: max}}\n", "no column named 'nope'"));
@@ -514,6 +621,8 @@ static void TestChartNotes() {
 	CHECK(fails("notes: {x: 1}\n", "notes: must be a list"));
 	CHECK(fails("notes:\n  - hello\n", "each item is a mapping"));
 	CHECK(fails("notes:\n  - {text: hello}\n", "needs x: or y:"));
+	// B28: a note's colour is one value, as a rule's is.
+	CHECK(fails("notes:\n  - {text: hi, y: 3, color: [red, blue]}\n", "color must be text"));
 	CHECK(fails("notes:\n  - {x: 2026-06-01}\n", "needs text:"));
 	CHECK(fails("notes:\n  - {x: 2026-06-01, y: high, text: a}\n", "y must be a number, not 'high'"));
 	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, side: north}\n", "side must be above, below, left or right"));
@@ -534,6 +643,8 @@ static void TestCellOptions() {
 	                        "-- %% c rows=0\nSELECT 3;\n-- %% d rows=lots\nSELECT 4;\n-- %% e hide=all\nSELECT 5;\n");
 	CHECK(nb.cells[0].errors.empty() && nb.cells[0].Option("rows") == "25");
 	CHECK(nb.cells[1].errors.size() == 1 && nb.cells[1].errors[0].find("hide=everything") != std::string::npos);
+	// B18: the message lists every value hide= takes, none included.
+	CHECK(nb.cells[1].errors[0].find("hide=none") != std::string::npos);
 	CHECK(nb.cells[2].errors.size() == 1 && nb.cells[3].errors.size() == 1);
 	CHECK(nb.cells[4].errors.empty());
 	// screen= says where a cell goes when the notebook is presented.
@@ -634,6 +745,23 @@ static void TestDocument() {
 	payload.Set("hide", Json::String("output"));
 	md = MarkdownDocument(payload);
 	CHECK(md.find("boom") == std::string::npos && md.find("| 1 |") == std::string::npos && md.find("# Title") == 0);
+	// B11: as in the HTML viewer, a prose or input cell's own hide=output leaves it out; the export's
+	// hide= does not.
+	auto own = ParseJson(R"({"hide": "", "cells": [
+	  {"kind": "markdown", "output": "# Kept"}, {"kind": "markdown", "output": "Hidden prose", "options": {"hide": "output"}},
+	  {"kind": "input", "name": "r", "options": {"hide": "all"}, "value": "EU"}]})",
+	                     error);
+	md = MarkdownDocument(own);
+	CHECK(md.find("# Kept") == 0 && md.find("Hidden prose") == std::string::npos && md.find("EU") == std::string::npos);
+}
+
+static void TestExportOptions() {
+	// B10: export options are checked before anything runs.
+	CHECK(ExportOptionError("", "", "", "").empty() && ExportOptionError("pdf", "precomputed", "csv", "none").empty());
+	CHECK(ExportOptionError("docx", "", "", "").find("Unknown export format 'docx'") == 0);
+	CHECK(ExportOptionError("html", "live", "", "") == "interactive must be 'precomputed', not 'live'");
+	CHECK(ExportOptionError("data", "", "xlsx", "") == "data_format must be 'parquet' or 'csv', not 'xlsx'");
+	CHECK(ExportOptionError("html", "", "", "everything").find("hide must be") == 0);
 }
 
 static void TestTimingSetting() {
@@ -676,11 +804,13 @@ int main() {
 	TestJson();
 	TestLiterals();
 	TestChartCompiler();
+	TestChartErrors();
 	TestChartReferences();
 	TestChartNotes();
 	TestCellOptions();
 	TestDocument();
 	TestQueryCharts();
+	TestExportOptions();
 	TestTimingSetting();
 	TestWidthSetting();
 	TestCache();

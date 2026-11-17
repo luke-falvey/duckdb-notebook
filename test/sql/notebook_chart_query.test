@@ -20,7 +20,7 @@ SELECT replace(queries[1], chr(10), ' ') FROM notebook_chart_query('mark: bar
 x: g
 y: {field: i, agg: sum}', 'nb_chart_t')
 ----
-WITH __src AS (SELECT * FROM "nb_chart_t") SELECT "g" AS "x", sum("i") AS "y" FROM __src GROUP BY ALL ORDER BY x LIMIT 10000
+WITH __src AS (SELECT * FROM "nb_chart_t") SELECT "g" AS "x", sum("i") AS "y" FROM __src GROUP BY ALL ORDER BY x, 1, 2 LIMIT 10000
 
 # A line over many rows is downsampled with M4 in SQL
 query I

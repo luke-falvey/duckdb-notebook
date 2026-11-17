@@ -133,7 +133,7 @@ var Present = (function () {
     }
     if (P.shown !== lastShown) { scroller.scrollTop = 0; lastShown = P.shown; }
     indicator();
-    writeHash(P.at + 1);
+    writeHash(P.shown + 1);
   };
 
   // The page number, in the corner, with a faint way out for those without a keyboard.
@@ -168,7 +168,8 @@ var Present = (function () {
   // ---- Entering, leaving, moving --------------------------------------------------------------
   P.prefix = function () { return P.on ? 'p' + P.run : ''; };
 
-  P.enter = function (at) {
+  // `opened` is true when the page was opened at a screen (a link, a reload), not asked by the reader.
+  P.enter = function (at, opened) {
     if (P.on || !host) return;
     P.on = true;
     // Each presentation is written afresh: its pieces are keyed to this run (P.prefix).
@@ -178,7 +179,7 @@ var Present = (function () {
     document.body.classList.add('presenting');
     window.scrollTo(0, 0);
     if (window.Ink) Ink.fresh();
-    if (host.enter) host.enter();
+    if (host.enter) host.enter(!opened);
     host.render();
   };
 
@@ -221,7 +222,7 @@ var Present = (function () {
   P.start = function (h) {
     host = h;
     var n = readHash();
-    if (n) P.enter(n - 1);
+    if (n) P.enter(n - 1, true);
   };
 
   document.addEventListener('keydown', function (e) {

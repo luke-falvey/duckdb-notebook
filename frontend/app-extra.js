@@ -24,10 +24,13 @@ var AppExtra = (function () {
       Object.keys(groups).sort().forEach(function (g) {
         side.appendChild(NB.el('div', { 'class': 'nb-coltype', text: g }));
         groups[g].forEach(function (t) {
-          var d = NB.el('details', {}, [NB.el('summary', { text: t.name + (t.kind === 'view' ? ' (view)' : ''), title: 'Click a name to insert it', draggable: 'true' })]);
+          // A click on a table opens it to show its columns, so a double-click inserts its name.
+          var d = NB.el('details', {}, [NB.el('summary', { text: t.name + (t.kind === 'view' ? ' (view)' : ''), title: 'Double-click to insert the name, or drag it into a cell', draggable: 'true' })]);
           d.querySelector('summary').addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', t.qualified); });
           (t.columns || []).forEach(function (col) {
-            d.appendChild(NB.el('div', { 'class': 'nb-col', onclick: function () { X.insert(col.name); }, draggable: 'true' }, [NB.el('span', { text: col.name }), NB.el('span', { 'class': 'nb-coltype', text: col.type })]));
+            var row = NB.el('div', { 'class': 'nb-col', title: 'Click to insert the name, or drag it into a cell', onclick: function () { X.insert(col.name); }, draggable: 'true' }, [NB.el('span', { text: col.name }), NB.el('span', { 'class': 'nb-coltype', text: col.type })]);
+            row.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', col.name); });
+            d.appendChild(row);
           });
           d.querySelector('summary').addEventListener('dblclick', function () { X.insert(t.qualified); });
           side.appendChild(d);
@@ -71,7 +74,6 @@ var AppExtra = (function () {
     var cells = App.cells, rowH = 30, w = 760, h = cells.length * rowH + 10;
     box.className = 'nb-graph';
     var svg = NB.svg('svg', { viewBox: '0 0 ' + w + ' ' + h, width: '100%' }, box);
-    var maxDepth = 0;
     cells.forEach(function (c, i) {
       var y = 5 + i * rowH;
       var r = NB.svg('rect', { x: 200, y: y, width: 340, height: rowH - 8, rx: 4, 'class': c.state || 'stale' }, svg);
@@ -80,10 +82,11 @@ var AppExtra = (function () {
       var t = NB.svg('text', { x: 208, y: y + 16 }, svg);
       t.textContent = NB.kindName(c) + '  ' + (c.name || '(line ' + c.start_line + ')') + '  [' + (c.state || 'stale') + ']';
       (c.depends_on || []).forEach(function (d, k) {
+        // The curve bends left by three quarters of its control points' offset: at most 120 of the 200px
+        // to the left of the boxes, so the deepest stays in the view box.
         var y0 = 5 + d * rowH + (rowH - 8) / 2, y1 = y + (rowH - 8) / 2, depth = 20 + ((i + d + k) % 8) * 20;
-        maxDepth = Math.max(maxDepth, depth);
-        var forward = d > i;
-        NB.svg('path', { d: 'M200,' + y0 + 'C' + (200 - depth * 2) + ',' + y0 + ' ' + (200 - depth * 2) + ',' + y1 + ' 200,' + y1, 'class': 'edge', 'stroke-dasharray': forward ? '4 3' : null }, svg);
+        var forward = d > i, bend = 200 - depth;
+        NB.svg('path', { d: 'M200,' + y0 + 'C' + bend + ',' + y0 + ' ' + bend + ',' + y1 + ' 200,' + y1, 'class': 'edge', 'stroke-dasharray': forward ? '4 3' : null }, svg);
         NB.svg('circle', { cx: 200, cy: y1, r: 2.5, fill: 'var(--nb-muted)' }, svg);
       });
       if ((c.errors || []).length) { var e = NB.svg('text', { x: 548, y: y + 16, fill: 'var(--nb-error)' }, svg); e.textContent = c.errors[0].slice(0, 30); }

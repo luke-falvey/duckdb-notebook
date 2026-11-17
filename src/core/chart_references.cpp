@@ -15,12 +15,7 @@
 namespace notebook {
 
 bool Compiler::IsNumber(const std::string &text) {
-	if (text.empty()) {
-		return false;
-	}
-	char *end = nullptr;
-	std::strtod(text.c_str(), &end);
-	return end && *end == '\0';
+	return IsDecimalNumber(text);
 }
 
 bool Compiler::IsReferenceAgg(const std::string &name) {
@@ -317,6 +312,10 @@ void Compiler::Notes(const Yaml &spec, Json &render) {
 			}
 		}
 		if (auto color = item.Get("color")) {
+			if (!color->IsScalar()) {
+				Fail("notes: color must be text");
+				return;
+			}
 			json.Set("color", Json::String(color->scalar));
 		}
 		if (!error.empty()) {

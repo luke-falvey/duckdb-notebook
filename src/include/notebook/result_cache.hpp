@@ -1,5 +1,7 @@
 #pragma once
 
+#include <set>
+
 #include "duckdb.hpp"
 #include "notebook/cache.hpp"
 #include "notebook/session.hpp"
@@ -48,7 +50,7 @@ private:
 
 	bool Prepare();
 	string FilePath(const string &id) const;
-	bool Write(const string &id, const string &key, const string &saved_at, const string &text);
+	bool Write(const string &id, const string &key, const string &data, const string &saved_at, const string &text);
 	vector<string> StoredIds();
 };
 
@@ -75,8 +77,10 @@ public:
 	void Load(DatabaseInstance &db, const string &source, const notebook::Notebook &notebook);
 
 	//! Gives a session that has not run anything the last values of the notebook's inputs and
-	//! selections, so it agrees with the results shown. Runs no SQL.
-	void RestoreVariables(DatabaseInstance &db, const notebook::Notebook &notebook, SessionState &session) const;
+	//! selections, so it agrees with the results shown. Leaves the variables the session already has.
+	//! Returns the names it set. Runs no SQL.
+	std::set<string> RestoreVariables(DatabaseInstance &db, const notebook::Notebook &notebook,
+	                                  SessionState &session) const;
 
 	//! Values for CacheKeys: the session's variables, and for those it has not set, the ones recorded
 	//! with the cached results.

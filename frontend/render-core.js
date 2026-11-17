@@ -106,8 +106,19 @@ var NB = (function () {
     return String(v);
   };
 
-  NB.isNumericType = function (t) { return /INT|FLOAT|DOUBLE|DECIMAL|REAL|NUMERIC/i.test(t || ''); };
-  NB.isTemporalType = function (t) { return /^(DATE|TIME|TIMESTAMP)/i.test(t || ''); };
+  // A DuckDB type's class, as TypeClass in src/core/chart.cpp decides it: numbers by their whole name
+  // (so INTERVAL and POINT are not numbers), date and time types by prefix, lists never.
+  var NUMERIC_TYPES = ['tinyint', 'smallint', 'integer', 'bigint', 'hugeint', 'utinyint', 'usmallint', 'uinteger', 'ubigint',
+    'uhugeint', 'float', 'double', 'decimal', 'real', 'int', 'numeric', 'int1', 'int2', 'int4', 'int8', 'float4', 'float8',
+    'varint', 'bignum'];
+  NB.typeClass = function (t) {
+    t = String(t || '').toLowerCase();
+    if (t.indexOf('[') >= 0) return 'nominal';
+    if (t.slice(0, 4) === 'date' || t.slice(0, 4) === 'time') return 'temporal';
+    return NUMERIC_TYPES.indexOf(t.split('(')[0].trim()) >= 0 ? 'quantitative' : 'nominal';
+  };
+  NB.isNumericType = function (t) { return NB.typeClass(t) === 'quantitative'; };
+  NB.isTemporalType = function (t) { return NB.typeClass(t) === 'temporal'; };
 
   // ---- Markdown -----------------------------------------------------------------------------
   // CommonMark-ish: headings, paragraphs, emphasis, code, links, lists, quotes, rules, tables and
@@ -380,17 +391,16 @@ var NB = (function () {
     return r.kind || 'chart ' + (k + 1);
   };
 
-  // An input cell's widget. onChange(cell, value) fires when the reader changes it. opts.values: the only
-  // values offered (a precomputed export's select); opts.enabled === false disables it. opts.exported keeps
-  // what the export viewer has always done differently from the editor: an empty label= or step= counts as
-  // set, a number shows with thousands separators, and an empty number input has no value attribute.
+  // An input cell's widget, the same in the editor and an export. onChange(cell, value) fires when the
+  // reader changes it. opts.values: the only values offered (a precomputed export's select);
+  // opts.enabled === false disables it.
   NB.inputWidget = function (cell, onChange, opts) {
     opts = opts || {};
-    var exported = !!opts.exported, values = opts.values;
+    var values = opts.values;
+    // An option given empty (label=, step=) is not set.
     var option = function (key, fallback) {
-      var o = cell.options || {};
-      if (exported) return o[key] != null ? o[key] : fallback;
-      return fallback === undefined ? o[key] : o[key] || fallback;
+      var o = (cell.options || {})[key];
+      return o == null || o === '' ? fallback : o;
     };
     var box = NB.el('div', { 'class': 'nb-input' });
     box.appendChild(NB.el('label', { text: option('label', cell.name) }));
@@ -412,9 +422,10 @@ var NB = (function () {
     } else if (w === 'checkbox') {
       control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
     } else if (w === 'slider' || w === 'number') {
-      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : exported ? NB.formatNumber(v) : String(v) });
+      // The exact value: a year is 2026, not 2,026, and 123.45 is not rounded.
+      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : String(v) });
       var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option('min'), max: option('max'), step: option('step', 'any'),
-        value: v == null && !exported ? '' : v, oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
+        value: v, oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
       box.appendChild(input);
       box.appendChild(shown);
     } else if (w === 'date') {

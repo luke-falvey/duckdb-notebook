@@ -74,14 +74,14 @@ true
 
 # An entry holds what the editor shows: the page of rows and the chart's data
 query IIII
-SELECT content LIKE '{"format":1,"cell":"kept","key":"%', content LIKE '%"rows":[[4,1],[5,2],[6,0],[7,1],[8,2],[9,0]]%', content LIKE '%"charts":[{"render":%', content LIKE '%"datasets":[{%' FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json')
+SELECT content LIKE '{"format":2,"cell":"kept","key":"%', content LIKE '%"rows":[[4,1],[5,2],[6,0],[7,1],[8,2],[9,0]]%', content LIKE '%"charts":[{"render":%', content LIKE '%"datasets":[{%' FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json')
 ----
 true	true	true	true
 
 query I
 SELECT content FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/@state.json')
 ----
-{"format":1,"variables":{"lowest":{"type":"INTEGER","value":"4","shown":4}}}
+{"format":2,"variables":{"lowest":{"type":"INTEGER","value":"4","shown":4}}}
 
 # Running again with another value keeps the new results, all fresh for that value
 statement ok
@@ -133,10 +133,10 @@ statement ok
 COPY (SELECT 'this is not json') TO '{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json' (FORMAT csv, HEADER false, QUOTE '')
 
 statement ok
-COPY (SELECT '{"format":1') TO '{TEST_DIR}/.duckdb-notebook/nb_cache/by_group.json' (FORMAT csv, HEADER false, QUOTE '')
+COPY (SELECT '{"format":2') TO '{TEST_DIR}/.duckdb-notebook/nb_cache/by_group.json' (FORMAT csv, HEADER false, QUOTE '')
 
 statement ok
-COPY (SELECT replace(content, '{"format":1', '{"format":0') FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json')) TO '{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json' (FORMAT csv, HEADER false, QUOTE '', DELIMITER '|')
+COPY (SELECT replace(content, '{"format":2', '{"format":1') FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json')) TO '{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json' (FORMAT csv, HEADER false, QUOTE '', DELIMITER '|')
 
 query I
 SELECT idx FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
@@ -237,10 +237,10 @@ SELECT idx, status FROM notebook_cache('db:nb_cache_test') ORDER BY idx
 query III
 SELECT cell, format, result LIKE '{"status":"ok"%' FROM _notebook.cache WHERE name = 'nb_cache_test' AND cell NOT LIKE '@%' ORDER BY cell
 ----
-by_group	1	true
-kept	1	true
-lowest	1	true
-nb_cache_numbers	1	true
+by_group	2	true
+kept	2	true
+lowest	2	true
+nb_cache_numbers	2	true
 
 # A new version of the stored notebook makes what changed stale
 statement ok

@@ -63,6 +63,8 @@ var App = (function () {
     A.cells = [];
     A.merge(data.cells);
     A.kept(data);
+    // Whether the server will answer peeks: a cached result shown on opening is not a run.
+    A.trusted = !!data.trusted;
     A.lastText = data.text;
     A.dirty = false;
     // Code is written when a notebook is opened or reloaded from disk, never while it is typed.
@@ -173,6 +175,7 @@ var App = (function () {
     if (A.running) return Promise.resolve();
     A.running = true;
     A.live = true;
+    A.trusted = true;
     $('interrupt').hidden = false;
     (indexes || A.cells.map(function (_, i) { return i; })).concat(redraw || []).forEach(function (i) { if (A.cells[i]) A.cells[i].state = 'running'; });
     A.render();
@@ -590,13 +593,14 @@ var App = (function () {
   var wasReading = false;
   A.present = {
     render: function () { A.render(); },
-    // Presenting is the reading view, a screen at a time. A session that has not run yet runs first:
-    // cached results (FORMAT §8) show at once, but inputs and brushing need a live session.
-    enter: function () {
+    // Presenting is the reading view, a screen at a time. Asked for by the reader, a session that has not
+    // run yet runs first: cached results (FORMAT §8) show at once, but inputs and brushing need a live
+    // session. A page opened at #present runs nothing until the reader asks (FORMAT §8).
+    enter: function (asked) {
       wasReading = A.reading;
       A.reading = true;
       A.menu(false);
-      if (!A.running && !A.live) A.run(null);
+      if (asked && !A.running && !A.live) A.run(null);
     },
     leave: function () { A.reading = wasReading; }
   };

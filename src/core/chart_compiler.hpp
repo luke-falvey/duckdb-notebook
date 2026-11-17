@@ -38,6 +38,9 @@ struct Channel {
 	std::string end_expr;
 };
 
+//! `1, 2, ..., count`: every column of a query by position, for an ORDER BY.
+std::string Positions(size_t count);
+
 class Compiler {
 public:
 	Compiler(const ChartContext &context, const std::string &from) : context(context), from(from) {
@@ -46,6 +49,8 @@ public:
 	const ChartContext &context;
 	std::string from;
 	std::string error;
+	//! A typed chart's `type:`, as written, for error messages from nested specs such as a sparkline.
+	std::string chart_type;
 	ChartPlan plan;
 
 	const ColumnInfo *Column(const std::string &name) const;

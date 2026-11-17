@@ -12,7 +12,7 @@
 
 namespace notebook {
 
-const int CACHE_FORMAT = 1;
+const int CACHE_FORMAT = 2;
 const size_t CACHE_MAX_RESULT_BYTES = 4 * 1024 * 1024;
 const char *const CACHE_STATE_ID = "@state";
 
@@ -33,7 +33,7 @@ struct KeyText {
 
 //! Options that never change a result: where and whether the cell is shown, and when it runs.
 bool IsLayoutOption(const std::string &key) {
-	return key == "hide" || key == "span" || key == "run";
+	return key == "hide" || key == "span" || key == "run" || key == "screen";
 }
 
 //! Options that change what a cell shows but not what the cells reading it get.
@@ -342,6 +342,7 @@ std::string DumpCacheEntry(const std::string &id, const CacheEntry &entry) {
 	    .Set("format", Json::Number(CACHE_FORMAT))
 	    .Set("cell", Json::String(id))
 	    .Set("key", Json::String(entry.key))
+	    .Set("data", Json::String(entry.data))
 	    .Set("saved_at", Json::String(entry.saved_at))
 	    .Set("result", Json::Raw(entry.result))
 	    .Dump();
@@ -358,8 +359,9 @@ bool ParseCacheEntry(const std::string &text, const std::string &id, CacheEntry 
 		return false;
 	}
 	auto cell = StringField(json, "cell"), key = StringField(json, "key"), saved_at = StringField(json, "saved_at");
+	auto data = StringField(json, "data");
 	auto result = json.Get("result");
-	if (!cell || *cell != id || !key || key->empty() || !saved_at || !result || !ValidResult(*result)) {
+	if (!cell || *cell != id || !key || key->empty() || !data || !saved_at || !result || !ValidResult(*result)) {
 		return false;
 	}
 	auto dumped = result->Dump();
@@ -367,6 +369,7 @@ bool ParseCacheEntry(const std::string &text, const std::string &id, CacheEntry 
 		return false;
 	}
 	entry.key = *key;
+	entry.data = *data;
 	entry.saved_at = *saved_at;
 	entry.result = std::move(dumped);
 	return true;

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
 
 namespace notebook {
 
@@ -86,6 +87,10 @@ std::string MarkdownDocument(const Json &payload) {
 		auto hide = options && options->Get("hide") ? options->Get("hide")->Str() : std::string();
 		bool show_code = !Hides(hide, "code") && !Hides(global_hide, "code");
 		bool show_output = !Hides(hide, "output") && !Hides(global_hide, "output");
+		// Prose and inputs are what a reader came for: only their own hide= leaves them out (as in viewer.js).
+		if ((kind == "markdown" || kind == "input") && Hides(hide, "output")) {
+			continue;
+		}
 		if (kind == "markdown") {
 			if (auto output = cell.Get("output")) {
 				out += output->Str() + "\n\n";
@@ -135,6 +140,24 @@ std::string NotebookTitle(const Notebook &notebook, const std::string &source) {
 		}
 	}
 	return FileStem(source);
+}
+
+std::string ExportOptionError(const std::string &format, const std::string &interactive, const std::string &data_format,
+                              const std::string &hide) {
+	static const std::set<std::string> FORMATS = {"html", "html-wasm", "md", "sql", "data", "pdf"};
+	if (!format.empty() && !FORMATS.count(format)) {
+		return "Unknown export format '" + format + "'; expected html, html-wasm, md, sql, data or pdf";
+	}
+	if (!interactive.empty() && interactive != "precomputed") {
+		return "interactive must be 'precomputed', not '" + interactive + "'";
+	}
+	if (!data_format.empty() && data_format != "parquet" && data_format != "csv") {
+		return "data_format must be 'parquet' or 'csv', not '" + data_format + "'";
+	}
+	if (!hide.empty() && hide != "code" && hide != "output" && hide != "all" && hide != "none") {
+		return "hide must be 'code', 'output', 'all' or 'none', not '" + hide + "'";
+	}
+	return std::string();
 }
 
 } // namespace notebook
