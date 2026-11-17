@@ -85,6 +85,9 @@ static void TestCacheKeys() {
 	// hide=, span= and run= change nothing; an option the cache does not know counts as data.
 	edited = CacheKeys(Analyzed(Replaced(CACHE_NOTEBOOK, "rows=10", "rows=10 hide=code span=6 run=manual")), variables);
 	CHECK(Changed(keys, edited).empty());
+	// B22: nor does screen=, which only says where the cell goes when presenting.
+	edited = CacheKeys(Analyzed(Replaced(CACHE_NOTEBOOK, "rows=10", "rows=10 screen=new")), variables);
+	CHECK(Changed(keys, edited).empty());
 	edited = CacheKeys(Analyzed(Replaced(CACHE_NOTEBOOK, "rows=10", "rows=10 materialize=table")), variables);
 	CHECK(Changed(keys, edited) == "2d 2r 3d 3r 4d 4r 5d 5r ");
 
@@ -155,9 +158,9 @@ static void TestCacheEntries() {
 	}
 	CHECK(!ParseCacheEntry("not json at all", "monthly", untouched));
 	CHECK(!ParseCacheEntry("[1, 2]", "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1", "\"format\":0"), "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1", "\"format\":2"), "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1,", ""), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2", "\"format\":1"), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2", "\"format\":3"), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2,", ""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"key\":\"0123456789abcdef\"", "\"key\":7"), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"status\":\"ok\"", "\"status\":\"done\""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "[[1],[2]]", "[[1],[2,3]]"), "monthly", untouched));
@@ -194,8 +197,8 @@ static void TestCacheEntries() {
 	      parsed.variables["region"].shown.Str() == "US" && parsed.variables["cutoff"].is_null &&
 	      parsed.variables["cutoff"].type == "DATE" && parsed.variables["cutoff"].shown.IsNull());
 	CHECK(CacheVariableKeys(parsed)["region"] == CacheVariableKey("VARCHAR", "US", false));
-	CHECK(!ParseCacheState("{\"format\":1}", parsed));
-	CHECK(!ParseCacheState("{\"format\":1,\"variables\":{\"a\":{\"type\":\"X\"}}}", parsed));
+	CHECK(!ParseCacheState("{\"format\":2}", parsed));
+	CHECK(!ParseCacheState("{\"format\":2,\"variables\":{\"a\":{\"type\":\"X\"}}}", parsed));
 	CHECK(!ParseCacheState(DumpCacheState(state).substr(0, 20), parsed));
 	CHECK(parsed.variables.size() == 2);
 }

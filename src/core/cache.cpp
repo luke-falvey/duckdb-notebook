@@ -12,7 +12,7 @@
 
 namespace notebook {
 
-const int CACHE_FORMAT = 1;
+const int CACHE_FORMAT = 2;
 const size_t CACHE_MAX_RESULT_BYTES = 4 * 1024 * 1024;
 const char *const CACHE_STATE_ID = "@state";
 
@@ -33,7 +33,7 @@ struct KeyText {
 
 //! Options that never change a result: where and whether the cell is shown, and when it runs.
 bool IsLayoutOption(const std::string &key) {
-	return key == "hide" || key == "span" || key == "run";
+	return key == "hide" || key == "span" || key == "run" || key == "screen";
 }
 
 //! Options that change what a cell shows but not what the cells reading it get.

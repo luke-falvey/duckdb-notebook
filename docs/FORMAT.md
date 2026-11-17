@@ -580,7 +580,7 @@ edited. This is why naming cells you care about matters (§2).
 **The key.** Every entry records the key of the cell when its result was made. The key is a hash of:
 
 - the cell's kind, name, widget and SQL (or text), and its options except the ones that only lay it
-  out (`hide`, `span`, `run`);
+  out (`hide`, `span`, `run`, `screen`);
 - the keys of the cells it reads, so a change anywhere upstream reaches every cell below it;
 - the type and value of every variable its SQL reads (unset, `NULL` and a value are all different).
 
