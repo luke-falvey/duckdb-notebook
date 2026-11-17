@@ -155,6 +155,11 @@ Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) 
 	return json;
 }
 
+//! The notebook a request is about: `nb` in its JSON body, or else in its query string.
+string Source(const http::Request &req, const Json &body) {
+	return body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb");
+}
+
 shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	if (source.empty()) {
 		throw InvalidInputException("No notebook given: add nb=<path> or nb=db:<name> to the URL");
@@ -306,7 +311,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 	// Update the session's text (and optionally save it). Returns the analysis of the new text.
 	server.Post("/api/notebook", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->lock);
 		            auto db = Database(state);
 		            if (auto text = body.Get("text")) {
@@ -339,7 +344,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 
 	server.Post("/api/run", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            // A run does not wait for a peek.
 		            session->peeks++;
 		            session->InterruptPeek();
@@ -418,7 +423,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 
 	server.Post("/api/variable", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->lock);
 		            auto name = body.Get("name") ? body.Get("name")->Str() : string();
 		            if (name.empty()) {
@@ -455,7 +460,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 	// into it. Answers `{reason}` instead of an error when there is nothing to show.
 	server.Post("/api/peek", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            auto nothing = [&](const string &reason) {
 			            SendJson(res, Json::Object().Set("reason", Json::String(reason)));
 		            };
@@ -604,7 +609,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 	server.Post("/api/cache/clear",
 	            Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->lock);
 		            auto db = Database(state);
 		            auto removed = session->cache.Clear(*db, session->source);
@@ -613,7 +618,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 
 	server.Post("/api/interrupt", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		            auto body = Body(req);
-		            auto session = GetSession(state, body.Get("nb") ? body.Get("nb")->Str() : Param(req, "nb"));
+		            auto session = GetSession(state, Source(req, body));
 		            std::lock_guard<std::mutex> guard(session->running_lock);
 		            if (session->running) {
 			            session->running->Interrupt();
