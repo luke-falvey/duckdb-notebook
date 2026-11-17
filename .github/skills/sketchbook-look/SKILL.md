@@ -99,7 +99,9 @@ exactly the page without it, so the look itself is unchanged; these rules keep i
   piece with `ink=off`. Do not read `canvas.ink-layer`, `.ink-hide` or inline styles that Ink sets.
 - **Look at it moving.** Check a new component part-way through, on a stopped clock (`Ink.pause()`,
   `Ink.advance(ms)`, as `test_ink` does), in the editor, the reading view, dark mode and an export. The
-  gear menu's "handwriting" setting and `?ink=off` (or `&ink=off`) switch it off.
+  gear menu's "handwriting" setting and `?ink=off` (or `&ink=off`) switch it off. Look at it in watch
+  mode too (`?ink=watch`): one pen, every stroke drawn in turn, so a component's order and the number of
+  strokes it is made of show up there first.
 - **New fonts** need pen strokes: run `tools/font_strokes.py` and look at `tools/contact-sheet.html`.
 
 ## Cell chrome
