@@ -114,7 +114,7 @@
           shown++;
         } else if (cell.kind === 'input') {
           var enabled = !!wasm || !!pre[cell.name];
-          box.appendChild(NB.inputWidget(cell, onInput, { exported: true, enabled: enabled, values: wasm ? null : pre[cell.name] }));
+          box.appendChild(NB.inputWidget(cell, onInput, { enabled: enabled, values: wasm ? null : pre[cell.name] }));
           shown++;
         } else if (cell.kind === 'chart') {
           if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));

@@ -391,17 +391,16 @@ var NB = (function () {
     return r.kind || 'chart ' + (k + 1);
   };
 
-  // An input cell's widget. onChange(cell, value) fires when the reader changes it. opts.values: the only
-  // values offered (a precomputed export's select); opts.enabled === false disables it. opts.exported keeps
-  // what the export viewer has always done differently from the editor: an empty label= or step= counts as
-  // set, a number shows with thousands separators, and an empty number input has no value attribute.
+  // An input cell's widget, the same in the editor and an export. onChange(cell, value) fires when the
+  // reader changes it. opts.values: the only values offered (a precomputed export's select);
+  // opts.enabled === false disables it.
   NB.inputWidget = function (cell, onChange, opts) {
     opts = opts || {};
-    var exported = !!opts.exported, values = opts.values;
+    var values = opts.values;
+    // An option given empty (label=, step=) is not set.
     var option = function (key, fallback) {
-      var o = cell.options || {};
-      if (exported) return o[key] != null ? o[key] : fallback;
-      return fallback === undefined ? o[key] : o[key] || fallback;
+      var o = (cell.options || {})[key];
+      return o == null || o === '' ? fallback : o;
     };
     var box = NB.el('div', { 'class': 'nb-input' });
     box.appendChild(NB.el('label', { text: option('label', cell.name) }));
@@ -423,9 +422,9 @@ var NB = (function () {
     } else if (w === 'checkbox') {
       control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
     } else if (w === 'slider' || w === 'number') {
-      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : exported ? NB.formatNumber(v) : String(v) });
+      var shown = NB.el('span', { 'class': 'nb-input-value', text: NB.formatNumber(v) });
       var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option('min'), max: option('max'), step: option('step', 'any'),
-        value: v == null && !exported ? '' : v, oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
+        value: v, oninput: function () { shown.textContent = NB.formatNumber(input.value); }, onchange: function () { fire(Number(input.value)); } });
       box.appendChild(input);
       box.appendChild(shown);
     } else if (w === 'date') {

@@ -1600,6 +1600,33 @@ def test_present_editor(browser, work):
     finally:
         stop(shell)
 
+def test_input_widget(browser, work):
+    """B31: an input cell's widget is the same in the editor and in an export (NB.inputWidget)."""
+    db = os.path.join(work, "widget.duckdb")
+    out = os.path.join(work, "widget.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'examples', 'revenue.sql')}', file := '{out}')")
+    page = browser.new_page()
+    page.goto(still("file://" + out))
+    page.wait_for_function("window.__NB_READY === true")
+    differ = page.evaluate("""() => {
+      const cells = [
+        {name: 'n', widget: 'slider', value: 1000, options: {min: '0', max: '5000'}},
+        {name: 'n', widget: 'number', value: null, options: {label: '', step: ''}},
+        {name: 'n', widget: 'text', value: 'x', options: {label: 'Name', placeholder: ''}},
+        {name: 'n', widget: 'date', value: '2026-01-02', options: {min: ''}},
+      ];
+      return cells.map(c => [NB.inputWidget(c, () => {}).outerHTML, NB.inputWidget(c, () => {}, {exported: true}).outerHTML])
+                  .filter(([a, b]) => a !== b);
+    }""")
+    check(not differ, f"an input looks the same in the editor and an export ({differ})")
+    shown = page.evaluate("NB.inputWidget({name: 'n', widget: 'slider', value: 1000, options: {}}, () => {}).querySelector('.nb-input-value').textContent")
+    check(shown == "1,000", f"a slider's value is shown with thousands separators ({shown})")
+    empty = page.evaluate("NB.inputWidget({name: 'n', widget: 'number', value: null, options: {label: '', step: ''}}, () => {}).outerHTML")
+    check("<label>n</label>" in empty and 'step="any"' in empty and "value=" not in empty,
+          f"an empty label= or step= is not set, and an empty number has no value ({empty})")
+    page.close()
+
+
 def test_chart_marks(browser, work):
     """Rules and bands on charts (FORMAT 5.1), in an export of test/notebooks/references.sql."""
     db = os.path.join(work, "marks.duckdb")
@@ -1979,6 +2006,7 @@ def main():
             test_cache(browser, work)
             test_cache_written_later(browser, work)
             test_cache_redraw_stale(browser, work)
+            test_input_widget(browser, work)
             test_brush_listeners(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
