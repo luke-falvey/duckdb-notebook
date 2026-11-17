@@ -31,6 +31,27 @@ SELECT content = (SELECT sql FROM notebook_sql('test/notebooks/basic.sql')) FROM
 ----
 true
 
+# B10: options are checked before anything runs; params names as notebook_run checks them
+statement error
+FROM notebook_export('test/notebooks/basic.sql', format := 'docx')
+----
+Unknown export format 'docx'; expected html, html-wasm, md, sql, data or pdf
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', format := 'data', data_format := 'xlsx')
+----
+data_format must be 'parquet' or 'csv', not 'xlsx'
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', interactive := 'live')
+----
+interactive must be 'precomputed', not 'live'
+
+statement error
+FROM notebook_export('examples/revenue.sql', file := '{TEST_DIR}/p.html', params := {no_such_input: 1})
+----
+no_such_input
+
 # B1: the sql export refuses what notebook_sql refuses, graph errors included
 statement error
 FROM notebook_export('test/notebooks/graph_errors.sql', file := '{TEST_DIR}/graph_errors.expanded.sql', format := 'sql')

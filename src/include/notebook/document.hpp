@@ -20,4 +20,9 @@ std::string NotebookTitle(const Notebook &notebook, const std::string &source);
 //! tables of at most 20 rows, inputs as their values. Honours the payload's and each cell's hide=.
 std::string MarkdownDocument(const Json &payload);
 
+//! Why notebook_export's (or /api/export's) options are not valid, or empty. `hide` is as given (`none` included);
+//! empty strings mean the defaults.
+std::string ExportOptionError(const std::string &format, const std::string &interactive, const std::string &data_format,
+                              const std::string &hide);
+
 } // namespace notebook

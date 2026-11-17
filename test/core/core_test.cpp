@@ -714,6 +714,15 @@ static void TestDocument() {
 	CHECK(md.find("# Kept") == 0 && md.find("Hidden prose") == std::string::npos && md.find("EU") == std::string::npos);
 }
 
+static void TestExportOptions() {
+	// B10: export options are checked before anything runs.
+	CHECK(ExportOptionError("", "", "", "").empty() && ExportOptionError("pdf", "precomputed", "csv", "none").empty());
+	CHECK(ExportOptionError("docx", "", "", "").find("Unknown export format 'docx'") == 0);
+	CHECK(ExportOptionError("html", "live", "", "") == "interactive must be 'precomputed', not 'live'");
+	CHECK(ExportOptionError("data", "", "xlsx", "") == "data_format must be 'parquet' or 'csv', not 'xlsx'");
+	CHECK(ExportOptionError("html", "", "", "everything").find("hide must be") == 0);
+}
+
 static void TestTimingSetting() {
 	auto nb = ParseNotebook("-- %% [notebook]\n/*\ntitle: T\ntiming: false\n*/\n");
 	CHECK(nb.cells[0].errors.empty());
@@ -746,6 +755,7 @@ int main() {
 	TestCellOptions();
 	TestDocument();
 	TestQueryCharts();
+	TestExportOptions();
 	TestTimingSetting();
 	TestCache();
 	if (failures) {

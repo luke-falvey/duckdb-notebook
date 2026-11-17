@@ -641,6 +641,11 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    ExportOptions options;
 		    options.format = Param(req, "format").empty() ? "html" : Param(req, "format");
 		    options.interactive = Param(req, "interactive");
+		    auto problem =
+		        notebook::ExportOptionError(options.format, Param(req, "interactive"), string(), Param(req, "hide"));
+		    if (!problem.empty()) {
+			    throw InvalidInputException("%s", problem);
+		    }
 		    options.hide = Param(req, "hide") == "none" ? string() : Param(req, "hide");
 		    string note;
 		    auto document = ExportDocument(*db, text, session->source, options, note);

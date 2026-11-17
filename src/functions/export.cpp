@@ -653,12 +653,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 		} else if (key == "chrome") {
 			result->options.chrome = value.GetValue<string>();
 		} else if (key == "hide") {
-			auto hide = value.GetValue<string>();
-			if (hide != "code" && hide != "output" && hide != "all" && hide != "none") {
-				throw InvalidInputException("notebook_export: hide must be 'code', 'output', 'all' or 'none', not '%s'",
-				                            hide);
-			}
-			result->options.hide = hide == "none" ? string() : hide;
+			result->options.hide = value.GetValue<string>();
 		} else if (key == "data_format") {
 			result->options.data_format = value.GetValue<string>();
 		} else if (key == "params") {
@@ -671,7 +666,25 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 			}
 		}
 	}
-	auto &format = result->options.format;
+	auto &options = result->options;
+	auto problem = notebook::ExportOptionError(options.format, options.interactive, options.data_format, options.hide);
+	if (!problem.empty()) {
+		throw InvalidInputException("notebook_export: %s", problem);
+	}
+	if (options.hide == "none") {
+		options.hide.clear();
+	}
+	// Parameters must name inputs or variables nothing sets, as notebook_run checks them.
+	if (!options.params.empty()) {
+		auto notebook = ReadNotebook(context, result->source);
+		for (auto &param : options.params) {
+			auto error = notebook::ParameterError(notebook, param.first);
+			if (!error.empty()) {
+				throw InvalidInputException("notebook_export: %s", error);
+			}
+		}
+	}
+	auto &format = options.format;
 	if (result->to.empty()) {
 		auto stem = result->source.compare(0, 3, "db:") == 0 ? result->source.substr(3) : result->source;
 		auto dot = stem.rfind('.');
