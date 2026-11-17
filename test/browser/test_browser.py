@@ -413,6 +413,58 @@ def test_cache_written_later(browser, work):
         stop(shell)
 
 
+def test_cache_variables_reloaded(browser, work):
+    # B24 follow-up: reading the store again refreshes the input values it restored, and keeps the ones the
+    # reader set in this session.
+    folder = os.path.join(work, "cache_vars")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "vars.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% input n slider min=1 max=9\nSET VARIABLE n = 1;\n\n-- %% q\nSELECT $n AS v\n")
+    db = os.path.join(folder, "vars.duckdb")
+    sql(db, f"SELECT count(*) FROM notebook_run('{notebook}', cache := true, params := {{n: 2}})")
+    shell, url = serve(folder, notebook, db)
+
+    def scheduled(n):
+        shell.stdin.write(f"SELECT count(*) FROM notebook_run('{notebook}', cache := true, params := {{n: {n}}});\n")
+        shell.stdin.flush()
+        shell.stdout.readline()
+
+    def reopened():
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        return page.evaluate("""async () => {
+          const opened = await App.api('GET', '/api/notebook');
+          const r = await App.api('POST', '/api/run', {text: App.text(), cells: [1]});
+          return [opened.variables.n, JSON.stringify(r)];
+        }""")
+
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        scheduled(3)
+        shown, ran = reopened()
+        check(shown == 3 and '"rows":[[3]]' in ran, f"a restored input follows the store when it is read again ({shown}, {ran[:300]})")
+        page.close()
+    finally:
+        stop(shell)
+    # The reader moves the input without running; a scheduled run then writes another value.
+    shell, url = serve(folder, notebook, db)
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.evaluate("() => App.api('POST', '/api/variable', {name: 'n', value: 7, cell: 0})")
+        scheduled(4)
+        shown, ran = reopened()
+        check(shown == 7 and '"rows":[[7]]' in ran, f"an input the reader set outlives the store's copy ({shown}, {ran[:300]})")
+        page.close()
+    finally:
+        stop(shell)
+
+
 def test_cache_redraw_stale(browser, work):
     # B26: drawing a stale result's charts again does not make its rows fresh.
     folder = os.path.join(work, "cache_redraw")
@@ -2026,6 +2078,7 @@ def main():
             test_cache(browser, work)
             test_cache_written_later(browser, work)
             test_cache_redraw_stale(browser, work)
+            test_cache_variables_reloaded(browser, work)
             test_input_widget(browser, work)
             test_brush_listeners(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.

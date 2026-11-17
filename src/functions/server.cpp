@@ -50,6 +50,9 @@ struct Session {
 	ResultCache cache;
 	//! True once the session has run a cell. Until then the page shows the last results only.
 	bool ran = false;
+	//! The variables whose values came from the store, not from the reader: reading the store again
+	//! refreshes these and keeps the rest.
+	std::set<string> restored;
 	//! Trust (DESIGN section 3): true once the reader has run something. Until then, and again
 	//! after the text is replaced by the file on disk, nothing runs by itself: no peeks.
 	std::atomic<bool> trusted {false};
@@ -160,8 +163,19 @@ string Source(const http::Request &req, const Json &body) {
 //! The last results and input values kept for the session's notebook, to show without running anything.
 void LoadKept(DatabaseInstance &db, Session &session) {
 	auto notebook = notebook::ParseNotebook(session.text);
+	// What the reader set in this session (an input moved before any run) outlives the store's copy.
+	auto shown = session.cache.ShownJson(notebook);
+	for (auto &name : session.restored) {
+		session.state.variables.erase(name);
+	}
+	session.cache = ResultCache();
 	session.cache.Load(db, session.source, notebook);
-	session.cache.RestoreVariables(db, notebook, session.state);
+	session.restored = session.cache.RestoreVariables(db, notebook, session.state);
+	for (auto &entry : shown.Entries()) {
+		if (session.state.variables.count(entry.first) && !session.restored.count(entry.first)) {
+			session.cache.SetShown(entry.first, entry.second);
+		}
+	}
 }
 
 shared_ptr<Session> GetSession(ServerState &state, const string &source) {
@@ -309,7 +323,6 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           if (!session->ran) {
 			           // Until this session runs something, the store is the truth: a scheduled notebook_run(cache :=
 			           // true) may have written results since, or notebook_cache_clear removed them.
-			           session->cache = ResultCache();
 			           LoadKept(*db, *session);
 		           }
 		           SendJson(res, NotebookJson(*db, *session, true));
@@ -459,6 +472,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            // The value goes with the cached results, so a reopened notebook shows the same input.
 		            runner.Save();
 		            session->cache.SetShown(name, value);
+		            session->restored.erase(name);
 		            session->cache.Record(*db, session->source, notebook, session->state, {});
 		            SendJson(res, Json::Object().Set("ok", Json::Bool(true)).Set("sql", Json::String(sql)));
 	            }));

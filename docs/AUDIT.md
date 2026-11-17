@@ -309,7 +309,7 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B21 | medium | Opening the editor at `#present` runs the whole notebook, effect cells included, with no reader action; FORMAT §8 and DESIGN §17 say nothing runs until the reader asks | `app.js` present enter, `render-present.js:221-225` |
 | B22 | low | `screen=` is not a layout option for the cache key, so editing it makes the cell and everything below stale | `cache.cpp:34-36` |
 | B23 | low | Peek's refused-function list misses `notebook_cache_clear` (deletes files outside any transaction). Refuse every `notebook_*` but the read-only ones | `peek.cpp:419-422` |
-| B24 | low | A server session loads its cache once; results written later by `notebook_run(cache := true)` never appear and cleared entries keep showing | `server.cpp:158-183` |
+| B24 | low | A server session loads its cache once; results written later by `notebook_run(cache := true)` never appear and cleared entries keep showing. Found while fixing it: restoring a cached input value always failed (DuckDB 2.0 resolves a type name only in a transaction), so a reopened session's inputs were unset until a run | `server.cpp:158-183` |
 | B25 | low | Typed charts silently ignore `rules`, `bands`, `notes` (kpi/gauge `bands` have another shape) | `chart.cpp` typed branch |
 | B26 | low | A redraw marks a stale cache entry fresh (merges charts and takes the current key) | `result_cache.cpp:419-443` |
 | B27 | low | `trusted()` in peek counts cached results as runs, so a reopened page sends peeks the server refuses; `Session::ran` never clears on reload while `trusted` does | `app-peek.js:28`, `server.cpp` |

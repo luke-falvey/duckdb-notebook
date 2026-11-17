@@ -355,10 +355,11 @@ void ResultCache::Load(DatabaseInstance &db, const string &source, const noteboo
 	store.Load(notebook::CacheCellIds(notebook), entries, state);
 }
 
-void ResultCache::RestoreVariables(DatabaseInstance &db, const notebook::Notebook &notebook,
-                                   SessionState &session) const {
+std::set<string> ResultCache::RestoreVariables(DatabaseInstance &db, const notebook::Notebook &notebook,
+                                               SessionState &session) const {
+	std::set<string> restored;
 	if (state.variables.empty()) {
-		return;
+		return restored;
 	}
 	unique_ptr<Connection> connection;
 	for (auto &name : notebook::SettableVariables(notebook)) {
@@ -371,12 +372,16 @@ void ResultCache::RestoreVariables(DatabaseInstance &db, const notebook::Noteboo
 			if (!connection) {
 				connection = make_uniq<Connection>(db);
 			}
-			auto type = TransformStringToLogicalType(found->second.type, *connection->context);
+			// ParseLogicalType binds the type in a transaction of its own (DuckDB 2.0 needs one to resolve a
+			// type name); TransformStringToLogicalType without one always threw here.
+			auto type = connection->context->ParseLogicalType(found->second.type);
 			session.variables[name] =
 			    found->second.is_null ? Value(type) : Value(found->second.text).DefaultCastAs(type);
+			restored.insert(name);
 		} catch (...) { // NOLINT: a value that cannot be restored leaves the variable unset
 		}
 	}
+	return restored;
 }
 
 void ResultCache::UpdateVariables(const SessionState &session) {
