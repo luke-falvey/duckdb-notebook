@@ -352,6 +352,9 @@ static void TestLiterals() {
 	CHECK(!IsConnectionState("SET VARIABLE x = 1") && !IsConnectionState("CREATE TABLE t (a INT)"));
 	CHECK(RewriteVariables("SELECT $a, '$b', $\"c d\", $1 -- $e") ==
 	      "SELECT getvariable('a'), '$b', getvariable('c d'), $1 -- $e");
+	// B5: a quoted name with a doubled quote is one variable, as ReferencedVariables reads it.
+	CHECK(RewriteVariables("SELECT $\"a\"\"b\" + 1") == "SELECT getvariable('a\"b') + 1");
+	CHECK(ReferencedVariables("SELECT $\"a\"\"b\"") == std::vector<std::string> {"a\"b"});
 }
 
 static void TestChartCompiler() {

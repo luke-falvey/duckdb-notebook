@@ -288,16 +288,8 @@ std::vector<ParenPair> ParenPairs(const std::string &sql) {
 	return balanced;
 }
 
-std::vector<std::string> ReferencedVariables(const std::string &sql) {
-	std::vector<std::string> names;
-	auto add = [&](const std::string &name) {
-		for (auto &existing : names) {
-			if (existing == name) {
-				return;
-			}
-		}
-		names.push_back(name);
-	};
+std::vector<VariableRef> VariableRefs(const std::string &sql) {
+	std::vector<VariableRef> refs;
 	SqlScanner scan(sql);
 	while (!scan.Done()) {
 		auto state = scan.CurrentState();
@@ -308,29 +300,42 @@ std::vector<std::string> ReferencedVariables(const std::string &sql) {
 			continue;
 		}
 		size_t p = at + 1;
+		std::string name;
+		size_t end = p;
 		if (p < sql.size() && sql[p] == '"') {
-			size_t end = p + 1;
-			std::string name;
+			end = p + 1;
 			while (end < sql.size()) {
 				if (sql[end] == '"' && end + 1 < sql.size() && sql[end + 1] == '"') {
 					name += '"';
 					end += 2;
 				} else if (sql[end] == '"') {
+					end++;
 					break;
 				} else {
 					name += sql[end++];
 				}
 			}
-			if (!name.empty()) {
-				add(name);
-			}
 		} else if (p < sql.size() && IsIdentStart(sql[p])) {
-			size_t end = p;
 			while (end < sql.size() && IsIdentChar(sql[end])) {
 				end++;
 			}
-			add(sql.substr(p, end - p));
+			name = sql.substr(p, end - p);
 		}
+		if (name.empty()) {
+			continue;
+		}
+		refs.push_back({at, end, name});
+		while (scan.Position() < end && !scan.Done()) {
+			scan.Advance();
+		}
+	}
+	return refs;
+}
+
+std::vector<std::string> ReferencedVariables(const std::string &sql) {
+	std::vector<std::string> names;
+	for (auto &ref : VariableRefs(sql)) {
+		AddUnique(names, ref.name);
 	}
 	return names;
 }

@@ -474,39 +474,10 @@ ChartPlan CompileChart(const std::string &spec_text, const std::string &from, co
 
 std::string RewriteVariables(const std::string &sql) {
 	std::string out;
-	SqlScanner scan(sql);
 	size_t copied = 0;
-	while (!scan.Done()) {
-		auto state = scan.CurrentState();
-		size_t at = scan.Position();
-		scan.Advance();
-		if (state != SqlScanner::State::CODE || sql[at] != '$' ||
-		    scan.CurrentState() == SqlScanner::State::DOLLAR_STRING) {
-			continue;
-		}
-		size_t p = at + 1;
-		std::string name;
-		size_t end = p;
-		if (p < sql.size() && sql[p] == '"') {
-			end = p + 1;
-			while (end < sql.size() && sql[end] != '"') {
-				name += sql[end++];
-			}
-			end++;
-		} else {
-			while (end < sql.size() && (std::isalnum(static_cast<unsigned char>(sql[end])) || sql[end] == '_')) {
-				end++;
-			}
-			name = sql.substr(p, end - p);
-			if (name.empty() || std::isdigit(static_cast<unsigned char>(name[0]))) {
-				continue;
-			}
-		}
-		out += sql.substr(copied, at - copied) + "getvariable(" + QuoteString(name) + ")";
-		copied = end;
-		while (scan.Position() < end && !scan.Done()) {
-			scan.Advance();
-		}
+	for (auto &ref : VariableRefs(sql)) {
+		out += sql.substr(copied, ref.start - copied) + "getvariable(" + QuoteString(ref.name) + ")";
+		copied = ref.end;
 	}
 	return out + sql.substr(copied);
 }
