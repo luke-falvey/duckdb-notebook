@@ -230,6 +230,7 @@ var Sketch = (function () {
       else if (o.kind === 'underline') S.line(svg, 2, h - 2, w - 2, h - 2, style);
       else if (o.kind === 'ellipse') S.ellipse(svg, w / 2, h / 2, w / 2 + 3, h / 2 + 2, style);
       else S.roundRect(svg, 1, 1, w - 2, h - 2, style);
+      if (!old && S.onOutline) S.onOutline(el, svg);
     };
     draw();
     if (window.ResizeObserver && !el.__skObserver) {

@@ -431,9 +431,10 @@ string Html(DatabaseInstance &db, const Json &payload, const string &title, cons
 	html = ReplaceAll(html, "{{STYLE}}", style);
 	html = ReplaceAll(html, "{{DATA}}", data);
 	html = ReplaceAll(html, "{{WASM}}", wasm);
-	html = ReplaceAll(html, "{{RENDER}}",
-	                  ScriptSafe(GetAsset("render-sketch.js") + GetAsset("render-core.js") + GetAsset("render-sql.js") +
-	                             GetAsset("render-chart.js") + GetAsset("render-typed.js")));
+	html =
+	    ReplaceAll(html, "{{RENDER}}",
+	               ScriptSafe(GetAsset("render-sketch.js") + GetAsset("render-draw.js") + GetAsset("render-core.js") +
+	                          GetAsset("render-sql.js") + GetAsset("render-chart.js") + GetAsset("render-typed.js")));
 	html = ReplaceAll(html, "{{VIEWER}}", ScriptSafe(GetAsset("viewer.js")));
 	return html;
 }

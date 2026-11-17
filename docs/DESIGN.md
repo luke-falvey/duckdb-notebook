@@ -259,6 +259,13 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
   only when the pointer is between cells; a cell's rows, what it defines and its run time sit in the
   bottom right corner of its box (`timing: false` in the `[notebook]` cell hides the time); and a
   table's chart picker stays behind a "+ chart" button until asked for.
+- Draw-in animation (`render-draw.js`): opening a notebook, an explicit run (Run all, Shift+Enter, ▶)
+  and opening an HTML export draw the page in as if sketched. Strokes draw themselves (a dash offset
+  over `pathLength="1"`, so nothing is measured), text is written in left to right, tables are revealed
+  from the top, other shapes fade in; cells go top to bottom, outline first, about 1.5 s for a screen.
+  Input changes, selections and other redraws never animate, a click or key finishes it at once, and it
+  is off for `prefers-reduced-motion`, for print (finished on `beforeprint`; PDF export's virtual time
+  runs it to the end) and with `animate: false` in the `[notebook]` cell.
 - Hover values: pointing at a mark shows its values in a paper note by the pointer, in the editor and
   in exports. On line and area charts the nearest point anywhere along the line answers, marked with a
   dot, even under a brush; a bar answers anywhere in its column (its row, when horizontal), which is

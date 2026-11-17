@@ -248,6 +248,17 @@
     current = payload.cells;
     document.title = payload.title || document.title;
     render();
+    // The page draws itself in once, when it opens (not when inputs change), unless the notebook
+    // says animate: false. Fonts first, so text is written in its final shape.
+    var meta = payload.cells.find(function (c) { return c.kind === 'notebook'; });
+    if (window.Draw && !(meta && /^animate:\s*false\s*$/m.test(meta.content || ''))) {
+      var grid = root.querySelector('.nb-cells');
+      grid.style.visibility = 'hidden';
+      (document.fonts ? document.fonts.ready : Promise.resolve()).then(function () {
+        grid.style.visibility = '';
+        Draw.page(grid.children);
+      });
+    }
     if (payload.wasm && window.NotebookWasm) return bootWasm();
   }).catch(function (e) {
     root.appendChild(NB.el('div', { 'class': 'nb-error', text: 'Could not read this notebook: ' + (e.message || e) }));

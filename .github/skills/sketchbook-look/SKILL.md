@@ -16,6 +16,7 @@ us") and §14 (charts as tabs). For a single notebook's appearance use **sketchb
 | File | Holds |
 |---|---|
 | `frontend/style.css` | All styling: CSS variables (`--nb-bg`, `--nb-ink`, `--nb-accent`, `--nb-mark`, `--nb-hand`, `--nb-mono`, `--nb-wobbly`), paper grain, dark mode, gear menu, cells, tabs, tables, charts, print rules |
+| `frontend/render-draw.js` | `Draw`: the draw-in animation. `Draw.page(cells, {part})` animates cell elements on screen: strokes via dash offset, text and tables via a `clip-path` wipe, other shapes by opacity. `Sketch.onOutline` hands it outlines drawn after layout. Animations carry the id `nb-draw`; `Draw.finishAll()`, `Draw.running()`. Add new content to its selectors if it should draw in |
 | `frontend/render-sketch.js` | `Sketch`: seeded hand-drawn SVG primitives: `reseed`, `el`, `line`, `fill` (hachure, cross-hatch, solid), `rect`, `roundRect`, `ellipse`, `polyline`, `smooth`, `shape`, `arrow`, `outline(el, {kind, width, fill})` |
 | `frontend/render-core.js` | `NB`: palette and pastels, colour `schemes`/`ramp`, number and date formats, markdown (with `{{ }}` highlight markers), `NB.table` (paging, page sizes), `NB.tabs`, `NB.chartLabel`, `suggestChart` |
 | `frontend/render-sql.js` | SQL highlighting: `NB.tokenizeSql`, `NB.highlightSql`, `NB.setSqlWords` (DuckDB's keywords and types from the server). The editor lays the highlighted `<pre>` behind a transparent, self-sizing textarea (`.nb-code-wrap` in `app.js`); both must share every text metric. Colours are the `.tk-*` classes in `style.css` |

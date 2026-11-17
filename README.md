@@ -41,7 +41,7 @@ y: revenue
 - **Notebooks can live in the database.** The same text is stored with version history in a table.
 - **Share without DuckDB.** Export to a single self-contained HTML file, or to PDF.
 - **Looks like a sketchbook.** Paper, handwriting and hand-drawn charts, after Excalidraw, in the
-  editor and in every export.
+  editor and in every export. A notebook draws itself in as it opens (`animate: false` turns it off).
 
 ## What works today
 

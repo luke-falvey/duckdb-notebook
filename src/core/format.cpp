@@ -248,9 +248,12 @@ void CheckBody(Cell &cell) {
 		if (cell.kind == CellKind::NOTEBOOK && cell.errors.empty()) {
 			std::string error;
 			auto meta = ParseYaml(cell.content, error);
-			auto timing = meta.Get("timing");
-			if (timing && (!timing->IsScalar() || (timing->scalar != "true" && timing->scalar != "false"))) {
-				cell.errors.push_back("timing: " + timing->scalar + " is not valid; use timing: true or timing: false");
+			for (auto key : {"timing", "animate"}) {
+				auto flag = meta.Get(key);
+				if (flag && (!flag->IsScalar() || (flag->scalar != "true" && flag->scalar != "false"))) {
+					cell.errors.push_back(std::string(key) + ": " + flag->scalar + " is not valid; use " + key +
+					                      ": true or " + key + ": false");
+				}
 			}
 		}
 		break;

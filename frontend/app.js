@@ -110,7 +110,8 @@ var App = (function () {
 
   // ---- Running ------------------------------------------------------------------------------
   // Runs cells (all of them without indexes). Cells in redraw only draw their charts again.
-  A.run = function (indexes, redraw) {
+  // opts.animate: draw the new results in (explicit runs; not input changes or redraws).
+  A.run = function (indexes, redraw, opts) {
     if (A.running) return Promise.resolve();
     A.running = true;
     $('interrupt').hidden = false;
@@ -144,6 +145,7 @@ var App = (function () {
     }).then(function () {
       A.running = false;
       $('interrupt').hidden = true;
+      if (opts && opts.animate) A.drawNext = { cells: indexes, part: 'output' };
       A.render();
     });
   };
@@ -158,7 +160,7 @@ var App = (function () {
   A.runCell = function (cell) {
     var i = A.cells.indexOf(cell), list = [i];
     if (A.autorun) A.downstream([i]).forEach(function (j) { if (A.isAuto(A.cells[j])) list.push(j); });
-    return A.run(list);
+    return A.run(list, null, { animate: true });
   };
 
   A.setVariable = function (name, value, cell) {
@@ -310,30 +312,33 @@ var App = (function () {
     A.render();
   };
 
-  // timing: false in the [notebook] cell hides how long cells took. It is a setting of the notebook,
-  // so it is saved with it; the gear menu's switch edits that line.
+  // On/off settings of the notebook in its [notebook] cell, true unless written as `key: false`:
+  // timing (run times in each cell's corner) and animate (the draw-in animation). They are saved with
+  // the notebook; the gear menu's switches edit those lines.
   A.notebookCell = function () {
     return A.cells.find(function (c) { return c.kind === 'notebook'; });
   };
-  A.timing = function () {
-    var nb = A.notebookCell(), m = nb && /^timing:\s*(\S+)\s*$/m.exec(nb.content || '');
+  A.flag = function (key) {
+    var nb = A.notebookCell(), m = nb && new RegExp('^' + key + ':\\s*(\\S+)\\s*$', 'm').exec(nb.content || '');
     return !(m && m[1] === 'false');
   };
-  A.setTiming = function (on) {
+  A.setFlag = function (key, on) {
     var nb = A.notebookCell();
     if (!nb) {
       if (on) return;
       nb = { head: '[notebook]', body: '/*\n*/', kind: 'notebook', state: 'stale', options: {}, content: '' };
       A.cells.unshift(nb);
     }
-    var lines = (nb.content || '').split('\n').filter(function (l) { return !/^timing:/.test(l); });
+    var lines = (nb.content || '').split('\n').filter(function (l) { return l.indexOf(key + ':') !== 0; });
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (!on) lines.push('timing: false');
+    if (!on) lines.push(key + ': false');
     nb.content = lines.join('\n');
     nb.body = '/*\n' + nb.content + (nb.content ? '\n' : '') + '*/';
     A.edited(nb);
     A.render();
   };
+  A.timing = function () { return A.flag('timing'); };
+  A.setTiming = function (on) { A.setFlag('timing', on); };
   function elapsed(ms) {
     return ms < 1000 ? Math.max(0, Math.round(ms)) + ' ms' : ms < 60000 ? (ms / 1000).toFixed(1) + ' s' : Math.floor(ms / 60000) + ' min ' + Math.round(ms % 60000 / 1000) + ' s';
   }
@@ -575,6 +580,18 @@ var App = (function () {
     main.scrollTop = scrollTop;
     var timing = $('show-timing');
     if (timing) timing.checked = A.timing();
+    var drawing = $('show-drawing');
+    if (drawing) drawing.checked = A.flag('animate');
+    var next = A.drawNext;
+    A.drawNext = null;
+    if (next && window.Draw && A.flag('animate')) {
+      var boxes = Array.prototype.filter.call(root.querySelectorAll(':scope > .nb-cell'), function (b) {
+        return !next.cells || next.cells.indexOf(+b.getAttribute('data-idx')) >= 0;
+      });
+      // Until the fonts are in, the page waits hidden, so nothing shows before it is drawn in.
+      var go = function () { root.style.visibility = ''; Draw.page(boxes, { part: next.part }); };
+      if (next.fonts && document.fonts) { root.style.visibility = 'hidden'; document.fonts.ready.then(go); } else go();
+    }
   };
 
   // Input widgets, shared with the exported viewer's look.
@@ -650,7 +667,7 @@ var App = (function () {
 
   // ---- Start --------------------------------------------------------------------------------
   A.start = function () {
-    $('run-all').onclick = function () { A.run(null); };
+    $('run-all').onclick = function () { A.run(null, null, { animate: true }); };
     $('interrupt').onclick = function () { A.api('POST', '/api/interrupt', {}); };
     $('gear').onclick = function (e) { e.stopPropagation(); A.menu(); };
     $('menu').onclick = function (e) { e.stopPropagation(); };
@@ -669,6 +686,7 @@ var App = (function () {
       localStorage.setItem('nb.theme', next);
     };
     $('show-timing').onchange = function (e) { A.setTiming(e.target.checked); };
+    $('show-drawing').onchange = function (e) { A.setFlag('animate', e.target.checked); };
     NB.pageSizes.forEach(function (n) { $('page-size').appendChild(NB.el('option', { value: n, text: n, selected: n === A.pageSize ? 'selected' : null })); });
     $('page-size').onchange = function (e) {
       A.pageSize = +e.target.value;
@@ -690,11 +708,13 @@ var App = (function () {
     };
     document.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); A.save(); }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') { e.preventDefault(); A.run(null); }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') { e.preventDefault(); A.run(null, null, { animate: true }); }
     });
     window.addEventListener('beforeunload', function (e) { if (A.dirty) { e.preventDefault(); e.returnValue = ''; } });
     document.fonts.ready.then(function () { Sketch.outline($('toolbar-rule'), { kind: 'underline', stroke: '#ced4da', width: 1.3, seed: 'rule' }); });
     A.api('GET', '/api/notebook').then(function (data) {
+      // Opening a notebook draws it in; fonts first, so text is written in its final shape.
+      A.drawNext = { cells: null, part: 'cell', fonts: true };
       A.load(data);
       A.watch();
       if (window.AppExtra) { AppExtra.catalog(); AppExtra.picker(); }

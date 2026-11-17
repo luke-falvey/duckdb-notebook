@@ -97,11 +97,15 @@ query hide=code rows=10                          (detail table)
 - Static HTML exports freeze inputs (shown, disabled). Use `interactive := 'precomputed'` or
   `html-wasm` when readers must change them (sketchbook-preview-export).
 
-## Timing
+## Timing and drawing
 
 Run times show in the bottom right of each cell in the editor. For a notebook you present or record,
 set `timing: false` in the `[notebook]` cell (or untick "timing" in the gear menu) to hide them.
 Exports never show them.
+
+A notebook draws itself in, as if sketched, when it opens, on Run all and in HTML exports. It suits a
+short page read top to bottom; for a notebook used all day as a working tool, or with many large
+charts, set `animate: false` (or untick "drawing" in the gear menu).
 
 ## Dark mode
 

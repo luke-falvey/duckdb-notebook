@@ -411,12 +411,15 @@ attach:
 extensions: [spatial]
 theme: light
 timing: false
+animate: false
 */
 ```
 
 `format` is the version of this specification. `timing` (`true` by default) shows how long each cell
-took to run, in the bottom right corner of its box in the editor; `timing: false` hides it. Any other
-value is an error. The editor's gear menu has a switch that writes this line. `attach` and `extensions` are applied before the first
+took to run, in the bottom right corner of its box in the editor; `timing: false` hides it. `animate`
+(`true` by default) draws the notebook in, as if sketched, when it opens and when cells are run
+explicitly, in the editor and in HTML exports; `animate: false` turns it off. Any other value of
+either is an error. The editor's gear menu has a switch for each that writes the line. `attach` and `extensions` are applied before the first
 cell runs (`LOAD` for each extension, `ATTACH IF NOT EXISTS` for each database). Paths are relative to
 the notebook file.
 

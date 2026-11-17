@@ -426,6 +426,10 @@ static void TestTimingSetting() {
 	CHECK(nb.cells[0].errors.empty());
 	nb = ParseNotebook("-- %% [notebook]\n/*\ntiming: sometimes\n*/\n");
 	CHECK(HasMessage(nb.cells[0].errors, "timing: sometimes is not valid"));
+	nb = ParseNotebook("-- %% [notebook]\n/*\nanimate: false\n*/\n");
+	CHECK(nb.cells[0].errors.empty());
+	nb = ParseNotebook("-- %% [notebook]\n/*\nanimate: slowly\n*/\n");
+	CHECK(HasMessage(nb.cells[0].errors, "animate: slowly is not valid"));
 }
 
 int main() {
