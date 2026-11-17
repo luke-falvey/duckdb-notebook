@@ -864,7 +864,7 @@ def test_ink(browser, work, chromium):
     sql(db, f"FROM notebook_export('{revenue}', file := '{pdf}', format := 'pdf', chrome := '{wrapper}')")
     printed = open(os.path.join(work, "printed.html")).read()
     check(open(pdf, "rb").read(5) == b"%PDF-" and '<html lang="en" data-ink="off" data-width-fixed="normal">' in printed,
-          "PDF export prints a page marked not to animate, at the normal width (DESIGN §21)")
+          "PDF export prints a page marked not to animate, at the normal width (DESIGN §22)")
     page = browser.new_page(viewport=viewport)
     page.goto("file://" + os.path.join(work, "printed.html"))
     page.wait_for_function("window.__NB_READY === true")
