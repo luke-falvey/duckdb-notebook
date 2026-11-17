@@ -193,7 +193,8 @@ bool ValidResult(const Json &result) {
 		return false;
 	}
 	auto status = result.Get("status");
-	if (!status || status->GetType() != Json::Type::STRING || (status->Str() != "ok" && status->Str() != "error")) {
+	if (!status || status->GetType() != Json::Type::STRING ||
+	    (status->Str() != "ok" && status->Str() != "error" && status->Str() != "skipped")) {
 		return false;
 	}
 	auto error = result.Get("error");

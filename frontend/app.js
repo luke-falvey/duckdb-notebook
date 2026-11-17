@@ -507,9 +507,11 @@ var App = (function () {
     if (r.data) {
       var size = +((cell.options && cell.options.rows) || A.pageSize);
       var fetchPage = function (offset, limit) {
+        // A remembered result holds one page; the rest is in a session that has not run yet.
+        if (!A.live) { A.status('This is the first page of the last run: press Run all to see the rest.'); return Promise.resolve(); }
         return A.api('GET', '/api/page?cell=' + cell.idx + '&offset=' + offset + '&limit=' + limit).then(function (data) {
           cell.offset = offset; data.total = r.data.total; r.data = data; A.render();
-        }).catch(function (e) { A.status(A.live ? e.message : 'This is the first page of the last run: press Run all to see the rest.'); });
+        }).catch(function (e) { A.status(e.message); });
       };
       var grid = NB.el('div', { 'class': 'nb-tab-body' });
       out.appendChild(grid);

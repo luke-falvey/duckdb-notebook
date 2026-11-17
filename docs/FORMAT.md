@@ -411,12 +411,16 @@ attach:
 extensions: [spatial]
 theme: light
 timing: false
+cache: false
 */
 ```
 
 `format` is the version of this specification. `timing` (`true` by default) shows how long each cell
 took to run, in the bottom right corner of its box in the editor; `timing: false` hides it. Any other
-value is an error. The editor's gear menu has a switch that writes this line. `attach` and `extensions` are applied before the first
+value is an error. The editor's gear menu has a switch that writes this line. `cache` (`true` by
+default) keeps each cell's last result for the editor to show when the notebook is next opened
+(§8); `cache: false` keeps none and removes what was kept. Any other value is an error, and the gear
+menu's *keep results* switch writes this line. `attach` and `extensions` are applied before the first
 cell runs (`LOAD` for each extension, `ATTACH IF NOT EXISTS` for each database). Paths are relative to
 the notebook file.
 
@@ -447,21 +451,83 @@ Three levels, from least to most capable:
 
 ## 8. Sidecar cache
 
-*Not implemented yet.* The editor shows results from the current session only.
+The editor keeps the last result of every cell, so a notebook reopens showing its output at once,
+without running anything. The cache is disposable: deleting it loses nothing but time, and the
+notebook file is never touched by it.
 
-Outputs are cached next to the notebook in `.duckdb-notebook/`, which belongs in `.gitignore`:
+**Where it lives.** For a notebook file, in `.duckdb-notebook/` beside it, one directory per notebook
+(the file name without its extension). The extension writes a `.gitignore` there that ignores the
+whole directory, so it never needs adding to a project's own:
 
 ```
 .duckdb-notebook/
+  .gitignore                     *
   revenue/
-    monthly.<hash>.parquet        result page shown in the grid
-    revenue_trend.<hash>.arrow    data behind a chart
-    state.json                    last input values, collapsed cells
+    monthly.json                 a named cell's result
+    @3f1c0a9d2e4b7c10.json       an unnamed cell's result, by a hash of its text
+    @state.json                  the variables the results were made with
 ```
 
-`<hash>` covers the cell's source, the hashes of the cells it reads, and the values of the variables
-it reads. A cell whose hash has a cache file opens instantly with no query. The cache is disposable:
-deleting it loses nothing but time.
+For a notebook stored in a database (`db:<name>`), in that database's `_notebook.cache` table,
+`(name, cell, format, key, saved_at, result)` with one row per cell and one for `@state`. A remote
+notebook (a URL, an object store) and a notebook not saved yet have no cache. A location that cannot be
+written means no cache, quietly; a run never fails because of it.
+
+**An entry** is JSON: `{format, cell, key, saved_at, result}`. `result` is exactly what the editor was
+sent when the cell ran: its status and error, row count and timing, the rendered prose, the first page
+of a query's rows (as many as the page shows), each chart's render description and data, an input's
+value and choices. Rows and chart data are JSON, as everywhere else in the editor (DESIGN §12), not
+Parquet or Arrow. A result larger than **4 MiB** of JSON is not kept: that cell reopens empty, as
+every cell did before there was a cache. A chart's data is already bounded by the chart compiler's
+aggregation, and a grid keeps one page, so in practice only very wide pages or point clouds reach it.
+
+**Identity.** A named cell's result is stored under its name; an unnamed cell's under `@` and a hash
+of its marker line and body, so it keeps its result when cells around it move and loses it when it is
+edited. This is why naming cells you care about matters (§2).
+
+**The key.** Every entry records the key of the cell when its result was made. The key is a hash of:
+
+- the cell's kind, name, widget and SQL (or text), and its options except the ones that only lay it
+  out (`hide`, `span`, `run`);
+- the keys of the cells it reads, so a change anywhere upstream reaches every cell below it;
+- the type and value of every variable its SQL reads (unset, `NULL` and a value are all different).
+
+What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width` and
+`height`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
+that filters it changes that cell's key, not the keys of the cells that read it.
+
+**Fresh or stale.** When a notebook is opened, each cell's key is computed from the text as it is now
+and the variables recorded in `@state` (the last values of its inputs and selections). A cell whose key
+equals its entry's is *fresh* and looks exactly like a result just computed. A cell whose key differs
+is *stale*: the cell, something it reads, or a variable it reads changed after the result was made. Its
+last result is shown in fainter ink with the note *from an earlier run* until it runs. A cell with an
+error shows nothing from the cache.
+
+**Trust.** Showing cached output executes nothing (DESIGN §3): opening a notebook reads files or rows
+and computes hashes. The inputs show the values the results were made with, and the session is given
+those values, but no cell runs until the reader runs one. Until then, changing an input marks what reads
+it stale instead of running it, a brush asks for a run, and only the remembered page of a grid can be
+seen.
+
+**Disposable and safe.** An entry that is not whole (truncated, not JSON, the wrong shape, another
+`format`, another cell's) is ignored, never an error. Entries are written to a temporary file and moved
+into place. Entries of cells that no longer exist are removed on the next run. The `format` number
+is raised whenever what a key covers or how an entry is laid out changes, and an entry with another
+number is simply ignored.
+
+**Who reads and writes it.**
+
+| | reads | writes |
+|---|---|---|
+| The editor | when a notebook is opened | after every run, redraw and input change |
+| `notebook_run` | never: a run computes from the data as it is | only with `cache := true` |
+| `notebook_export` | never: an export shows the data as it is now | never: an export has no side effects |
+| `notebook_cache(path)` | lists entries with `status` fresh or stale | |
+| `notebook_cache_clear(path)` | | removes the notebook's entries |
+
+`notebook_run(path, cache := true)` is how a scheduled job or a colleague prepares a notebook so it
+opens with results. In the editor, the gear menu's *Forget* clears the cache and *keep results* writes
+`cache:` in the `[notebook]` cell (§6).
 
 Teams who want reviewable outputs can commit an export (HTML or Markdown) instead of the cache.
 

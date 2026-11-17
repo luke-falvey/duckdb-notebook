@@ -159,7 +159,7 @@ static void TestCacheEntries() {
 	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1", "\"format\":2"), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":1,", ""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"key\":\"0123456789abcdef\"", "\"key\":7"), "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"status\":\"ok\"", "\"status\":\"skipped\""), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, "\"status\":\"ok\"", "\"status\":\"done\""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "[[1],[2]]", "[[1],[2,3]]"), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "[[1],[2]]", "\"rows\""), "monthly", untouched));
 	CHECK(untouched.key == "kept");

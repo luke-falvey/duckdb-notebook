@@ -428,9 +428,6 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 				merged.Set(part.first, part.second);
 			}
 			text = merged.Dump();
-		} else if (cell.status == "skipped") {
-			// Nothing was computed (prose without {{ }}, the [notebook] cell): nothing to keep.
-			continue;
 		} else {
 			text = cell.result;
 		}

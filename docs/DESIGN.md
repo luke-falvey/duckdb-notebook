@@ -319,7 +319,7 @@ QUALIFY version = max(version) OVER (PARTITION BY name);
 - **A database carries its own analysis.** Send someone `sales.duckdb` and they get the data and the
   notebooks that explain it. `CALL notebook_start('db:revenue')` opens a stored notebook.
 - **Result cache.** For a database-backed notebook the cache goes in `_notebook.cache(name, cell,
-  hash, data BLOB)` in place of the sidecar directory. (Not built yet: neither cache exists.)
+  format, key, saved_at, result)` in place of the sidecar directory (FORMAT.md §8, and §16 below).
 
 **File and database together.** A notebook session has one source of truth: the place it was opened
 from. `notebook_save` and `notebook_checkout` copy between the two explicitly. There is no automatic
@@ -524,7 +524,9 @@ Other risks:
 6. **More chart types.** Maps, hierarchies, flows, networks, pivot. **Done.**
 7. **Interactive WASM export.** Resolves S5. **Done.**
 
-Next, in rough order: the result cache (FORMAT.md §8), a bundled CodeMirror editor, tracking macro
+8. **Result cache.** FORMAT.md §8; see §16. **Done.**
+
+Next, in rough order: a bundled CodeMirror editor, tracking macro
 calls in the graph, Firefox and Safari checks for the exports, building every platform in CI, and the
 community-repository submission (S6).
 
@@ -765,3 +767,38 @@ what was built). It is a renderer concern like the look itself: nothing in the f
   everything; content below the fold waits until it is scrolled to.
 - **Off when it should be.** Reduced motion, print, PDF export, the gear menu's setting and `ink=off`
   all give the plain page. The existing browser tests run with `ink=off`.
+
+## 16. What the result cache taught us
+
+FORMAT.md §8 specifies it. The code is `src/core/cache.cpp` (keys, entries, fresh or stale, unit
+tested) and `src/functions/result_cache.cpp` (where entries live, and the session's copy).
+
+- **The result the editor is sent is the thing to cache.** The draft said Parquet for grids and Arrow
+  for charts. The editor holds JSON (§12), so caching anything else would mean a conversion on the way
+  in and out and a second shape to keep in step. An entry is the `/api/run` result for the cell, byte for
+  byte, and a reopened page goes through exactly the renderers a run does: fresh output looks identical
+  because it is identical (the browser test compares the markup).
+- **Two keys per cell.** A key that covered chart specs and chart-only selections would make every cell
+  below a chart stale when the chart was restyled or brushed. The key is therefore in two layers: what
+  the cell computes (chained into its readers' keys) and what it shows on top.
+- **Variables are part of the key, so the cache records them.** Freshness is judged with the variables
+  as they were last set, kept in `@state` with the value the browser showed. A reopened notebook shows
+  its inputs at those values and the session starts with them (values are cast from text to their
+  recorded type, no SQL runs), so the first Run all reproduces what is on the page.
+- **Until something runs, the page is a picture.** Paging a grid, brushing a chart or redrawing need the
+  session's views, and a session that has not run has none. Rather than run behind the reader's back,
+  which the trust rule forbids, these say "press Run all", and an input change marks its readers stale.
+  After the first run everything is live as before.
+- **`notebook_run` writes only when asked, exports never touch it.** A headless run is the source of
+  truth for "what does the data say now", so reading the cache would only hide work; writing by default
+  would give every scripted run a side effect in the working directory. `cache := true` covers the case
+  of a job that prepares a notebook for readers. An export is a document of the data at export time, and
+  a stale entry must never leak into one.
+- **Unnamed cells hash their text.** A position would hand a moved cell another cell's result. A hash of
+  the text means an edited unnamed cell loses its result, which is the honest outcome; named cells keep
+  theirs and go stale.
+- **Size is bounded per result (4 MiB of JSON),** checked when written and when read, so a hand-edited
+  or foreign entry cannot make the editor parse something huge. Grids already keep one page, so the limit
+  is rarely reached.
+- **Not done:** entries are not shared between notebooks that compute the same thing, there is no
+  total size limit across notebooks, and the html-wasm export does not start from cached data.

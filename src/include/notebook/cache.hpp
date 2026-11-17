@@ -71,7 +71,7 @@ struct CacheEntry {
 	std::string result;
 };
 
-//! True if `json` is a result the editor can show: an object with a status of `ok` or `error` whose
+//! True if `json` is a result the editor can show: an object with a status of `ok`, `error` or `skipped` whose
 //! parts have the shapes the renderers expect, no larger than CACHE_MAX_RESULT_BYTES.
 bool ValidCacheResult(const std::string &json);
 

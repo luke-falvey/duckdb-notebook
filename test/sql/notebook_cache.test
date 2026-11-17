@@ -47,22 +47,25 @@ SELECT idx, name, status, row_count, output FROM notebook_run('{TEST_DIR}/nb_cac
 6	NULL	skipped	NULL	Plain prose.
 7	NULL	ok	1	NULL
 
-# One entry per cell that computed something. Unnamed cells are known by a hash of their text.
+# One entry per cell, prose and settings included, so a reopened notebook looks as it did after the
+# run. Unnamed cells are known by a hash of their text.
 query IIIII
 SELECT idx, CASE WHEN cell LIKE '@%' THEN '@' || (length(cell) - 1) ELSE cell END, kind, status, bytes > 50 FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
 ----
+0	@16	notebook	fresh	true
 1	nb_cache_numbers	sql	fresh	true
 2	lowest	input	fresh	true
 3	kept	sql	fresh	true
 4	by_group	sql	fresh	true
 5	@16	markdown	fresh	true
+6	@16	markdown	fresh	true
 7	@16	sql	fresh	true
 
 # It lives beside the notebook: a file per cell, the variables, and a .gitignore that ignores it all
 query I
 SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-notebook/nb_cache/*.json')
 ----
-7
+9
 
 query I
 SELECT content LIKE '%*%' FROM read_text('{TEST_DIR}/.duckdb-notebook/.gitignore')
@@ -87,7 +90,7 @@ FROM notebook_run('{TEST_DIR}/nb_cache.sql', params := {lowest: 7}, cache := tru
 query II
 SELECT count(*), count(*) FILTER (status = 'fresh') FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
 ----
-6	6
+8	8
 
 query I
 SELECT content LIKE '%"rows":[[7,1],[8,2],[9,0]]%' FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json')
@@ -101,11 +104,13 @@ FROM notebook_checkout('nb_cache_edited', file := '{TEST_DIR}/nb_cache.sql', for
 query II
 SELECT idx, status FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
 ----
+0	fresh
 1	fresh
 2	fresh
 3	stale
 4	stale
 5	stale
+6	fresh
 7	fresh
 
 # Nothing ran to find that out
@@ -136,8 +141,10 @@ COPY (SELECT replace(content, '{"format":1', '{"format":0') FROM read_text('{TES
 query I
 SELECT idx FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
 ----
+0
 1
 5
+6
 7
 
 # The next run writes them again
@@ -147,7 +154,7 @@ FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
 query I
 SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
 ----
-6
+8
 
 # cache: false in the [notebook] cell: nothing is shown, and a run removes what was kept
 statement ok
@@ -176,7 +183,7 @@ FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
 query I
 FROM notebook_cache_clear('{TEST_DIR}/nb_cache.sql')
 ----
-6
+8
 
 query I
 FROM notebook_cache_clear('{TEST_DIR}/nb_cache.sql')
@@ -218,11 +225,13 @@ FROM notebook_run('db:nb_cache_test', cache := true)
 query II
 SELECT idx, status FROM notebook_cache('db:nb_cache_test') ORDER BY idx
 ----
+0	fresh
 1	fresh
 2	fresh
 3	fresh
 4	fresh
 5	fresh
+6	fresh
 7	fresh
 
 query III
@@ -240,11 +249,13 @@ FROM notebook_save('test/notebooks/cache_edited.sql', name := 'nb_cache_test')
 query II
 SELECT idx, status FROM notebook_cache('db:nb_cache_test') ORDER BY idx
 ----
+0	fresh
 1	fresh
 2	fresh
 3	stale
 4	stale
 5	stale
+6	fresh
 7	fresh
 
 # A row that is not a result is ignored
@@ -254,12 +265,12 @@ UPDATE _notebook.cache SET result = '{"status":' WHERE name = 'nb_cache_test' AN
 query I
 SELECT count(*) FROM notebook_cache('db:nb_cache_test')
 ----
-5
+7
 
 query I
 FROM notebook_cache_clear('db:nb_cache_test')
 ----
-6
+8
 
 query I
 SELECT count(*) FROM _notebook.cache
