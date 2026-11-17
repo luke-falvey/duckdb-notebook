@@ -21,7 +21,11 @@ var App = (function () {
     });
   };
 
-  A.status = function (text) { $('status').textContent = text || ''; $('status').title = text || ''; };
+  A.status = function (text) {
+    $('status').textContent = text || '';
+    $('status').title = text || '';
+    if (window.Ink) Ink.present($('status'), 'status', text || '');
+  };
   // A problem the reader must see in full (the status line is cut short): a banner above the cells.
   A.problem = function (text) {
     var banner = $('banner');
@@ -60,8 +64,11 @@ var App = (function () {
     A.merge(data.cells);
     A.lastText = data.text;
     A.dirty = false;
+    // Code is written when a notebook is opened or reloaded from disk, never while it is typed.
+    A.generation = (A.generation || 0) + 1;
     $('title').textContent = data.title || 'Notebook';
     $('source').textContent = A.source;
+    if (window.Ink) { Ink.present($('title'), 'title'); Ink.present($('source'), 'source'); }
     document.title = (data.title || A.source) + ' · DuckDB Notebook';
     A.render();
   };
@@ -156,6 +163,7 @@ var App = (function () {
   };
 
   A.runCell = function (cell) {
+    if (window.Ink) Ink.fresh();
     var i = A.cells.indexOf(cell), list = [i];
     if (A.autorun) A.downstream([i]).forEach(function (j) { if (A.isAuto(A.cells[j])) list.push(j); });
     return A.run(list);
@@ -565,6 +573,7 @@ var App = (function () {
       box.addEventListener('focusin', function () { box.classList.add('focused'); });
       box.addEventListener('focusout', function () { box.classList.remove('focused'); });
       Sketch.outline(box, { width: 1.5 });
+      if (window.Ink) write(box, cell, i);
     });
     if (!A.reading) root.appendChild(addBar(A.cells.length));
     if (focusIndex >= 0) {
@@ -576,6 +585,25 @@ var App = (function () {
     var timing = $('show-timing');
     if (timing) timing.checked = A.timing();
   };
+
+  // Hands each piece of a cell to the pen (render-ink.js): its bracket, margin, state, and each part
+  // of its body. A piece already written with the same content is left alone, so a render does not
+  // replay anything; a new result is written. Code is keyed to the notebook's generation, not its text.
+  function write(box, cell, i) {
+    var id = 'cell' + i + '/';
+    Array.prototype.forEach.call(box.children, function (part) {
+      var c = part.getAttribute('class') || '';
+      if (c.indexOf('sk-outline') >= 0) Ink.present(part, id + 'outline', cell.kind + (cell.name || ''), Ink.bracket(box));
+      else if (c === 'nb-margin' || c === 'nb-cell-head') Ink.present(part, id + c);
+      else if (c === 'nb-cell-body') {
+        Array.prototype.forEach.call(part.children, function (bit, k) {
+          var b = bit.getAttribute('class') || '';
+          if (b === 'nb-code-area') Ink.present(bit, id + 'code', A.generation + '/' + cell.kind + (A.hidden(cell).code ? '/hidden' : ''));
+          else Ink.present(bit, id + k + b);
+        });
+      }
+    });
+  }
 
   // Input widgets, shared with the exported viewer's look.
   A.inputWidget = function (cell, onChange) {
@@ -650,7 +678,7 @@ var App = (function () {
 
   // ---- Start --------------------------------------------------------------------------------
   A.start = function () {
-    $('run-all').onclick = function () { A.run(null); };
+    $('run-all').onclick = function () { if (window.Ink) Ink.fresh(); A.run(null); };
     $('interrupt').onclick = function () { A.api('POST', '/api/interrupt', {}); };
     $('gear').onclick = function (e) { e.stopPropagation(); A.menu(); };
     $('menu').onclick = function (e) { e.stopPropagation(); };
@@ -690,10 +718,18 @@ var App = (function () {
     };
     document.addEventListener('keydown', function (e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); A.save(); }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') { e.preventDefault(); A.run(null); }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') { e.preventDefault(); if (window.Ink) Ink.fresh(); A.run(null); }
     });
     window.addEventListener('beforeunload', function (e) { if (A.dirty) { e.preventDefault(); e.returnValue = ''; } });
-    document.fonts.ready.then(function () { Sketch.outline($('toolbar-rule'), { kind: 'underline', stroke: '#ced4da', width: 1.3, seed: 'rule' }); });
+    document.fonts.ready.then(function () {
+      Sketch.outline($('toolbar-rule'), { kind: 'underline', stroke: '#ced4da', width: 1.3, seed: 'rule' });
+      if (window.Ink) Ink.present($('toolbar-rule').querySelector('svg.sk-outline'), 'rule', 'rule');
+    });
+    if (window.Ink) {
+      ['run-all', 'gear'].forEach(function (id) { Ink.present($(id), id); });
+      $('ink').value = Ink.setting();
+      $('ink').onchange = function (e) { Ink.setSetting(e.target.value); };
+    } else $('ink').disabled = true;
     A.api('GET', '/api/notebook').then(function (data) {
       A.load(data);
       A.watch();

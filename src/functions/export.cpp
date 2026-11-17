@@ -432,7 +432,8 @@ string Html(DatabaseInstance &db, const Json &payload, const string &title, cons
 	html = ReplaceAll(html, "{{DATA}}", data);
 	html = ReplaceAll(html, "{{WASM}}", wasm);
 	html = ReplaceAll(html, "{{RENDER}}",
-	                  ScriptSafe(GetAsset("render-sketch.js") + GetAsset("render-core.js") + GetAsset("render-sql.js") +
+	                  ScriptSafe(GetAsset("render-sketch.js") + GetAsset("ink-strokes.js") + GetAsset("render-ink.js") +
+	                             GetAsset("render-core.js") + GetAsset("render-sql.js") +
 	                             GetAsset("render-chart.js") + GetAsset("render-typed.js")));
 	html = ReplaceAll(html, "{{VIEWER}}", ScriptSafe(GetAsset("viewer.js")));
 	return html;
@@ -837,6 +838,8 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		ExportOptions html_options = bind.options;
 		html_options.format = "html";
 		auto html = ExportDocument(db, text, bind.source, html_options, note);
+		// The page is printed as it opens: no handwriting, whatever headless Chrome's clock does.
+		html = ReplaceAll(html, "<html lang=\"en\">", "<html lang=\"en\" data-ink=\"off\">");
 		auto html_path = bind.to + ".html";
 		WriteTextFile(context, html_path, html);
 		string absolute = html_path;

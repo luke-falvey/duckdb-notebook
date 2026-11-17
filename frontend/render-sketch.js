@@ -225,6 +225,8 @@ var Sketch = (function () {
       S.reseed(o.seed || el.dataset.seed || (w + 'x' + h));
       var svg = S.el('svg', { 'class': 'sk-outline', width: w, height: h, viewBox: '0 0 ' + w + ' ' + h });
       el.insertBefore(svg, el.firstChild);
+      // A redraw at a new size continues the old drawing's handwriting rather than starting again.
+      if (old && window.Ink) Ink.replaced(old, svg);
       var style = { stroke: o.stroke, width: o.width || 1.5, fill: o.fill, fillStyle: o.fillStyle || 'solid', rough: o.rough, dash: o.dash };
       if (o.kind === 'rect') S.rect(svg, 1, 1, w - 2, h - 2, style);
       else if (o.kind === 'underline') S.line(svg, 2, h - 2, w - 2, h - 2, style);

@@ -152,7 +152,22 @@
     root.appendChild(grid);
     // Outlines are drawn once the cells are laid out, and follow their size from then on.
     Array.prototype.forEach.call(grid.children, function (box) { Sketch.outline(box, { width: 1.5 }); });
+    if (window.Ink) write(head, grid);
     window.__NB_READY = true;
+  }
+
+  // Hands each piece of the page to the pen (render-ink.js). A piece already written, with the same
+  // content, is left as it is; one that changed is written again.
+  function write(head, grid) {
+    Ink.present(head, 'header');
+    if (head.nextSibling && head.nextSibling.classList.contains('nb-frozen')) Ink.present(head.nextSibling, 'frozen');
+    Array.prototype.forEach.call(grid.children, function (box) {
+      var id = 'cell' + box.getAttribute('data-idx') + '/';
+      Array.prototype.forEach.call(box.children, function (part, k) {
+        if (part.classList.contains('sk-outline')) Ink.present(part, id + 'outline', box.getAttribute('data-seed'), Ink.bracket(box));
+        else Ink.present(part, id + k + (part.getAttribute('class') || part.tagName));
+      });
+    });
   }
 
   // ---- precomputed ----

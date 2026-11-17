@@ -36,6 +36,12 @@ def sql(db, *statements):
     return result.stdout
 
 
+def still(url):
+    """The page with the handwriting animation off (render-ink.js): the checks here are about the finished
+    page. test_ink checks the animation itself."""
+    return url + ("&" if "?" in url else "?") + "ink=off"
+
+
 def watch(page):
     errors = []
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
@@ -56,7 +62,7 @@ def test_server(browser, work):
 
     page = browser.new_page(viewport={"width": 1400, "height": 1000})
     errors = watch(page)
-    page.goto(url)
+    page.goto(still(url))
     page.wait_for_selector(".nb-cell")
     check(page.locator("#title").text_content() == "Revenue review", "the editor shows the notebook's title")
     check(page.locator(".nb-cell").count() == 11, "one editor cell per notebook cell")
@@ -309,7 +315,7 @@ def test_metadata_error(browser, work):
     shell.stdin.flush()
     url = shell.stdout.readline().strip()
     page = browser.new_page()
-    page.goto(url)
+    page.goto(still(url))
     page.wait_for_selector(".nb-cell")
     page.click("#run-all")
     page.wait_for_selector(".nb-problem", timeout=30000)
@@ -334,7 +340,7 @@ def test_exports(browser, work, chromium):
     page = browser.new_page()
     errors = watch(page)
     page.route("**/*", lambda r: r.abort() if not r.request.url.startswith("file:") else r.continue_())
-    page.goto("file://" + html)
+    page.goto(still("file://" + html))
     page.wait_for_function("window.__NB_READY === true")
     check(page.locator("svg.nb-chart-svg").count() >= 2, "HTML export draws its charts offline")
     check(page.locator("pre.nb-source").count() >= 3, "an export shows the SQL by default")
@@ -350,13 +356,13 @@ def test_exports(browser, work, chromium):
 
     nocode = os.path.join(work, "revenue_nocode.html")
     sql(db, f"FROM notebook_export('{notebook}', file := '{nocode}', hide := 'code')")
-    page.goto("file://" + nocode)
+    page.goto(still("file://" + nocode))
     page.wait_for_function("window.__NB_READY === true")
     check(page.locator("pre.nb-source").count() == 0 and page.locator("table.nb-grid").count() >= 3,
           "hide := 'code' exports results without code")
     check(page.locator(".nb-input select:disabled").count() == 1, "a static export shows inputs but freezes them")
 
-    page.goto("file://" + pre)
+    page.goto(still("file://" + pre))
     page.wait_for_function("window.__NB_READY === true")
     page.locator(".nb-input select").first.select_option(label="US")
     page.wait_for_function("document.querySelector('.nb-md').textContent.includes('US')")
@@ -364,7 +370,7 @@ def test_exports(browser, work, chromium):
 
     gallery = os.path.join(work, "charts.html")
     sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'examples', 'charts.sql')}', file := '{gallery}')")
-    page.goto("file://" + gallery)
+    page.goto(still("file://" + gallery))
     page.wait_for_function("window.__NB_READY === true")
     check(page.locator("svg.nb-chart-svg").count() >= 24 and page.locator(".nb-error").count() == 0,
           "every chart type in examples/charts.sql draws without errors")
@@ -391,7 +397,7 @@ def test_exports(browser, work, chromium):
     page = browser.new_page()
     errors = watch(page)
     page.route("**/*", lambda r: r.abort() if not r.request.url.startswith(("file:", "blob:")) else r.continue_())
-    page.goto("file://" + live)
+    page.goto(still("file://" + live))
     page.wait_for_function("window.__NB_WASM === true", timeout=60000)
     page.locator(".nb-input select").first.select_option(label="APAC")
     page.wait_for_function("document.querySelector('.nb-md').textContent.includes('APAC')", timeout=30000)
@@ -408,7 +414,7 @@ def main():
             test_metadata_error(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
-                "~/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
+                os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
             test_exports(browser, work, shells[0] if shells else p.chromium.executable_path)
         finally:
             browser.close()
