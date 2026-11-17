@@ -37,6 +37,26 @@ string(APPEND NOTEBOOK_ASSET_CODE "\n} // namespace\n\nconst string &GetAsset(co
 file(WRITE ${NOTEBOOK_ASSET_CPP}.tmp "${NOTEBOOK_ASSET_CODE}")
 configure_file(${NOTEBOOK_ASSET_CPP}.tmp ${NOTEBOOK_ASSET_CPP} COPYONLY)
 
+# Features that need the host operating system: the HTTP server (sockets and threads), opening a
+# browser and printing PDFs through a local Chrome (processes). DuckDB-WASM has none of these, so a
+# WebAssembly build leaves them out: server_unavailable.cpp registers notebook_start and notebook_stop
+# with the same signatures, failing with a clear message, and export.cpp refuses format 'pdf'.
+# Everything else (parsing, analysis, the chart compiler, running, storage, the other exports)
+# is the same in both builds. See docs/DESIGN.md section 21.
+if(EMSCRIPTEN)
+  set(NOTEBOOK_HOST_FEATURES_DEFAULT OFF)
+else()
+  set(NOTEBOOK_HOST_FEATURES_DEFAULT ON)
+endif()
+option(NOTEBOOK_HOST_FEATURES "Build the HTTP server and PDF printing (needs sockets, threads, processes)"
+       ${NOTEBOOK_HOST_FEATURES_DEFAULT})
+if(NOTEBOOK_HOST_FEATURES)
+  set(NOTEBOOK_SERVER_SOURCE src/functions/server.cpp)
+else()
+  set(NOTEBOOK_SERVER_SOURCE src/functions/server_unavailable.cpp)
+  add_definitions(-DNOTEBOOK_NO_HOST_FEATURES)
+endif()
+
 # core/      plain C++ with no DuckDB dependency: format, lexer, script generation, graph.
 #            Unit-tested on its own with `make core_test`.
 # functions/ the SQL surface, one file per function, written against DuckDB's C++ API.
@@ -63,7 +83,7 @@ set(EXTENSION_SOURCES
     src/functions/notebook_chart_query.cpp
     src/functions/storage.cpp
     src/functions/export.cpp
-    src/functions/server.cpp
+    ${NOTEBOOK_SERVER_SOURCE}
     src/functions/peek.cpp
     ${NOTEBOOK_ASSET_CPP}
     src/notebook_extension.cpp)
