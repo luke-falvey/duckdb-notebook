@@ -4,6 +4,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "notebook/chart.hpp"
+#include "notebook/session.hpp"
 
 // notebook_chart_query(spec, from): the SQL a chart spec compiles to, and its render description,
 // for inspection. The columns of `from` are looked up on a separate connection, so a temporary view
@@ -37,14 +38,8 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	}
 	{
 		Connection connection(DatabaseInstance::GetDatabase(context));
-		auto described = connection.Query("DESCRIBE SELECT * FROM " + notebook::RelationSql(from));
-		if (!described->HasError()) {
-			while (auto chunk = described->Fetch()) {
-				for (idx_t r = 0; r < chunk->size(); r++) {
-					chart.columns.push_back({chunk->GetValue(0, r).ToString(), chunk->GetValue(1, r).ToString()});
-				}
-			}
-		}
+		string error; // without columns, every scalar channel value is taken as a field
+		DescribeColumns(connection, notebook::RelationSql(from), chart.columns, error);
 	}
 	auto result = make_uniq<ChartBindData>();
 	result->plan = notebook::CompileChart(spec, from, chart);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "notebook/chart.hpp"
 #include "notebook/format.hpp"
 #include "notebook/json.hpp"
 
@@ -140,6 +141,11 @@ notebook::Json CellJson(const notebook::Cell &cell);
 
 //! An embedded frontend file (frontend/ in the repository), compiled into the extension.
 const string &GetAsset(const string &name);
+
+//! The columns of `relation` (SQL text, as RelationSql gives) with their DuckDB types. On failure returns
+//! false and sets `error`; `columns` is left empty.
+bool DescribeColumns(Connection &connection, const string &relation, std::vector<notebook::ColumnInfo> &columns,
+                     string &error);
 
 //! The SQL type a variable set from the browser should have, so it compares like the column it
 //! came from: from an input's widget or from= column, or a chart selection's fields. Empty when

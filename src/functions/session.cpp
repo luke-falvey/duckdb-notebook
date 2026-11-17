@@ -313,14 +313,9 @@ Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cel
 	context.height = std::atoi(cell.Option("height", "320").c_str());
 	auto relation = notebook::RelationSql(from);
 	{
-		auto described = connection->Query("DESCRIBE SELECT * FROM " + relation);
-		if (described->HasError()) {
-			return Json::Object().Set("error", Json::String(described->GetError()));
-		}
-		while (auto chunk = described->Fetch()) {
-			for (idx_t r = 0; r < chunk->size(); r++) {
-				context.columns.push_back({chunk->GetValue(0, r).ToString(), chunk->GetValue(1, r).ToString()});
-			}
+		string error;
+		if (!DescribeColumns(*connection, relation, context.columns, error)) {
+			return Json::Object().Set("error", Json::String(error));
 		}
 	}
 	{
@@ -497,16 +492,28 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	return outcome;
 }
 
-static string ColumnType(Connection &connection, const string &relation, const string &column) {
+bool DescribeColumns(Connection &connection, const string &relation, std::vector<notebook::ColumnInfo> &columns,
+                     string &error) {
 	auto described = connection.Query("DESCRIBE SELECT * FROM " + relation);
 	if (described->HasError()) {
-		return string();
+		error = described->GetError();
+		return false;
 	}
 	while (auto chunk = described->Fetch()) {
 		for (idx_t r = 0; r < chunk->size(); r++) {
-			if (StringUtil::CIEquals(chunk->GetValue(0, r).ToString(), column)) {
-				return chunk->GetValue(1, r).ToString();
-			}
+			columns.push_back({chunk->GetValue(0, r).ToString(), chunk->GetValue(1, r).ToString()});
+		}
+	}
+	return true;
+}
+
+static string ColumnType(Connection &connection, const string &relation, const string &column) {
+	std::vector<notebook::ColumnInfo> columns;
+	string error;
+	DescribeColumns(connection, relation, columns, error);
+	for (auto &info : columns) {
+		if (StringUtil::CIEquals(info.name, column)) {
+			return info.type;
 		}
 	}
 	return string();
