@@ -233,7 +233,8 @@ SET VARIABLE <name> = <default>;
 
 The body is a real statement that sets the default, so the file still works outside the notebook. When
 someone moves the widget, the runner sets the variable for that session and re-runs the cells that read
-it. The file changes only if they choose "save as default".
+it. Moving a widget never changes the file: the default is the `SET VARIABLE` statement in the body,
+edited like any other text.
 
 | Widget | Variable type | Options |
 |---|---|---|
