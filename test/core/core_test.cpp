@@ -430,6 +430,13 @@ static void TestChartErrors() {
 	// KPIs and gauges colour their value by bands of their own: {from, to, color}.
 	plan = CompileChart("type: kpi\nvalue: n\nbands: [{from: 0, to: 5, color: red}]\n", "t", context);
 	CHECK(plan.error.empty());
+	// B30: a map's binned colour is binned once (its step is one CTE, not two).
+	ChartContext columns;
+	columns.columns = {{"g", "GEOMETRY"}, {"n", "BIGINT"}};
+	plan = CompileChart("type: map\ngeometry: g\ncolor: {field: n, bin: true}\n", "t", columns);
+	auto &sql = plan.queries.at(0);
+	auto first = sql.find("__bin_color AS");
+	CHECK(plan.error.empty() && first != std::string::npos && sql.find("__bin_color AS", first + 1) == std::string::npos);
 }
 
 static void TestChartReferences() {
