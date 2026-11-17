@@ -24,7 +24,7 @@ A spec is YAML: either at the end of a query cell inside `/* chart … */`, or a
 
 | Key | Takes |
 |---|---|
-| `mark` | `line`, `area`, `bar`, `point`, `rect`, `rule`, `tick`, `text`, `arc`, `boxplot`, `histogram`, `density`, `hexbin` |
+| `mark` | `line`, `area`, `bar`, `point` (or `circle`, `square`), `rect`, `rule`, `tick`, `text`, `arc`, `boxplot`, `histogram`, `density`, `hexbin` |
 | `type` | `kpi`, `gauge`, `table`, `pivot`, `map`, `sankey`, `chord`, `treemap`, `sunburst`, `icicle`, `network`, `funnel`, `candlestick`, `calendar`, `gantt`, `vega-lite`, `echarts`. Use instead of `mark` |
 | Channels | `x`, `y`, `x2`, `y2`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`, `theta`: a column name, or a mapping of the channel keys below |
 | `title` | The chart's title; in a query cell's tabs, the tab's label |
@@ -43,7 +43,7 @@ A spec is YAML: either at the end of a query cell inside `/* chart … */`, or a
 | Key | Takes |
 |---|---|
 | `field` | A column of the chart's relation. Writing `{field: name}` instead of a bare name turns a typo into an error rather than a constant |
-| `agg` | `sum`, `avg`, `min`, `max`, `count`, `count_distinct`, `median`, `p05` … `p99`. Channels without `agg` become `GROUP BY` keys when any channel has one |
+| `agg` (or `aggregate`) | `sum`, `avg` (or `mean`), `min`, `max`, `count`, `count_distinct` (or `distinct`), `median`, `p05` … `p99`. Channels without `agg` become `GROUP BY` keys when any channel has one |
 | `bin` | `true`, `{step: n}` or `{maxbins: n}` |
 | `timeunit` | Truncate: `year`, `quarter`, `month`, `week`, `date`, `hour`, `minute`, `second`. Extract a cyclic part: `monthofyear`, `dayofmonth`, `dayofweek` (or `day`; 0 is Sunday), `hours` (or `hourofday`), `minutes` |
 | `sort` | `asc`, `desc`, or a channel with an optional `-` (`-x` sorts by x, descending) |

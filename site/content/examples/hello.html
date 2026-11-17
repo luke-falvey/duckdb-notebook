@@ -32,7 +32,7 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.45 0 0 0 0 0.38 0 0 0 0 0.25 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 button, select, input, textarea { font: inherit; color: inherit; }
-button, select, .nb-btn {
+button, select {
   background: var(--nb-card); border: 1.6px solid var(--nb-ink); border-radius: var(--nb-wobbly);
   padding: 2px 12px 3px; cursor: pointer; font-family: var(--nb-hand); font-size: 16px;
 }
@@ -2637,6 +2637,74 @@ var NB = (function () {
     return r.kind || 'chart ' + (k + 1);
   };
 
+  // An input cell's widget. onChange(cell, value) fires when the reader changes it. opts.values: the only
+  // values offered (a precomputed export's select); opts.enabled === false disables it. opts.exported keeps
+  // what the export viewer has always done differently from the editor: an empty label= or step= counts as
+  // set, a number shows with thousands separators, and an empty number input has no value attribute.
+  NB.inputWidget = function (cell, onChange, opts) {
+    opts = opts || {};
+    var exported = !!opts.exported, values = opts.values;
+    var option = function (key, fallback) {
+      var o = cell.options || {};
+      if (exported) return o[key] != null ? o[key] : fallback;
+      return fallback === undefined ? o[key] : o[key] || fallback;
+    };
+    var box = NB.el('div', { 'class': 'nb-input' });
+    box.appendChild(NB.el('label', { text: option('label', cell.name) }));
+    var w = cell.widget, v = cell.value, control;
+    var fire = function (value) { onChange(cell, value); };
+    if (values) {
+      control = NB.el('select', { onchange: function () { fire(values[+control.value]); } });
+      values.forEach(function (x, i) { control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: NB.key(x) === NB.key(v) ? 'selected' : null })); });
+    } else if (w === 'select' || w === 'multiselect') {
+      var choices = cell.choices || (option('options', '') ? option('options', '').split(',') : []);
+      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
+        var picked = Array.prototype.filter.call(control.options, function (x) { return x.selected; }).map(function (x) { return choices[+x.value]; });
+        fire(w === 'multiselect' ? picked : picked[0]);
+      } });
+      choices.forEach(function (x, i) {
+        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
+        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
+      });
+    } else if (w === 'checkbox') {
+      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
+    } else if (w === 'slider' || w === 'number') {
+      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : exported ? NB.formatNumber(v) : String(v) });
+      var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option('min'), max: option('max'), step: option('step', 'any'),
+        value: v == null && !exported ? '' : v, oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
+      box.appendChild(input);
+      box.appendChild(shown);
+    } else if (w === 'date') {
+      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: option('min'), max: option('max'), onchange: function () { fire(control.value); } });
+    } else if (w === 'daterange') {
+      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
+      a.onchange = b.onchange = function () { fire({ lo: a.value, hi: b.value }); };
+      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
+    } else {
+      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: option('placeholder'), onchange: function () { fire(control.value); } });
+    }
+    if (control) box.appendChild(control);
+    if (opts.enabled === false) box.querySelectorAll('input,select').forEach(function (e) { e.disabled = true; });
+    return box;
+  };
+
+  // ---- Cell framing, shared by the editor and the export viewer ------------------------------
+  // `query` for a SQL cell that is a query, `sql` for one that changes the database, else the cell's kind.
+  NB.kindName = function (cell) { return cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind; };
+  // Whether a hide= value hides `what` (code or output).
+  NB.hides = function (hide, what) { return hide === 'all' || hide === what; };
+  // The columns of 12 a cell spans in reading view (span=).
+  NB.span = function (span) { return Math.max(1, Math.min(12, +span)); };
+  // The tabs over a query cell's result: one per chart (marked when it failed), then the table.
+  NB.queryTabItems = function (charts, count) {
+    var items = [];
+    for (var k = 0; k < count; k++) {
+      var chart = (charts || [])[k];
+      items.push({ label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) });
+    }
+    return items.concat([{ label: 'table', title: 'The query\'s rows' }]);
+  };
+
   // A row of tabs. items: [{label, title}]; extra: elements appended after the tabs.
   NB.tabs = function (items, active, onPick, extra) {
     var bar = NB.el('div', { 'class': 'nb-tabs', role: 'tablist' });
@@ -2813,16 +2881,9 @@ var NB = (function () {
 // the data; this file maps the rows it sends to SVG. Typed charts live in render-typed.js.
 (function (NB) {
   'use strict';
-  var SVG = 'http://www.w3.org/2000/svg';
   var M = { top: 12, right: 16, bottom: 42, left: 58 };
 
-  function s(tag, attrs, parent) {
-    var e = document.createElementNS(SVG, tag);
-    for (var k in attrs || {}) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
-    if (parent) parent.appendChild(e);
-    return e;
-  }
-  NB.svg = s;
+  var s = NB.svg = Sketch.el;
 
   NB.objects = function (dataset) {
     if (!dataset || !dataset.columns) return [];
@@ -3019,7 +3080,7 @@ var NB = (function () {
     }
     var a = s('g', { 'class': 'nb-axis' }, g);
     ticks.forEach(function (t) {
-      var p = scale.kind === 'band' ? scale.center(t) : scale(numeric(t, 'x') === numeric(t, 'x') ? t : t);
+      var p = scale.kind === 'band' ? scale.center(t) : scale(t);
       if (!isFinite(p)) return;
       if (orient === 'bottom') {
         if (scale.kind !== 'band') s('line', { x1: p, x2: p, y1: 0, y2: h, 'class': 'nb-grid-line' }, a);
@@ -3733,7 +3794,7 @@ var NB = (function () {
     }
   };
 
-  NB.scales = { linear: linear, band: band, time: time, color: colorScale, axis: axis, numeric: numeric, distinct: distinct, tooltip: tooltip, margin: M };
+  NB.scales = { linear: linear, band: band, time: time, axis: axis, numeric: numeric, distinct: distinct, margin: M };
 })(NB);
 // Typed charts (FORMAT.md section 5.3): kpi, table, pivot, map, sankey, chord, treemap, sunburst,
 // icicle, network, funnel, candlestick, calendar, gantt, gauge, and raw vega-lite / echarts specs.
@@ -3814,10 +3875,7 @@ var NB = (function () {
   };
 
   T.table = function (c, render, data, opts, chart) {
-    var spec = render.spec || {}, formats = {}, bars = [], heat = [];
-    var columns = spec.columns || [];
-    (Array.isArray(columns) ? [] : []).forEach(function () {});
-    Object.keys(spec.format || {}).forEach(function (k) { formats[k] = spec.format[k]; });
+    var spec = render.spec || {}, formats = spec.format || {}, bars = [], heat = [];
     if (spec.bar) bars = [].concat(spec.bar);
     if (spec.heat) heat = [].concat(spec.heat);
     NB.table(c, chart.datasets[0], { formats: formats, bars: bars, heat: heat });
@@ -4420,10 +4478,7 @@ var Present = (function () {
   var payload, current, wasm = null, variables = {}, selected = {};
 
   function bytes(id) {
-    var text = document.getElementById(id).textContent.trim();
-    var bin = atob(text), out = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    return b64bytes(document.getElementById(id).textContent.trim());
   }
   function gunzip(u8) {
     return new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer().then(function (b) { return new Uint8Array(b); });
@@ -4447,51 +4502,10 @@ var Present = (function () {
 
   function option(cell, key, fallback) { return cell.options && cell.options[key] != null ? cell.options[key] : fallback; }
 
-  function inputWidget(cell, onChange, enabled, values) {
-    var box = NB.el('div', { 'class': 'nb-input' });
-    box.appendChild(NB.el('label', { text: option(cell, 'label', cell.name) }));
-    var w = cell.widget, v = cell.value, control;
-    var fire = function (value) { onChange(cell, value); };
-    if (values) {
-      control = NB.el('select', { onchange: function () { fire(values[+control.value]); } });
-      values.forEach(function (x, i) { control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: NB.key(x) === NB.key(v) ? 'selected' : null })); });
-    } else if (w === 'select' || w === 'multiselect') {
-      var choices = cell.choices || (option(cell, 'options', '') ? option(cell, 'options', '').split(',') : []);
-      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
-        var picked = Array.prototype.filter.call(control.options, function (o) { return o.selected; }).map(function (o) { return choices[+o.value]; });
-        fire(w === 'multiselect' ? picked : picked[0]);
-      } });
-      choices.forEach(function (x, i) {
-        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
-        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
-      });
-    } else if (w === 'checkbox') {
-      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
-    } else if (w === 'slider' || w === 'number') {
-      var out = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : NB.formatNumber(v) });
-      control = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option(cell, 'min'), max: option(cell, 'max'), step: option(cell, 'step', 'any'), value: v, oninput: function () { out.textContent = control.value; }, onchange: function () { fire(Number(control.value)); } });
-      box.appendChild(control);
-      box.appendChild(out);
-      control = null;
-    } else if (w === 'date') {
-      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: option(cell, 'min'), max: option(cell, 'max'), onchange: function () { fire(control.value); } });
-    } else if (w === 'daterange') {
-      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
-      var both = function () { fire({ lo: a.value, hi: b.value }); };
-      a.onchange = both; b.onchange = both;
-      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
-    } else {
-      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: option(cell, 'placeholder'), onchange: function () { fire(control.value); } });
-    }
-    if (control) box.appendChild(control);
-    if (!enabled) box.querySelectorAll('input,select').forEach(function (e) { e.disabled = true; });
-    return box;
-  }
-
   // A query cell's charts as tabs, with its table last. The first chart shows until another is picked.
   function queryTabs(cell, out) {
     var charts = cell.charts, tab = Math.min(cell.tab || 0, charts.length);
-    var items = charts.map(function (c, k) { return { label: (c && c.error ? '⚠ ' : '') + NB.chartLabel(c, k) }; }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+    var items = NB.queryTabItems(charts, charts.length);
     out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; render(); }));
     var holder = NB.el('div', { 'class': 'nb-tab-body' });
     out.appendChild(holder);
@@ -4513,9 +4527,8 @@ var Present = (function () {
   // a reader came for.
   function parts(cell) {
     var own = option(cell, 'hide', ''), global = payload.hide || '';
-    var hides = function (h, what) { return h === 'all' || h === what; };
-    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !hides(own, 'code') && !hides(global, 'code');
-    var output = cell.kind !== 'notebook' && !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
+    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !NB.hides(own, 'code') && !NB.hides(global, 'code');
+    var output = cell.kind !== 'notebook' && !NB.hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !NB.hides(global, 'output'));
     if (output && cell.kind === 'sql') output = !!((cell.charts && cell.charts.length) || cell.error || cell.table);
     return { code: code, output: output };
   }
@@ -4548,10 +4561,10 @@ var Present = (function () {
     current.forEach(function (cell, i) {
       var showCode = shows[i].code, showOutput = shows[i].output;
       if ((!showCode && !showOutput) || (screen && !screen[i])) return;
-      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
+      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + NB.span(option(cell, 'span', 12)) });
       var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
       if (showCode) {
-        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
+        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: NB.kindName(cell) + (cell.name ? ' · ' + cell.name : '') }));
         box.appendChild(NB.el('pre', { 'class': 'nb-source', html: NB.highlightSql(cell.sql) }));
         shown++;
       }
@@ -4569,7 +4582,7 @@ var Present = (function () {
           shown++;
         } else if (cell.kind === 'input') {
           var enabled = !!wasm || !!pre[cell.name];
-          box.appendChild(inputWidget(cell, onInput, enabled, wasm ? null : pre[cell.name]));
+          box.appendChild(NB.inputWidget(cell, onInput, { exported: true, enabled: enabled, values: wasm ? null : pre[cell.name] }));
           shown++;
         } else if (cell.kind === 'chart') {
           if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
