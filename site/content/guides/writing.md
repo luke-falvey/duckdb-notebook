@@ -55,7 +55,6 @@ CREATE OR REPLACE TABLE orders AS FROM 'orders.parquet';
 |---|---|---|
 | `run` | `auto`, `manual` | `auto` for query cells, `manual` for effect cells. An `auto` cell runs again when a cell or variable it reads changes |
 | `materialize` | `view`, `table` | `view`. `table` stores the result as a temp table: use it for a slow query that many cells read |
-| `display` | `table`, `none` | Whether to show the result grid |
 
 ## Names
 
