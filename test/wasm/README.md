@@ -24,7 +24,9 @@ OVERRIDE_GIT_DESCRIBE=v2.0.0 make wasm_eh
 `OVERRIDE_GIT_DESCRIBE=v2.0.0` stamps the extension for DuckDB v2.0.0; without it a local build is
 stamped with a commit hash and DuckDB-WASM refuses it. Do not set `GEN=ninja`: the wasm targets
 run `emmake make`. The first build compiles DuckDB for WebAssembly and takes about 12 minutes on 4
-cores. `make wasm_threads` builds the threaded variant.
+cores. `make wasm_threads` builds the threaded variant (the `Makefile` adds two flags extension-ci-tools'
+release branch leaves out; DESIGN §20). In the threads bundle `LOAD` hangs about one time in eight,
+for DuckDB's own extensions too, so the test retries a hung `LOAD` there in a fresh page and says so.
 
 Then, with Node and the Playwright package (pre-installed in Claude's cloud sessions; otherwise
 `npm install --no-save playwright` here and `npx playwright install chromium`):

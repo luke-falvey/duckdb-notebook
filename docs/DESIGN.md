@@ -1037,10 +1037,17 @@ it and is otherwise off: nothing is written, and `notebook_cache` lists nothing.
 specific to WebAssembly. A notebook on `opfs://` paths should have a working cache, since DuckDB-WASM's
 OPFS support has directories, but that is untested.
 
-**`wasm_threads` needed a build fix.** extension-ci-tools' release branch (`v2.0-cyanoptera`) compiles
-`wasm_threads` without `-fwasm-exceptions`, because of a misnamed variable. DuckDB-WASM's threads
-bundle uses Wasm exceptions, so the extension failed to `dlopen`, with an empty error. Our `Makefile`
-sets the flags as extension-ci-tools' `main` branch does, after including its Makefile.
+**`wasm_threads` needed a build fix, and loading into the threads bundle is not reliable.**
+extension-ci-tools' release branch (`v2.0-cyanoptera`) leaves out two flags when it builds
+`wasm_threads`. The first is `-fwasm-exceptions`, lost to a misnamed variable. The second is
+`-DUSE_WASM_THREADS=ON`, DuckDB's switch that links a side module against shared memory. Without them
+`LOAD` fails with an empty `dlopen` error, and DuckDB's own `icu` extension built the same way fails
+too. Its `main` branch has both. Our `Makefile` sets them after including its Makefile. With them,
+everything works in the threads bundle as in the base one, except that `LOAD` hangs about one time in
+eight. The `icu` extension hangs at the same rate, so this is a race in DuckDB-WASM's threaded
+extension loading, not in this extension. The test retries a hung `LOAD` in a fresh page, for
+`wasm_threads` only, and reports each retry. A page using the threads bundle would need a timeout
+around `LOAD` as well, or should use the base bundle.
 
 `test/wasm/run.cjs` loads the build into DuckDB-WASM in headless Chromium and runs the functions on
 `examples/revenue.sql`. CI runs it on the artifacts of the extension pipeline, which itself does not

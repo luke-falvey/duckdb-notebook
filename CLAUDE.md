@@ -285,6 +285,12 @@ create, because all test files share one database.
   build is otherwise stamped with a commit hash.
 - DuckDB-WASM 2.0 has two bundles: `base` is platform `wasm_eh`, `threads` is `wasm_threads`. No bundle
   loads `wasm_mvp`, though CI still builds it.
+- `wasm_threads` builds need the two flags the `Makefile` adds after including extension-ci-tools'
+  Makefile (`-fwasm-exceptions`, `-DUSE_WASM_THREADS=ON`); without them `LOAD` fails with an empty
+  dlopen error. Even with them, DuckDB-WASM's threads bundle hangs in `LOAD` about one time in eight
+  (DuckDB's own extensions too), which is why `test/wasm/run.cjs` retries it there.
+- Do not build natively from a shell that has sourced `emsdk_env.sh`: `make release` then fails with
+  error 127. Each Bash call starts a fresh shell, so source it only in the call that builds wasm.
 - clang-format re-indents lambdas inside `server.cpp` with mixed tabs and spaces; match on content,
   not indentation, when scripting edits there.
 - `vcpkg.json` must exist at the repository root even with no dependencies, or CI fails at configure.

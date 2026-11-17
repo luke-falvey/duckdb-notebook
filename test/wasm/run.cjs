@@ -29,6 +29,8 @@ function extensionPath(arch) {
   return path.join(ROOT, 'build', arch, 'extension', 'notebook', 'notebook.duckdb_extension.wasm');
 }
 
+const LOAD_ATTEMPTS = 3;
+
 const CONTENT_TYPES = { '.js': 'text/javascript', '.wasm': 'application/wasm', '.html': 'text/html', '.sql': 'text/plain' };
 
 // A step that hangs fails the run instead of stalling it.
@@ -75,15 +77,40 @@ async function testArch(browser, arch, origin) {
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${ok || detail === undefined ? '' : ': ' + JSON.stringify(detail)}`);
     if (!ok) failures.push(name);
   };
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  page.on('pageerror', (e) => console.log('  page error:', e.message));
-  await page.goto(origin + '/index.html');
+  // DuckDB-WASM's threads bundle sometimes hangs in LOAD (about one load in eight here, DuckDB's own
+  // icu extension as well as this one; docs/DESIGN.md section 20). A hung LOAD is retried in a fresh
+  // page for wasm_threads only, at most LOAD_ATTEMPTS times, and every retry is reported.
+  const attempts = arch === 'wasm_threads' ? LOAD_ATTEMPTS : 1;
+  let context;
+  let page;
+  let sql;
+  let load;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    context = await browser.newContext();
+    page = await context.newPage();
+    page.on('pageerror', (e) => console.log('  page error:', e.message));
+    await page.goto(origin + '/index.html');
+    const t0 = Date.now();
+    await withTimeout(page.evaluate((bundle) => window.notebookTest.boot(bundle), ARCHS[arch].bundle), 'starting DuckDB-WASM');
+    console.log(`  DuckDB-WASM started in ${Date.now() - t0} ms`);
+    const p = page;
+    sql = (text, ms) => withTimeout(p.evaluate((t) => window.notebookTest.sql(t), text), text, ms);
+    const t1 = Date.now();
+    try {
+      load = await sql(`LOAD '${origin}/${arch}/notebook.duckdb_extension.wasm'`, 20000);
+      console.log(`  extension loaded in ${Date.now() - t1} ms`);
+      break;
+    } catch (e) {
+      load = { error: String(e.message || e) };
+      console.log(`  LOAD hung (attempt ${attempt} of ${attempts}): ${load.error}`);
+      await context.close();
+    }
+  }
+  check('LOAD notebook', !load.error, load.error);
+  if (load.error) {
+    return failures;
+  }
   check('page is cross-origin isolated', await page.evaluate(() => window.notebookTest.isolated()));
-  const t0 = Date.now();
-  await withTimeout(page.evaluate((bundle) => window.notebookTest.boot(bundle), ARCHS[arch].bundle), 'starting DuckDB-WASM');
-  console.log(`  DuckDB-WASM started in ${Date.now() - t0} ms`);
-  const sql = (text) => withTimeout(page.evaluate((t) => window.notebookTest.sql(t), text), text);
 
   const info = await sql("SELECT version() AS version, (SELECT platform FROM pragma_platform()) AS platform");
   const engine = info.rows && info.rows[0];
@@ -96,14 +123,6 @@ async function testArch(browser, arch, origin) {
   const untyped = await sql('SET VARIABLE nb_probe = NULL; SELECT $nb_probe.lo AS v');
   check('engine: .lo of an untyped NULL variable', untyped.rows && untyped.rows[0].v === null, untyped);
 
-  const t1 = Date.now();
-  const load = await sql(`LOAD '${origin}/${arch}/notebook.duckdb_extension.wasm'`);
-  check('LOAD notebook', !load.error, load.error);
-  if (load.error) {
-    await context.close();
-    return failures;
-  }
-  console.log(`  extension loaded in ${Date.now() - t1} ms`);
 
   await page.evaluate(
     ([name, text]) => window.notebookTest.registerText(name, text),
