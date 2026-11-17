@@ -590,13 +590,14 @@ var App = (function () {
   var wasReading = false;
   A.present = {
     render: function () { A.render(); },
-    // Presenting is the reading view, a screen at a time. A session that has not run yet runs first:
-    // cached results (FORMAT §8) show at once, but inputs and brushing need a live session.
-    enter: function () {
+    // Presenting is the reading view, a screen at a time. Asked for by the reader, a session that has not
+    // run yet runs first: cached results (FORMAT §8) show at once, but inputs and brushing need a live
+    // session. A page opened at #present runs nothing until the reader asks (FORMAT §8).
+    enter: function (asked) {
       wasReading = A.reading;
       A.reading = true;
       A.menu(false);
-      if (!A.running && !A.live) A.run(null);
+      if (asked && !A.running && !A.live) A.run(null);
     },
     leave: function () { A.reading = wasReading; }
   };

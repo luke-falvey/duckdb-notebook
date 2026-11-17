@@ -902,8 +902,9 @@ draw the cells and only ask it which ones.
 - **State is the address.** `#present=3` is written with `history.replaceState` as the presenter moves,
   so a reload, a restored tab or a shared link opens the same screen, and Back is not filled with
   screens. In the editor a reload keeps the server's session for that notebook: the result cache (§17)
-  puts the last results on screen at once, and presenting runs the notebook so its inputs and brushes
-  are live again.
+  puts the last results on screen at once, and a session that has run stays live. A page opened at
+  `#present` runs nothing until the reader asks (§17); pressing Present runs a notebook that has not
+  run, so its inputs and brushes are live.
 - **Print is unchanged.** `beforeprint` leaves presenting before the browser lays out the page, so paper
   and PDF get the whole notebook.
 

@@ -1519,7 +1519,14 @@ def test_present_editor(browser, work):
     try:
         page = browser.new_page(viewport={"width": 1366, "height": 768})
         errors = watch(page)
-        page.goto(still(url))
+        # A link that opens straight into presenting is not the reader asking to run anything (FORMAT §8).
+        runs = []
+        page.on("request", lambda r: runs.append(r.url) if "/api/run" in r.url else None)
+        page.goto(still(url) + "#present")
+        page.wait_for_selector(".nb-present-page")
+        page.wait_for_timeout(1500)
+        check(not runs and not page.evaluate("App.live"), f"opening the editor at #present runs nothing ({len(runs)} runs)")
+        page.keyboard.press("Escape")
         page.wait_for_selector(".nb-cell")
         page.click("#gear")
         check(page.locator("#view-present").is_visible(), "the gear menu has Present")
@@ -1570,7 +1577,7 @@ def test_present_editor(browser, work):
         page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent === '7 / 7'", timeout=30000)
         check(present_state(page)["cells"] == [10], "a reload comes back to the same screen")
         page.wait_for_function("App.live && !App.running", timeout=30000)
-        check(True, "presenting after a reload runs the notebook, so cached results become live again")
+        check(True, "after a reload the session is still live: inputs and brushes keep working")
         page.keyboard.press("Escape")
         st = present_state(page)
         check(not st["on"] and len(st["cells"]) == 11 and page.locator(".nb-toolbar").is_visible() and page.locator("textarea:visible").count() > 3
