@@ -25,6 +25,8 @@ void RegisterNotebookStorage(ExtensionLoader &loader);
 void RegisterNotebookExport(ExtensionLoader &loader);
 //! notebook_start and notebook_stop: the HTTP server and browser UI.
 void RegisterNotebookServer(ExtensionLoader &loader);
+//! notebook_peek(sql, cursor): the CTE or sub-query under a cursor position, and the query that selects from it.
+void RegisterNotebookPeek(ExtensionLoader &loader);
 
 //! The text of a notebook source: a file path, or `db:<name>` / `db:<name>@<version>` for a notebook
 //! stored in the database. Throws if it cannot be read.
@@ -57,6 +59,28 @@ notebook::Notebook ReadNotebook(ClientContext &context, const string &path);
 //! What SQL defines and reads, from DuckDB's parser. Does not bind, so nothing it names
 //! needs to exist. Never throws: a parse error is returned in References::error.
 notebook::References ExtractReferences(ClientContext &context, const string &sql);
+
+//! A part of a query that can be looked at on its own.
+struct PeekTarget {
+	//! `cte` or `subquery`; empty when there is nothing to peek at.
+	string kind;
+	//! The CTE's name or the sub-query's alias, if it has one.
+	string name;
+	//! The statement that selects from the part: empty when there is nothing to peek at.
+	string sql;
+	//! Byte range of the part in the text: a CTE from its name, a sub-query from its parenthesis.
+	idx_t start = 0;
+	idx_t end = 0;
+	//! Why there is nothing to peek at.
+	string reason;
+};
+
+//! The innermost CTE or sub-query around byte offset `cursor` of `sql`, from DuckDB's parser, and
+//! the statement that selects from it with the CTEs it needs. Nothing is found (and `reason` says
+//! why) in the main query, in SQL that does not parse, in a statement that is not a plain query,
+//! and for a part that calls a function with side effects. Reads the catalog for that last check,
+//! so it needs a transaction. Never throws for bad SQL.
+PeekTarget FindPeekTarget(ClientContext &context, const string &sql, idx_t cursor);
 
 //! Throws InvalidInputException naming the first format error, if the notebook has any.
 void ThrowIfInvalid(const notebook::Notebook &notebook, const string &path);

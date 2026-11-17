@@ -329,6 +329,234 @@ def test_metadata_error(browser, work):
     shell.communicate(timeout=30)
 
 
+def test_cache(browser, work):
+    """The result cache (FORMAT §8): a reopened notebook shows its last results without running anything,
+    results whose inputs changed are marked, and the cache can be cleared or switched off."""
+    folder = os.path.join(work, "cache")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "revenue.sql")
+    shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
+    db = os.path.join(folder, "cache.duckdb")
+    sidecar = os.path.join(folder, ".duckdb-notebook", "revenue")
+
+    def start(source=notebook):
+        shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list", db], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=folder, bufsize=1)
+        shell.stdin.write(f"SELECT url FROM notebook_start('{source}', open := false);\n")
+        shell.stdin.flush()
+        return shell, shell.stdout.readline().strip()
+
+    def stop(shell):
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+    def open_page(url):
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.errors = watch(page)
+        # What the page asks the server to do: a reopened notebook must not run or query anything.
+        page.calls = []
+        page.on("request", lambda r: page.calls.append(r.url.split("/api/")[1].split("?")[0]) if "/api/" in r.url else None)
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        return page
+
+    def run_all(page):
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+
+    def outdated(page):
+        return page.evaluate("() => Array.from(document.querySelectorAll('.nb-cell.outdated')).map(c => +c.dataset.idx)")
+
+    def shown(page):
+        """What a reader sees of the results: the prose, a grid's page, the charts and the input."""
+        return page.evaluate("""() => ({
+            prose: document.querySelector(".nb-cell[data-idx='1'] .nb-md").textContent,
+            grid: document.querySelector(".nb-cell[data-idx='6'] .nb-output").innerHTML,
+            charts: document.querySelector(".nb-cell[data-idx='7'] .nb-output").innerHTML,
+            kpi: document.querySelector(".nb-cell[data-idx='8'] .nb-output").innerHTML,
+            top: document.querySelector(".nb-cell[data-idx='10'] .nb-output").innerHTML,
+            foot: document.querySelector(".nb-cell[data-idx='6'] .nb-foot").textContent,
+            region: (s => s.options[s.selectedIndex].text)(document.querySelector(".nb-input select")),
+            badges: Array.from(document.querySelectorAll('.nb-cell-head .nb-badge')).map(b => b.className)
+        })""")
+
+    # ---- First session: run, pick an input, brush. ----
+    shell, url = start()
+    page = open_page(url)
+    check(page.locator(".nb-badge.fresh").count() == 0 and "Opened" in page.locator("#status").text_content(),
+          "a notebook that has never run opens with no results")
+    check(not os.path.exists(sidecar), "opening a notebook writes no cache")
+    run_all(page)
+    page.locator(".nb-input select").first.select_option(label="US")
+    page.wait_for_function("document.querySelector('.nb-md').textContent.includes('US')", timeout=30000)
+    before_top = page.locator(".nb-cell[data-idx='10'] table.nb-grid tbody tr").first.text_content()
+    overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
+    overlay.scroll_into_view_if_needed()
+    box = overlay.bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + 20)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.3, box["y"] + 40, steps=5)
+    page.mouse.up()
+    page.wait_for_function(
+        "(b) => { const r = document.querySelector(\".nb-cell[data-idx='10'] table.nb-grid tbody tr\"); "
+        "return r && r.textContent !== b && !App.running; }", arg=before_top, timeout=30000)
+    page.mouse.move(5, 5)
+    page.wait_for_timeout(300)
+    first = shown(page)
+    check("US" in first["prose"] and first["region"] == "US" and all("fresh" in b for b in first["badges"][1:]),
+          "the first session ends with every cell fresh, for the region picked")
+    names = sorted(os.listdir(sidecar)) if os.path.isdir(sidecar) else []
+    check("monthly.json" in names and "@state.json" in names and "filtered.json" in names
+          and len([n for n in names if n.startswith("@") and n != "@state.json"]) == 2,
+          f"running keeps each cell's result beside the notebook ({len(names)} files in .duckdb-notebook/revenue)")
+    check(open(os.path.join(folder, ".duckdb-notebook", ".gitignore")).read().strip().endswith("*"),
+          "the cache directory ignores itself in git")
+    check(max(os.path.getsize(os.path.join(sidecar, n)) for n in names) < 4 * 1024 * 1024, "every entry is under the size limit")
+    check(not page.errors, f"no browser errors while running {page.errors[:3]}")
+    page.close()
+    stop(shell)
+
+    # ---- A new process: the page shows the same results at once, and nothing runs. ----
+    shell, url = start()
+    page = open_page(url)
+    again = shown(page)
+    check(again["badges"] == first["badges"] and again["region"] == "US" and again["prose"] == first["prose"],
+          "reopening shows the last results: the same states, input value and prose")
+    check(again["grid"] == first["grid"] and again["top"] == first["top"] and again["foot"] == first["foot"],
+          "a remembered grid is the same page of rows, drawn exactly as when it was computed")
+    check(again["charts"] == first["charts"] and again["kpi"] == first["kpi"]
+          and page.locator(".nb-cell[data-idx='7'] rect.nb-brush").get_attribute("width") not in (None, "0"),
+          "remembered charts are drawn exactly as before, the brush included")
+    check(set(page.calls) <= {"notebook", "catalog", "notebooks", "events"},
+          f"reopening runs nothing: the page only asks for the notebook ({sorted(set(page.calls))})")
+    check(outdated(page) == [] and "last results" in page.locator("#status").text_content()
+          and "Run all" in page.locator("#status").get_attribute("title"),
+          "nothing is marked stale, and the status says these are the last results")
+    stopped = sql(os.path.join(folder, "other.duckdb"), "SELECT count(*) FROM duckdb_views() WHERE view_name = 'monthly'").strip()
+    check(stopped == "0", "showing results defines nothing")
+
+    # Paging and brushing need a session that has run: they say so instead of running or failing.
+    page.locator(".nb-cell[data-idx='6'] button.nb-page").last.click()
+    check("first page of the last run" in page.locator("#status").text_content(), "paging a remembered grid asks for a run")
+    overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
+    overlay.scroll_into_view_if_needed()
+    box = overlay.bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.6, box["y"] + 20)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.7, box["y"] + 40, steps=5)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    check("last run" in page.locator("#status").text_content() and shown(page)["charts"] == first["charts"],
+          "brushing a remembered chart asks for a run and leaves the chart as it was")
+    check("run" not in page.calls and "page" not in page.calls and "variable" not in page.calls,
+          "neither ran or queried anything")
+
+    # An input changes: what reads it is stale, in fainter ink with a note, and still nothing runs.
+    page.locator(".nb-input select").first.select_option(label="APAC")
+    page.wait_for_function("document.querySelectorAll('.nb-cell.outdated').length > 0")
+    check(outdated(page) == [1, 6, 7, 8, 9, 10], f"changing an input marks the cells that read it, and their readers ({outdated(page)})")
+    faint = page.evaluate("""() => ['6', '3'].map(i => +getComputedStyle(document.querySelector(`.nb-cell[data-idx='${i}'] .nb-output`)).opacity)""")
+    note = page.locator(".nb-cell[data-idx='6'] .nb-foot .nb-outdated")
+    check(faint[0] < 0.6 and faint[1] == 1 and note.text_content() == "from an earlier run" and "earlier run" in note.get_attribute("title"),
+          f"a stale result is fainter ({faint[0]}) and says it is from an earlier run; a fresh one is not")
+    check(shown(page)["grid"] == first["grid"], "the stale result itself is still the last one")
+    check("run" not in page.calls, "changing an input before anything has run does not run cells")
+    page.click("#gear")
+    page.click("#view-reading")
+    page.keyboard.press("Escape")
+    check(page.locator(".nb-cell[data-idx='6'] .nb-outdated").is_visible(), "reading view keeps the note on a stale result")
+    page.click("#gear")
+    page.click("#view-reading")
+    page.keyboard.press("Escape")
+    for theme in ("dark", "light"):
+        page.evaluate("t => document.documentElement.setAttribute('data-theme', t)", theme)
+        colour = page.evaluate("() => getComputedStyle(document.querySelector('.nb-outdated')).color")
+        check(colour == "rgb(240, 140, 0)", f"the note is drawn in the stale colour in {theme} mode")
+
+    # Running brings everything up to date.
+    run_all(page)
+    check(outdated(page) == [] and page.locator(".nb-badge.stale").count() == 0, "after a run nothing is stale")
+    check(not page.errors, f"no browser errors on a reopened notebook {page.errors[:3]}")
+    page.close()
+    stop(shell)
+
+    # ---- An upstream cell is edited on disk, and two entries are damaged. ----
+    text = open(notebook).read()
+    with open(notebook, "w") as f:
+        f.write(text.replace("count(*) AS orders\nFROM filtered", "count(*) AS order_count\nFROM filtered"))
+    with open(os.path.join(sidecar, "top_orders.json"), "w") as f:
+        f.write("this is not a result")
+    damaged = open(os.path.join(sidecar, "order_sizes.json")).read()
+    with open(os.path.join(sidecar, "order_sizes.json"), "w") as f:
+        f.write(damaged[:len(damaged) // 2])
+    shell, url = start()
+    page = open_page(url)
+    check(outdated(page) == [1, 7, 8], f"an edited cell and the cells that read it (the prose reads monthly) are stale; the rest stay fresh ({outdated(page)})")
+    check(page.locator(".nb-cell[data-idx='6'] .nb-badge.fresh").count() == 1 and page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1,
+          "a cell above the edit keeps its fresh result")
+    check(page.locator(".nb-cell[data-idx='9'] svg.nb-chart-svg").count() == 0 and page.locator(".nb-cell[data-idx='10'] table.nb-grid").count() == 0
+          and page.locator(".nb-error").count() == 0 and not page.errors,
+          "a corrupt entry and a truncated one are ignored: those cells are simply empty")
+    run_all(page)
+    check(outdated(page) == [] and page.locator(".nb-cell[data-idx='10'] table.nb-grid").count() == 1, "running fills them in again")
+
+    # ---- The gear menu: forget the results, or keep none. ----
+    page.click("#gear")
+    check(page.locator("#keep-results").is_checked() and page.locator("#forget-results").is_visible(),
+          "the gear menu has the two cache controls, results kept by default")
+    page.click("#forget-results")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('Forgot')")
+    check(not os.path.exists(sidecar) and page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1,
+          "Forget removes the notebook's cache and leaves this session's results on the page")
+    page.keyboard.press("Escape")
+    page.reload()
+    page.wait_for_selector(".nb-cell")
+    page.wait_for_function("document.getElementById('status').textContent !== ''")
+    check(page.locator("table.nb-grid").count() == 0 and "Opened" in page.locator("#status").text_content(),
+          "after Forget the notebook opens with no results")
+    run_all(page)
+    check(os.path.isdir(sidecar), "the next run keeps results again")
+    page.click("#gear")
+    page.click("#keep-results")
+    page.wait_for_function("App.text().includes('cache: false')")
+    page.wait_for_timeout(1200)
+    check(not os.path.exists(sidecar), "unticking keep results writes cache: false in the [notebook] cell and removes the cache")
+    page.keyboard.press("Escape")
+    run_all(page)
+    check(not os.path.exists(sidecar) and page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1,
+          "with cache: false a run keeps nothing")
+    page.click("#gear")
+    page.click("#keep-results")
+    page.wait_for_function("!App.text().includes('cache: false')")
+    page.keyboard.press("Escape")
+    run_all(page)
+    check(os.path.isdir(sidecar), "ticking it again keeps results from the next run")
+    check(not page.errors, f"no browser errors using the cache controls {page.errors[:3]}")
+    page.close()
+
+    # ---- A notebook stored in the database keeps its cache there. ----
+    shell.stdin.write(f"SELECT saved FROM notebook_save('{os.path.join(ROOT, 'examples', 'revenue.sql')}', name := 'stored');\n")
+    shell.stdin.flush()
+    shell.stdout.readline()
+    page = open_page(url.split("&nb=")[0] + "&nb=db:stored")
+    run_all(page)
+    page.close()
+    stop(shell)
+    rows = sql(db, "SELECT count(*), count(*) FILTER (cell = 'monthly') FROM _notebook.cache WHERE name = 'stored'").strip()
+    check(rows.split("|")[0].isdigit() and int(rows.split("|")[0]) >= 10 and rows.split("|")[1] == "1",
+          f"a stored notebook's results are rows of _notebook.cache ({rows})")
+    shell, url = start("db:stored")
+    page = open_page(url)
+    check(page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1 and outdated(page) == [] and "run" not in page.calls
+          and page.locator(".nb-badge.fresh").count() == 11,
+          "a stored notebook reopens with its results too")
+    check(not page.errors, f"no browser errors with a stored notebook {page.errors[:3]}")
+    page.close()
+    stop(shell)
+
+
 def test_exports(browser, work, chromium):
     notebook = os.path.join(ROOT, "examples", "revenue.sql")
     db = os.path.join(work, "exports.duckdb")
@@ -700,6 +928,701 @@ def test_ink_editor(browser, work):
         shell.communicate(timeout=30)
 
 
+# ---- Presenting (frontend/render-present.js, docs/DESIGN.md §18) ---------------------------------
+
+PRESENT_NOTEBOOK = """-- %% [markdown]
+/*
+# Screens
+*/
+
+-- %% numbers hide=code
+SELECT range AS n, range * range AS square FROM range(6);
+
+-- %% [markdown] screen=join
+/*
+A note that stays with the table above it.
+*/
+
+-- %% secret hide=all
+SELECT 'never shown' AS note;
+
+-- %% chart left from=numbers span=6
+/*
+mark: bar
+x: {field: n, type: ordinal}
+y: square
+*/
+
+-- %% chart right from=numbers span=6
+/*
+mark: line
+x: n
+y: square
+*/
+
+-- %% chart alone from=numbers span=6 screen=new
+/*
+mark: point
+x: n
+y: square
+*/
+
+-- %% skipped screen=skip
+SELECT 'left out of the presentation' AS note;
+
+-- %% [markdown]
+/*
+""" + "\n\n".join(f"Line {i} of a screen that is taller than any window." for i in range(60)) + """
+*/
+"""
+
+PRESENT_STATE = """() => ({
+    on: document.body.classList.contains('presenting'),
+    page: (document.querySelector('.nb-present-page') || {}).textContent || '',
+    cells: [...document.querySelectorAll('.nb-cell')].map(c => +c.dataset.idx),
+    hash: location.hash, scale: Present.scale })"""
+
+
+def present_state(page):
+    return page.evaluate(PRESENT_STATE)
+
+
+def test_present(browser, work):
+    db = os.path.join(work, "present.duckdb")
+    notebook = os.path.join(work, "screens.sql")
+    with open(notebook, "w") as f:
+        f.write(PRESENT_NOTEBOOK)
+    screens, pre = os.path.join(work, "screens.html"), os.path.join(work, "present_pre.html")
+    revenue = os.path.join(ROOT, "examples", "revenue.sql")
+    sql(db, f"FROM notebook_export('{notebook}', file := '{screens}')",
+        f"FROM notebook_export('{revenue}', file := '{pre}', interactive := 'precomputed')")
+    viewport = {"width": 1366, "height": 768}
+
+    # How screens are formed, as a function of the cells alone.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.goto(still("file://" + screens))
+    page.wait_for_function("window.__NB_READY === true")
+    formed = page.evaluate("""() => {
+      const cell = (kind, span, screen, visible) => ({ kind, span, screen, visible: visible !== false });
+      return JSON.stringify([
+        Present.screens([cell('markdown'), cell('sql'), cell('chart', 6), cell('chart', 6), cell('chart', 6)]),
+        Present.screens([cell('input', 6), cell('input', 6), cell('chart', 4), cell('chart', 4), cell('chart', 4), cell('sql')]),
+        Present.screens([cell('sql'), cell('markdown', 12, 'join'), cell('chart', 6), cell('chart', 6, 'new'), cell('sql', 12, 'skip'), cell('sql', 12, null, false)])
+      ]);
+    }""")
+    check(formed == "[[[0],[1],[2,3],[4]],[[0,1,2,3,4],[5]],[[0,1],[2],[3]]]",
+          f"a screen is a row of the reading layout; inputs go with what follows; screen= joins, splits and skips ({formed})")
+
+    # Entering from an export's quiet control; code is hidden as in the reading view.
+    check(page.locator("pre.nb-source").count() > 0 and not present_state(page)["on"], "an export opens as a page, with its code")
+    start = page.locator("button.nb-present-start")
+    check(start.is_visible() and start.evaluate("e => getComputedStyle(e).borderTopWidth") == "0px", "an export has a quiet control to present it")
+    start.click()
+    st = present_state(page)
+    check(st["on"] and st["page"] == "1 / 5" and st["cells"] == [0] and st["hash"] == "#present",
+          f"the control opens presenting on the first screen, with a page indicator ({st})")
+    mark = page.locator(".nb-present-page")
+    check(mark.evaluate("e => getComputedStyle(e).color") == "rgb(134, 142, 150)" and "Excalifont" in mark.evaluate("e => getComputedStyle(e).fontFamily")
+          and not page.locator(".nb-viewer-header").is_visible(),
+          "the indicator is in the handwriting, in the muted ink, and nothing else is on the page")
+    grid = page.locator(".nb-cells").bounding_box()
+    check(st["scale"] > 1.1 and abs(grid["x"] - (1366 - grid["x"] - grid["width"])) < 2 and grid["x"] > 60
+          and abs(grid["y"] - (768 - grid["y"] - grid["height"])) < 2,
+          f"a screen is drawn larger than the page and centred, with margins (scale {st['scale']:.2f})")
+
+    # Moving: keys, and clicks on the page.
+    def moves(action, expect_page, expect_cells, message):
+        action()
+        st = present_state(page)
+        check(st["page"] == expect_page and st["cells"] == expect_cells, f"{message} ({st['page']}, cells {st['cells']})")
+    moves(lambda: page.keyboard.press("ArrowRight"), "2 / 5", [1, 2], "Right arrow moves on; screen=join keeps a cell with the one before it")
+    check(page.locator("pre.nb-source").count() == 0 and page.locator(".nb-cell[data-idx='1'] table.nb-grid").count() == 1,
+          "presenting shows results, not code")
+    moves(lambda: page.keyboard.press(" "), "3 / 5", [4, 5], "Space moves on; cells that share a row share a screen, and hide=all has none")
+    moves(lambda: page.keyboard.press("PageDown"), "4 / 5", [6], "Page Down moves on; screen=new starts a screen")
+    alone = page.locator(".nb-cells").bounding_box()
+    check(abs(alone["x"] - (1366 - alone["x"] - alone["width"])) < 2, "a cell narrower than the page is centred on its screen")
+    moves(lambda: page.keyboard.press("ArrowLeft"), "3 / 5", [4, 5], "Left arrow goes back")
+    moves(lambda: page.keyboard.press("PageUp"), "2 / 5", [1, 2], "Page Up goes back")
+    moves(lambda: page.keyboard.press("End"), "5 / 5", [8], "End jumps to the last screen; screen=skip has none")
+    st = present_state(page)
+    tall = page.evaluate("(() => { const r = document.getElementById('nb-root'); return [r.scrollHeight, r.clientHeight]; })()")
+    check(abs(st["scale"] - 0.8) < 0.01 and tall[0] > tall[1] + 500,
+          f"a screen far taller than the window is drawn a little smaller than the reading view, no further, and scrolls (scale {st['scale']:.2f}, {tall[0]} > {tall[1]})")
+    moves(lambda: page.keyboard.press("ArrowRight"), "5 / 5", [8], "there is nothing after the last screen")
+    moves(lambda: page.keyboard.press("Home"), "1 / 5", [0], "Home jumps to the first screen")
+    moves(lambda: page.mouse.click(40, 400), "2 / 5", [1, 2], "a click on the page moves on")
+    moves(lambda: page.locator(".nb-cell[data-idx='1'] td").first.click(), "3 / 5", [4, 5], "so does a click on a table")
+    page.keyboard.press("ArrowLeft")
+    moves(lambda: page.locator(".nb-cell[data-idx='2'] .nb-md").click(), "3 / 5", [4, 5], "and a click on text")
+    page.keyboard.press("ArrowRight")
+    moves(lambda: page.locator("svg.nb-chart-svg").click(), "4 / 5", [6], "a click on a chart does not move on")
+    check(present_state(page)["hash"] == "#present=4", "the screen is kept in the URL hash")
+    page.reload()
+    page.wait_for_function("window.__NB_READY === true")
+    moves(lambda: None, "4 / 5", [6], "a reload comes back to the same screen")
+
+    # Leaving.
+    page.keyboard.press("Escape")
+    st = present_state(page)
+    check(not st["on"] and st["cells"] == [0, 1, 2, 4, 5, 6, 7, 8] and st["hash"] == "" and page.locator("pre.nb-source").count() > 0
+          and page.locator(".nb-present-mark").count() == 0 and page.locator(".nb-cells").evaluate("e => e.getAttribute('style') || ''") == "",
+          f"Escape leaves: the whole page is back, code and all, with nothing left behind ({st})")
+    box = page.locator(".nb-cell[data-idx='6']").bounding_box()
+    check(0 <= box["y"] < 768, "leaving lands on the cell that was being presented")
+    page.locator("button.nb-present-start").click()
+    page.locator("button.nb-present-leave").click()
+    check(not present_state(page)["on"], "the faint ✕ beside the page number leaves too")
+
+    # A link can open straight into presenting. Print gets the whole notebook.
+    page.goto("file://" + screens + "?ink=off#present=3")
+    page.wait_for_function("window.__NB_READY === true")
+    moves(lambda: None, "3 / 5", [4, 5], "#present=3 in a link opens the third screen")
+    page.evaluate("window.dispatchEvent(new Event('beforeprint'))")
+    st = present_state(page)
+    check(not st["on"] and len(st["cells"]) == 8, "printing leaves presenting, so paper gets the whole notebook")
+    page.emulate_media(media="print")
+    check(not page.locator("button.nb-present-start").is_visible(), "the control is not printed")
+    page.emulate_media(media="screen")
+    for width, height in ((1920, 1080), (700, 500)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.goto("file://" + screens + f"?ink=off&v={width}#present=3")
+        page.wait_for_function("window.__NB_READY === true")
+        page.wait_for_timeout(200)
+        g, st = page.locator(".nb-cells").bounding_box(), present_state(page)
+        check(g["x"] >= 20 and g["x"] + g["width"] <= width - 20 and g["y"] >= 20 and g["y"] + g["height"] <= height - 20
+              and page.evaluate("document.documentElement.scrollWidth <= innerWidth"),
+              f"at {width}x{height} the screen fits the window with margins (scale {st['scale']:.2f})")
+    check(not errors, f"no browser errors presenting an export {errors[:3]}")
+
+    # Inputs stay live: a precomputed export switches results without moving on.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.goto("file://" + pre + "?ink=off#present=3")
+    page.wait_for_function("window.__NB_READY === true")
+    st = present_state(page)
+    check(st["cells"] == [4, 5, 6], f"inputs are presented with the cell that follows them ({st})")
+    regions = "() => [...new Set([...document.querySelectorAll(\".nb-cell[data-idx='6'] tbody td:nth-child(4)\")].map(e => e.textContent))].join()"
+    before = page.evaluate(regions)
+    page.locator(".nb-input select").first.select_option(label="US")
+    page.wait_for_function(f"({regions})() === 'US'")
+    st = present_state(page)
+    check(before != "US" and st["page"].startswith("3 /") and st["cells"] == [4, 5, 6], f"an input changes what depends on it and stays on its screen ({before} -> US, {st['page']})")
+    page.keyboard.press("ArrowRight")
+    check(present_state(page)["page"].startswith("4 /"), "after a value is picked, the arrow keys move between screens again")
+    page.keyboard.press("Home")
+    check("US" in page.locator(".nb-md").first.text_content(), "the other screens show the new value")
+    check(not errors, f"no browser errors presenting a precomputed export {errors[:3]}")
+
+    # The pen. Each screen is written as it arrives, scaled with it; one already shown is not written again.
+    page = browser.new_page(viewport=viewport)
+    errors = watch(page)
+    page.add_init_script("window.__INK_PAUSE = true")
+    page.goto("file://" + screens + "#present")
+    page.wait_for_function("window.__NB_READY === true && document.fonts.status === 'loaded'")
+    frames(page, 3)
+    page.evaluate("Ink.advance(300)")
+    frames(page, 2)
+    state = page.evaluate(INK_STATE)
+    check(state["canvases"] > 0 and state["hidden"] > 0 and page.locator(".nb-cells").inner_text().strip() == "Screens",
+          f"a screen is written as it arrives: part-way through, a canvas writes text that is already in the DOM ({state})")
+    job = page.evaluate("(() => { const j = Ink.jobs().filter(j => j.state === 'running' && j.textRoot && /^p1cell/.test(j.key)).sort((a, b) => b.start + b.end - a.start - a.end)[0]; return { start: j.start, end: j.end, now: Ink.now(), z: j.z }; })()")
+    page.evaluate(f"Ink.advance({job['start'] + job['end'] - job['now'] - 0.5})")
+    frames(page, 2)
+    heading = page.locator(".nb-cells")
+    last_frame = heading.screenshot()
+    writing = page.evaluate(INK_STATE)["canvases"] > 0
+    page.evaluate("Ink.advance(5)")
+    frames(page, 2)
+    diff = pixel_diff(page, last_frame, heading.screenshot())
+    check(writing and job["z"] > 1.1 and diff["ink"] > 1000 and diff["differ"] < diff["ink"] * 0.02,
+          f"on a scaled screen the pen's last frame matches the text it hands over to (scale {job['z']:.2f}, {diff['differ']} of {diff['ink']} inked pixels differ)")
+    page.keyboard.press("ArrowRight")
+    frames(page, 3)
+    plan = page.evaluate("Ink.plans.filter(p => /^p1cell1\\//.test(p.key)).pop()")
+    check(page.evaluate(INK_STATE)["running"] > 0 and plan and plan["dur"] > 200,
+          f"moving on writes the next screen at the pen's own pace, not as a quick update ({plan})")
+    page.evaluate("Ink.advance(60000)")
+    frames(page, 3)
+    written = page.evaluate(INK_STATE)["jobs"]
+    page.keyboard.press("ArrowLeft")
+    frames(page, 3)
+    back = page.evaluate(INK_STATE)
+    # Only the page number is new.
+    check(back["jobs"] == written + 1 and page.evaluate("Ink.jobs().every(j => j.key === 'present/mark')"),
+          f"going back to a screen already shown writes nothing: it is there at once ({written} -> {back['jobs']} jobs)")
+    page.evaluate("Ink.advance(60000)")
+    frames(page, 3)
+    page.keyboard.press("Escape")
+    page.evaluate("Ink.advance(60000); Ink.finishAll()")
+    settle(page)
+    done = page.evaluate(INK_STATE)
+    off = browser.new_page(viewport=viewport)
+    off.goto(still("file://" + screens))
+    off.wait_for_function("window.__NB_READY === true && document.fonts.status === 'loaded'")
+    settle(off)
+    check(done["canvases"] == 0 and done["hidden"] == 0 and done["styled"] == 0 and html_of(page, "#nb-root") == html_of(off, "#nb-root"),
+          f"no trace: after presenting, the page is exactly the page drawn without it ({done})")
+    check(not errors, f"no browser errors while a presentation is written {errors[:3]}")
+
+
+def test_present_editor(browser, work):
+    notebook = os.path.join(work, "present_editor.sql")
+    shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
+    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    url = shell.stdout.readline().strip()
+    try:
+        page = browser.new_page(viewport={"width": 1366, "height": 768})
+        errors = watch(page)
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.click("#gear")
+        check(page.locator("#view-present").is_visible(), "the gear menu has Present")
+        page.click("#view-present")
+        # Nothing had run: presenting runs the notebook first.
+        page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent === '1 / 7'", timeout=30000)
+        st = present_state(page)
+        check(st["on"] and st["cells"] == [1] and not page.locator(".nb-toolbar").is_visible() and not page.locator("#menu").is_visible()
+              and page.locator("textarea:visible").count() == 0 and page.locator(".nb-tools:visible, .nb-margin:visible, .nb-add:visible").count() == 0,
+              f"Present shows the first screen alone: no toolbar, no code, no cell chrome ({st})")
+        check("EU" in page.locator(".nb-md").text_content() and st["scale"] > 1.1, "a notebook that had not run is run before it is presented")
+        page.keyboard.press("ArrowRight")
+        page.keyboard.press("ArrowRight")
+        st = present_state(page)
+        check(st["page"] == "3 / 7" and st["cells"] == [4, 5, 6] and st["hash"] == "#present=3", f"the inputs share a screen with the query after them ({st})")
+
+        # Inputs work, and do not move on.
+        regions = "() => [...new Set([...document.querySelectorAll(\".nb-cell[data-idx='6'] tbody td:nth-child(4)\")].map(e => e.textContent))].join()"
+        page.locator(".nb-input select").first.select_option(label="US")
+        page.wait_for_function(f"({regions})() === 'US'", timeout=30000)
+        st = present_state(page)
+        check(st["page"] == "3 / 7" and st["cells"] == [4, 5, 6], f"an input re-runs what reads it and stays on its screen ({st['page']})")
+        slider = page.locator(".nb-input input[type=range]")
+        slider.fill("300")
+        slider.dispatch_event("change")
+        page.wait_for_function("[...document.querySelectorAll(\".nb-cell[data-idx='6'] tbody td:nth-child(6)\")].every(e => parseFloat(e.textContent.replace(/,/g, '')) >= 300)", timeout=30000)
+        check(present_state(page)["page"] == "3 / 7", "so does a slider")
+
+        # Brushing a chart filters what depends on it, without moving on.
+        page.keyboard.press("ArrowRight")
+        overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
+        box = overlay.bounding_box()
+        page.evaluate("App.status('')")
+        page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + 20)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] * 0.3, box["y"] + 40, steps=5)
+        page.mouse.up()
+        page.wait_for_function("!App.running && document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        check(present_state(page)["page"] == "4 / 7" and page.locator(".nb-cell[data-idx='7'] .nb-brush").count() >= 1, "brushing a chart does not move on")
+        page.keyboard.press("End")
+        st = present_state(page)
+        months = page.locator(".nb-cell[data-idx='10'] table.nb-grid tbody tr td:nth-child(3)").all_text_contents()
+        check(st["page"] == "7 / 7" and len(months) > 0 and all(m[5:7] in ("03", "04") for m in months),
+              f"the brush has filtered a later screen ({sorted(set(m[:7] for m in months))})")
+
+        # A reload stays in the presentation, and Escape gives the editor back as it was.
+        page.reload()
+        page.wait_for_function("(document.querySelector('.nb-present-page') || {}).textContent === '7 / 7'", timeout=30000)
+        check(present_state(page)["cells"] == [10], "a reload comes back to the same screen")
+        page.wait_for_function("App.live && !App.running", timeout=30000)
+        check(True, "presenting after a reload runs the notebook, so cached results become live again")
+        page.keyboard.press("Escape")
+        st = present_state(page)
+        check(not st["on"] and len(st["cells"]) == 11 and page.locator(".nb-toolbar").is_visible() and page.locator("textarea:visible").count() > 3
+              and not page.evaluate("App.reading") and st["hash"] == "",
+              f"Escape leaves presenting for the editor as it was ({st})")
+        check(page.locator("#cells").evaluate("e => e.getAttribute('style') || ''") == "" and page.locator(".nb-present-mark").count() == 0,
+              "nothing of the presentation is left on the page")
+        check(not errors, f"no browser errors presenting in the editor {errors[:3]}")
+    finally:
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+def test_chart_marks(browser, work):
+    """Rules and bands on charts (FORMAT 5.1), in an export of test/notebooks/references.sql."""
+    db = os.path.join(work, "marks.duckdb")
+    out = os.path.join(work, "references.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'test', 'notebooks', 'references.sql')}', file := '{out}')")
+    page = browser.new_page(viewport={"width": 1300, "height": 950})
+    errors = watch(page)
+    page.goto(still("file://" + out))
+    page.wait_for_function("window.__NB_READY === true")
+    chart = page.locator(".nb-cell[data-idx='1']")
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(chart.locator(".nb-ref-rule").count() == 6 and chart.locator(".nb-ref-band").count() == 2,
+          "a chart draws its rules and bands")
+    check("average 49.5" in labels and "24.75 to 74.25" in labels and "budget 100" in labels,
+          f"aggregates are computed by DuckDB and written into the labels ({labels})")
+    order = chart.locator("svg.nb-chart-svg > g").evaluate(
+        "g => Array.from(g.children).map(e => e.getAttribute('class')).filter(c => /nb-refs|nb-plot|nb-ref-labels/.test(c || ''))")
+    check(order == ["nb-refs", "nb-plot", "nb-ref-labels"], f"rules and bands are drawn behind the marks, their labels over them ({order})")
+    muted = chart.locator(".nb-ref-rule path").first.evaluate("e => getComputedStyle(e).stroke")
+    red = chart.locator(".nb-ref-rule").nth(5).locator("path").first.evaluate("e => getComputedStyle(e).stroke")
+    check(muted == "rgb(134, 142, 150)" and red == "rgb(224, 49, 49)", f"they are in muted ink unless given a colour ({muted}, {red})")
+    # y: 120 is above every point (n < 100): the axis grows to show it.
+    clear = chart.evaluate("""(cell) => {
+      const line = cell.querySelector('.nb-plot .nb-line'), n = line.getTotalLength(), m = line.getScreenCTM(), pts = [];
+      for (let i = 0; i <= 800; i++) { const p = line.getPointAtLength(n * i / 800).matrixTransform(m); pts.push([p.x, p.y]); }
+      return Array.from(cell.querySelectorAll('.nb-ref-labels text')).filter(t => {
+        const b = t.getBoundingClientRect();
+        return pts.some(p => p[0] > b.left && p[0] < b.right && p[1] > b.top && p[1] < b.bottom);
+      }).map(t => t.textContent);
+    }""")
+    check(clear == [], f"rule and band labels are placed clear of the line ({clear})")
+    target = chart.locator(".nb-ref-rule[data-ref='Target'] path").first.bounding_box()
+    frame, line = chart.locator("svg.nb-chart-svg").bounding_box(), chart.locator(".nb-plot .nb-line").bounding_box()
+    check(target is not None and frame["y"] <= target["y"] < line["y"], "the axis grows to include a rule outside the data")
+    chart.locator(".nb-tab", has_text="Bars by group").click()
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(labels == ["Target", "average 2,475"], f"a rule's label uses the axis's format ({labels})")
+    check(chart.locator(".nb-ref-rule").count() == 2, "a rule on a category axis runs through its category")
+
+    # Notes (FORMAT 5.1): handwriting attached to data positions, drawn after the marks.
+    boxes = """(cell) => {
+      const box = e => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; };
+      return { texts: Array.from(cell.querySelectorAll('.nb-note')).map(n => Array.from(n.querySelectorAll('text')).map(t => ({ text: t.textContent, box: box(t) }))),
+               bars: Array.from(cell.querySelectorAll('.nb-plot .nb-mark .sk-hit')).map(box),
+               paths: Array.from(cell.querySelectorAll('.nb-note')).map(n => n.querySelectorAll('path').length) }; }"""
+    geo = chart.evaluate(boxes)
+    note, bar = geo["texts"][0][0], max(geo["bars"], key=lambda b: b[3] - b[1])
+    check(note["text"] == "the bigger group" and note["box"][3] <= bar[1] + 2 and note["box"][0] < bar[2] + 60 and note["box"][2] > bar[0] - 60,
+          f"a note on a category sits above its bar ({note['box']} over {bar})")
+    chart.locator(".nb-tab", has_text="Notes").click()
+    geo = chart.evaluate(boxes)
+    lines = [t["text"] for t in geo["texts"][0]]
+    check(len(geo["texts"]) == 3 and len(lines) >= 2 and all(len(l) <= 18 for l in lines) and " ".join(lines) == "A note that is long enough to wrap",
+          f"a long note is wrapped into short lines ({lines})")
+    order = chart.locator("svg.nb-chart-svg > g").evaluate(
+        "g => Array.from(g.children).map(e => e.getAttribute('class')).filter(c => /nb-plot|nb-notes/.test(c || ''))")
+    check(order == ["nb-plot", "nb-notes"] and chart.locator(".nb-notes").evaluate("e => getComputedStyle(e).pointerEvents") == "none",
+          "notes are drawn after the marks and leave the pointer to them")
+    # The ring of the first note is on the line at its date; no note's text touches the line.
+    hits = chart.evaluate("""(cell) => {
+      const line = cell.querySelector('.nb-plot .nb-line'), n = line.getTotalLength(), m = line.getScreenCTM(), pts = [];
+      for (let i = 0; i <= 400; i++) { const p = line.getPointAtLength(n * i / 800).matrixTransform(m); pts.push([p.x, p.y]); }
+      const ring = cell.querySelector('.nb-note path').getBoundingClientRect(), cx = (ring.left + ring.right) / 2, cy = (ring.top + ring.bottom) / 2;
+      const near = Math.min(...pts.map(p => Math.hypot(p[0] - cx, p[1] - cy)));
+      const texts = Array.from(cell.querySelectorAll('.nb-note text')).map(t => t.getBoundingClientRect());
+      const touching = texts.filter(b => pts.some(p => p[0] > b.left && p[0] < b.right && p[1] > b.top && p[1] < b.bottom)).length;
+      return { near, touching, width: ring.width };
+    }""")
+    check(hits["near"] < 4 and 18 < hits["width"] < 34, f"a circled note rings its data point ({hits})")
+    check(hits["touching"] == 0, "notes are placed clear of the line they point at")
+    check(geo["paths"][0] >= 2 and geo["paths"][1] >= 1 and geo["paths"][2] == 3, f"a note has an arrow, a range has a bracket ({geo['paths']})")
+    bad = page.locator(".nb-cell[data-idx='2']")
+    check("rules: avg needs a numeric or date x axis" in bad.text_content(), "a bad rule is reported as the chart's error")
+    # The pen writes a chart in document order: rules and bands, then the marks, then the notes.
+    pen = browser.new_page(viewport={"width": 1300, "height": 950})
+    pen.add_init_script("window.__INK_PAUSE = true")
+    opened(pen, "file://" + out)
+    order = """() => {
+      const out = { refs: [], plot: [], notes: [] };
+      Ink.jobs().forEach(j => (j.atoms || []).forEach(a => {
+        const el = a.el || (a.unit && a.unit.el) || (a.nodes && a.nodes[0]);
+        if (!el || !el.closest || !el.isConnected || !el.closest('.nb-cell[data-idx="1"] svg.nb-chart-svg')) return;
+        const part = el.closest('.nb-notes') ? 'notes' : el.closest('.nb-plot') ? 'plot' : el.closest('.nb-refs') ? 'refs' : null;
+        if (part) out[part].push([a.t0, a.order]);
+      }));
+      const span = list => list.length ? [Math.min(...list.map(a => a[0])), Math.max(...list.map(a => a[0])), Math.min(...list.map(a => a[1])), Math.max(...list.map(a => a[1]))] : null;
+      return { refs: span(out.refs), plot: span(out.plot), notes: span(out.notes) };
+    }"""
+    starts = pen.evaluate(order)
+    check(starts["refs"] and starts["plot"] and starts["refs"][1] <= starts["plot"][0] and starts["refs"][3] < starts["plot"][2],
+          f"the pen draws rules and bands before the marks ({starts})")
+    pen.locator(".nb-cell[data-idx='1'] .nb-tab", has_text="Notes").click()
+    frames(pen, 3)
+    starts = pen.evaluate(order)
+    # What follows a click is drawn almost at once, but still in order.
+    check(starts["notes"] and starts["plot"] and starts["plot"][0] <= starts["notes"][0] and starts["plot"][3] < starts["notes"][2],
+          f"the pen writes notes after the marks ({starts})")
+    pen.close()
+    check(not errors, f"no browser errors drawing rules and bands {errors[:3]}")
+    page.close()
+
+
+def test_peek(browser, work):
+    # Peek under the pen: with the caret in a CTE or sub-query of a query cell, its first rows show in a
+    # note beside the code. Nothing is asked before the notebook has run, and nothing else changes.
+    notebook = os.path.join(work, "peek.sql")
+    shutil.copy(os.path.join(ROOT, "test", "notebooks", "peek.sql"), notebook)
+    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+    shell.stdin.write("CREATE SEQUENCE nb_peek_seq; CREATE MACRO nb_peek_sneaky() AS nextval('nb_peek_seq');\n")
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    url = shell.stdout.readline().strip()
+
+    def caret(page, cell, needle, skip=0):
+        """Puts the caret just before `needle` (plus `skip`) in a cell's SQL, with a real key press."""
+        area = page.locator(f".nb-cell[data-idx='{cell}'] textarea.nb-code-over").first
+        area.scroll_into_view_if_needed()
+        area.click()
+        area.evaluate("(e, a) => { const i = e.value.indexOf(a[0]) + a[1] - 1; e.setSelectionRange(i, i); }", [needle, skip])
+        page.keyboard.press("ArrowRight")
+        return area
+
+    def note_text(page):
+        return page.locator(".nb-peek").inner_text().replace("\t", " ").split("\n")
+
+    def peek(page, statement, needle):
+        return page.evaluate("([s, n]) => App.api('POST', '/api/peek', {sql: s, cursor: s.indexOf(n), rows: 5})", [statement, needle])
+
+    def gone(page):
+        page.wait_for_selector(".nb-peek", state="detached", timeout=5000)
+
+    try:
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors = watch(page)
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.fonts.status === 'loaded'")
+
+        # Trust: opening a notebook does not run it, so there is nothing to peek at yet.
+        caret(page, 3, "amount >= $floor")
+        page.wait_for_timeout(900)
+        refused = peek(page, "SELECT * FROM (SELECT 1 AS a) q", "SELECT 1")
+        check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
+              f"nothing is peeked at in a notebook that has not been run ({refused})")
+
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        settle(page)
+        # Positions relative to the first cell: clicking into a cell may scroll the page, which is not a layout change.
+        boxes = "() => { const all = [...document.querySelectorAll('.nb-cell')], top = all[0].getBoundingClientRect().y; return all.map(c => { const r = c.getBoundingClientRect(); return [r.x, r.y - top, r.width, r.height].map(Math.round).join(','); }).join(';'); }"
+        layout_before = page.evaluate(boxes)
+
+        # A CTE: its name, a few rows and columns, and how many rows there are.
+        area = caret(page, 3, "amount >= $floor")
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        lines = note_text(page)
+        check(lines[0] == "big" and lines[1] == "cte" and lines[2] == "id region day amount" and lines[3] == "2 east 2026-01-03 84"
+              and len(lines) == 9 and lines[8] == "first 5 of 320 rows",
+              f"with the caret in a CTE, a note shows its name, its first rows and its row count ({lines})")
+        marks = page.locator(".nb-cell[data-idx='3'] .nb-peek-marks i").count()
+        check(marks == 3, f"the part the note describes is marked in the code, line by line ({marks} lines)")
+        # The note is fixed to the window and beside the code: no line of code is under it, nothing moved.
+        overlap = page.evaluate("""() => {
+          const n = document.querySelector('.nb-peek').getBoundingClientRect();
+          const pre = document.querySelector(".nb-cell[data-idx='3'] .nb-code-hl"), range = document.createRange();
+          range.selectNodeContents(pre);
+          return [...range.getClientRects()].filter(r => r.width > 0 && r.right > n.left && r.left < n.right && r.bottom > n.top && r.top < n.bottom).length;
+        }""")
+        inside = page.evaluate("() => { const n = document.querySelector('.nb-peek').getBoundingClientRect(); return n.left >= 0 && n.top >= 0 && n.right <= innerWidth && n.bottom <= innerHeight; }")
+        layout_after = page.evaluate(boxes)
+        check(overlap == 0 and inside and page.evaluate("getComputedStyle(document.querySelector('.nb-peek')).position") == "fixed"
+              and layout_after == layout_before and page.evaluate("document.querySelector('.nb-peek').parentNode === document.body"),
+              f"the note covers no code, fits the window and takes no part in the layout ({overlap} lines under it, inside {inside}, "
+              f"layout {'kept' if layout_after == layout_before else layout_before + ' -> ' + layout_after})")
+        check(page.locator(".nb-cell[data-idx='3'] .nb-badge.fresh").count() == 1
+              and page.locator(".nb-cell[data-idx='3'] table.nb-grid tbody tr").count() == 4,
+              "the cell's own result and state are untouched by a peek")
+
+        # A sub-query in FROM is named by its alias; one in an expression has no name.
+        caret(page, 3, "sum(total)")
+        page.wait_for_function("(document.querySelector('.nb-peek-name') || {}).textContent === 's'", timeout=5000)
+        lines = note_text(page)
+        check(lines == ["s", "sub-query", "everything", "41,440", "1 row"], f"a sub-query in FROM shows under its alias ({lines})")
+        caret(page, 4, "share > 0.2")
+        page.wait_for_function("(document.querySelector('.nb-peek-name') || {}).textContent === 'sub-query'", timeout=5000)
+        lines = note_text(page)
+        check(lines[:2] == ["sub-query", "region"] and sorted(lines[2:6]) == ["east", "north", "south", "west"] and lines[6] == "4 rows",
+              f"a sub-query in an expression is peeked at too, reading the cells above ({lines})")
+
+        # The main query is not a part: the note goes away when the caret moves on.
+        caret(page, 3, "ORDER BY t.region")
+        gone(page)
+        check(page.locator(".nb-peek-marks").count() == 0, "moving the caret into the main query takes the note and its marks away")
+
+        # Typing: the peek follows the text as typed (and the session's variables), the result does not.
+        area = caret(page, 3, "$floor", len("$floor"))
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        area.type(" + 100", delay=15)
+        page.wait_for_function("(document.querySelector('.nb-peek-foot') || {}).textContent === 'first 5 of 120 rows'", timeout=5000)
+        check(note_text(page)[3] == "4 north 2026-01-05 158" and page.locator(".nb-cell[data-idx='3'] table.nb-grid tbody tr td").nth(2).inner_text() == "80",
+              "typing in a CTE updates its peek, not the cell's result")
+        # SQL that does not parse shows nothing; mended, the note returns.
+        area.type(" (", delay=15)
+        gone(page)
+        page.keyboard.press("Backspace")
+        page.keyboard.press("Backspace")
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        check(note_text(page)[0] == "big", "nothing shows while the SQL does not parse; the note returns when it does")
+
+        # Escape puts the note away until the caret moves to another part.
+        page.keyboard.press("Escape")
+        gone(page)
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_timeout(900)
+        still_gone = page.locator(".nb-peek").count() == 0
+        caret(page, 3, "count(*)")
+        page.wait_for_function("(document.querySelector('.nb-peek-name') || {}).textContent === 'totals'", timeout=5000)
+        check(still_gone, "Escape dismisses the note for that part; another part shows its own")
+        # Leaving the cell takes it away.
+        page.locator("#title").click()
+        gone(page)
+        check(True, "the note goes when the caret leaves the cell")
+
+        # Safety, through the API the editor uses: statements that change data, parts with side
+        # effects, anything that would write, and anything slow.
+        refusals = [
+            peek(page, "INSERT INTO nb_peek_sales SELECT * FROM (SELECT 1000, 'north', DATE '2026-01-01', 1) q", "SELECT 1000"),
+            peek(page, "WITH gone AS (DELETE FROM nb_peek_sales RETURNING id) SELECT * FROM (SELECT 1 AS a) q", "SELECT 1"),
+            peek(page, "SELECT * FROM (SELECT nextval('nb_peek_seq') AS n) q", "nextval"),
+            peek(page, "SELECT * FROM (SELECT nb_peek_sneaky() AS n) q", "nb_peek_sneaky"),
+        ]
+        reasons = [r.get("reason", "") for r in refusals]
+        check("not a query" in reasons[0] and "changes data" in reasons[1] and "side effects" in reasons[2] and "read-only" in reasons[3]
+              and not any("rows" in r for r in refusals),
+              f"statements that change data, side effects and writes are never peeked at ({reasons})")
+        slow = page.evaluate("""async () => { const t = performance.now();
+          const s = 'SELECT * FROM (SELECT count(*) AS n FROM range(100000000000) a, range(1000) b WHERE a.range % 7 = b.range) q';
+          const r = await App.api('POST', '/api/peek', {sql: s, cursor: s.indexOf('count'), rows: 5}); return [performance.now() - t, r.reason || '']; }""")
+        check(slow[0] < 4000 and "execution time" in slow[1], f"a peek that takes too long is given up ({round(slow[0])} ms: {slow[1][:60]})")
+        check(page.evaluate("App.api('GET', '/api/page?cell=3&offset=0&limit=5').then(r => r.rows.length)") == 4,
+              "the session's views and variables are as they were after peeking")
+        shell.stdin.write("SELECT 'left: ' || count(*) FROM nb_peek_sales; SELECT 'seq: ' || nextval('nb_peek_seq');\n")
+        shell.stdin.flush()
+        left = [shell.stdout.readline().strip(), shell.stdout.readline().strip()]
+        check(left == ["left: 400", "seq: 1"], f"nothing was inserted, deleted or advanced by peeking ({left})")
+
+        # The gear's switch turns it off, remembered in this browser.
+        page.click("#gear")
+        page.uncheck("#peek")
+        page.keyboard.press("Escape")
+        caret(page, 3, "count(*)")
+        page.wait_for_timeout(900)
+        check(page.locator(".nb-peek").count() == 0 and page.evaluate("localStorage.getItem('nb.peek')") == "off",
+              "the gear menu's peek switch turns it off")
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        check(not page.locator("#peek").is_checked(), "the switch is remembered after a reload")
+        page.click("#gear")
+        page.check("#peek")
+        page.keyboard.press("Escape")
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        caret(page, 3, "count(*)")
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        check(note_text(page)[0] == "totals", "switched on again, it peeks again")
+        reference_note = html_of(page, ".nb-peek")
+        # Presenting shows the notebook a screen at a time: no note there, and none after leaving it until asked.
+        page.evaluate("Present.enter(0)")
+        page.wait_for_function("document.body.classList.contains('presenting')", timeout=5000)
+        page.wait_for_timeout(700)
+        presenting_notes = page.locator(".nb-peek:visible").count()
+        page.evaluate("Present.leave()")
+        check(presenting_notes == 0, "no peek note shows while presenting")
+
+        # A narrow window has no room beside the code for a wide note: it goes under it, still over no code.
+        narrow = browser.new_page(viewport={"width": 600, "height": 800})
+        narrow.goto(still(url))
+        narrow.wait_for_selector(".nb-cell")
+        narrow.click("#run-all")
+        narrow.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        caret(narrow, 3, "amount >= $floor")
+        narrow.wait_for_selector(".nb-peek", timeout=5000)
+        fits = narrow.evaluate("""() => {
+          const n = document.querySelector('.nb-peek').getBoundingClientRect();
+          const pre = document.querySelector(".nb-cell[data-idx='3'] .nb-code-hl"), range = document.createRange();
+          range.selectNodeContents(pre);
+          const under = [...range.getClientRects()].filter(r => r.width > 0 && r.right > n.left && r.left < n.right && r.bottom > n.top && r.top < n.bottom).length;
+          return [under, n.left >= 0 && n.right <= innerWidth, document.documentElement.scrollWidth <= innerWidth];
+        }""")
+        check(fits == [0, True, True], f"in a narrow window the note still covers no code and stays on the page ({fits})")
+        narrow.close()
+
+        # Written by the pen, it leaves no trace: the finished note is the note drawn with ink off.
+        inked = browser.new_page(viewport={"width": 1300, "height": 900})
+        inked_errors = watch(inked)
+        inked.goto(url)
+        inked.wait_for_selector(".nb-cell")
+        inked.click("#run-all")
+        inked.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        inked.wait_for_function("Ink.jobs().every(j => j.state === 'parked')", timeout=20000)
+        caret(inked, 3, "count(*)")
+        inked.wait_for_selector(".nb-peek", timeout=5000)
+        started = inked.evaluate("performance.now()")
+        inked.wait_for_function("!Ink.jobs().some(j => j.key === 'peek') && !document.querySelector('.nb-peek canvas.ink-layer, .nb-peek .ink-hide')", timeout=10000)
+        took = inked.evaluate("performance.now()") - started
+        state = inked.evaluate("() => ({ canvases: document.querySelectorAll('.nb-peek canvas.ink-layer').length, hidden: document.querySelectorAll('.nb-peek .ink-hide, .nb-peek.ink-hide').length, wrote: Ink.plans ? Ink.plans.some(p => p.key === 'peek') : null })")
+        check(state["canvases"] == 0 and state["hidden"] == 0 and html_of(inked, ".nb-peek") == reference_note and took < 1500,
+              f"the pen writes the note in {round(took)} ms and leaves it exactly as drawn without the animation ({state})")
+        check(not inked_errors, f"no browser errors while the note is written {inked_errors[:3]}")
+        inked.close()
+
+        # Trust again: text that arrives from the file on disk has not been run by the reader.
+        with open(notebook, "a") as f:
+            f.write("\n-- %% added\nSELECT * FROM (SELECT 42 AS answer) q;\n")
+        page.wait_for_function("document.querySelectorAll('.nb-cell').length === 6", timeout=15000)
+        caret(page, 5, "42")
+        page.wait_for_timeout(900)
+        refused = peek(page, "SELECT * FROM (SELECT 1 AS a) q", "SELECT 1")
+        check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
+              "a notebook reloaded from disk is not peeked at until it is run again")
+        check(not errors, f"no browser errors while peeking {errors[:3]}")
+    finally:
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+
+
+def test_peek_cached(browser, work):
+    # The result cache shows a notebook's last results when it is opened again. That is not a run: until
+    # the reader runs something in this server, nothing is peeked at (DESIGN section 3).
+    notebook = os.path.join(work, "peek_cached.sql")
+    shutil.copy(os.path.join(ROOT, "test", "notebooks", "peek.sql"), notebook)
+    db = os.path.join(work, "peek_cached.duckdb")
+
+    def start():
+        shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list", db], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+        shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+        shell.stdin.flush()
+        return shell, shell.stdout.readline().strip()
+
+    def stop(shell):
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+    probe = "() => App.api('POST', '/api/peek', {sql: 'SELECT * FROM (SELECT 1 AS a) q', cursor: 20, rows: 5})"
+    shell, url = start()
+    try:
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        check(page.evaluate(probe).get("kind") == "subquery", "after a run, peeks are answered")
+        page.close()
+    finally:
+        stop(shell)
+    shell, url = start()
+    try:
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors = watch(page)
+        page.goto(still(url))
+        page.wait_for_function("document.querySelectorAll(\".nb-cell[data-idx='3'] table.nb-grid tbody tr\").length === 4", timeout=10000)
+        area = page.locator(".nb-cell[data-idx='3'] textarea.nb-code-over")
+        area.click()
+        area.evaluate("e => { const i = e.value.indexOf('count(*)') - 1; e.setSelectionRange(i, i); }")
+        page.keyboard.press("ArrowRight")
+        page.wait_for_timeout(900)
+        refused = page.evaluate(probe)
+        check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
+              f"a notebook reopened with its cached results is not peeked at until it is run ({refused})")
+        check(not errors, f"no browser errors reopening a cached notebook {errors[:3]}")
+        page.close()
+    finally:
+        stop(shell)
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -707,13 +1630,19 @@ def main():
         try:
             test_server(browser, work)
             test_metadata_error(browser, work)
+            test_cache(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
             chromium = shells[0] if shells else p.chromium.executable_path
             test_exports(browser, work, chromium)
+            test_chart_marks(browser, work)
             test_ink(browser, work, chromium)
             test_ink_editor(browser, work)
+            test_present(browser, work)
+            test_present_editor(browser, work)
+            test_peek(browser, work)
+            test_peek_cached(browser, work)
         finally:
             browser.close()
     shutil.rmtree(work, ignore_errors=True)

@@ -282,7 +282,8 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 - Live preview while typing is a later addition. MotherDuck's Instant SQL does this by parsing the
   query locally, caching the data it depends on and rewriting it to run fast, and lets the user click
   into any CTE to see its rows. Here a named cell is already a view, so a preview is a `LIMIT` over
-  it and stepping through intermediate results is stepping through cells.
+  it and stepping through intermediate results is stepping through cells. Inside a cell, "peek under
+  the pen" (§19) shows the rows of the CTE or sub-query under the caret.
 
 ## 5. Notebooks inside the database
 
@@ -319,7 +320,7 @@ QUALIFY version = max(version) OVER (PARTITION BY name);
 - **A database carries its own analysis.** Send someone `sales.duckdb` and they get the data and the
   notebooks that explain it. `CALL notebook_start('db:revenue')` opens a stored notebook.
 - **Result cache.** For a database-backed notebook the cache goes in `_notebook.cache(name, cell,
-  hash, data BLOB)` in place of the sidecar directory. (Not built yet: neither cache exists.)
+  format, key, saved_at, result)` in place of the sidecar directory (FORMAT.md §8, and §17 below).
 
 **File and database together.** A notebook session has one source of truth: the place it was opened
 from. `notebook_save` and `notebook_checkout` copy between the two explicitly. There is no automatic
@@ -429,7 +430,7 @@ The page decompresses with the browser's built-in `DecompressionStream` and draw
 opened. It works from a `file://` path, as an email attachment or on any static host; nothing needs a
 server. The fonts travel inside the page as data URIs, so it looks the same offline. Measured: the
 viewer and renderers are about 35 KB gzip-compressed and the two fonts 90 KB; the revenue example
-exports to 252 KB and the 27-chart gallery to 425 KB.
+exports to 252 KB and the 29-chart gallery to 425 KB.
 
 `hide := 'code'`, `'output'` or `'all'` leaves that part of every cell out of any export, on top of
 each cell's own `hide=`; prose and inputs always stay. The gear menu offers the same as two
@@ -524,7 +525,9 @@ Other risks:
 6. **More chart types.** Maps, hierarchies, flows, networks, pivot. **Done.**
 7. **Interactive WASM export.** Resolves S5. **Done.**
 
-Next, in rough order: the result cache (FORMAT.md §8), a bundled CodeMirror editor, tracking macro
+8. **Result cache.** FORMAT.md §8; see §17. **Done.**
+
+Next, in rough order: a bundled CodeMirror editor, tracking macro
 calls in the graph, Firefox and Safari checks for the exports, building every platform in CI, and the
 community-repository submission (S6).
 
@@ -765,3 +768,221 @@ what was built). It is a renderer concern like the look itself: nothing in the f
   everything; content below the fold waits until it is scrolled to.
 - **Off when it should be.** Reduced motion, print, PDF export, the gear menu's setting and `ink=off`
   all give the plain page. The existing browser tests run with `ink=off`.
+
+## 16. Charts that say "compared with what"
+
+Two additions to grammar charts, kept inside the sketchbook: nothing here added a toolbar, a panel or
+a library.
+
+### Rules and bands
+
+A reference line used to be a second layer with a `rule` mark. `rules:` and `bands:` make it one line
+of the spec (FORMAT §5.1).
+
+- **An aggregate is of what the chart draws.** `y: avg` on a chart of monthly sums means the average
+  month, not the average row. The compiler keeps each layer's query before downsampling and takes the
+  aggregate over it, as scalar subqueries in one extra query that returns one row. A line drawn with M4
+  or points binned to pixels are still averaged over the rows.
+- **Still the extension's query, the browser's drawing.** The browser gets a value per rule and never
+  aggregates. An export, a PDF and DuckDB-WASM therefore needed no new code: the reference query is one
+  more dataset.
+- **Behind the data, labels in front.** Lines and hatched bands are drawn after the axes and before the
+  marks, in muted ink. Their labels are short handwriting that hatching would hide, so they are written
+  after the marks with a halo of paper.
+- **They are part of the picture.** The axis grows to include a rule or band outside the data: a target
+  nobody reached is the point of drawing it.
+
+### Notes
+
+`notes:` lets an author point at something: a few handwritten words, a curved arrow, optionally a ring
+or a bracket (FORMAT §5.1).
+
+- **Data coordinates, pixel placement.** A note names a position in the values of the axes, which is
+  what survives a resize, a different page width in a PDF, and a query that returns other rows. Where
+  the text goes is decided at draw time, in pixels, by the renderer: the compiler only checks the note
+  and types its values by the axis.
+- **Finding room is cheap because hover already knew the geometry.** The marks leave their points and
+  bars behind for hover values. The same lists, plus points along each line, the rules and their
+  labels, and the notes already placed, are what a note must keep clear of. Eight directions at three
+  distances are scored by how much they cover and the cheapest wins; outside the plot costs most. It
+  is not a layout engine, and `side`, `dx` and `dy` are the escape hatch.
+- **Half a position is the common case.** "The bar for Hardware" or "February" names one axis; the note
+  then points at the mark there (the top of the bar, the highest line). This is positioning, done in
+  the browser from the rows the chart already has, not aggregation.
+- **Text width is estimated, not measured.** Measuring needs the font to have loaded, and a detached
+  SVG cannot be measured at all; an estimate per character places a note the same way in the editor,
+  an export and a PDF.
+- **The pen needed nothing.** Notes are `Sketch` shapes and SVG text appended after the marks, so they
+  are written after the marks with no animation code. A note in a query cell whose answer depends on
+  an input can point at the wrong thing; that is the author's to judge, and the skill says so.
+
+## 17. What the result cache taught us
+
+FORMAT.md §8 specifies it. The code is `src/core/cache.cpp` (keys, entries, fresh or stale, unit
+tested) and `src/functions/result_cache.cpp` (where entries live, and the session's copy).
+
+- **The result the editor is sent is the thing to cache.** The draft said Parquet for grids and Arrow
+  for charts. The editor holds JSON (§12), so caching anything else would mean a conversion on the way
+  in and out and a second shape to keep in step. An entry is the `/api/run` result for the cell, byte for
+  byte, and a reopened page goes through exactly the renderers a run does: fresh output looks identical
+  because it is identical (the browser test compares the markup).
+- **Two keys per cell.** A key that covered chart specs and chart-only selections would make every cell
+  below a chart stale when the chart was restyled or brushed. The key is therefore in two layers: what
+  the cell computes (chained into its readers' keys) and what it shows on top.
+- **Variables are part of the key, so the cache records them.** Freshness is judged with the variables
+  as they were last set, kept in `@state` with the value the browser showed. A reopened notebook shows
+  its inputs at those values and the session starts with them (values are cast from text to their
+  recorded type, no SQL runs), so the first Run all reproduces what is on the page.
+- **Until something runs, the page is a picture.** Paging a grid, brushing a chart or redrawing need the
+  session's views, and a session that has not run has none. Rather than run behind the reader's back,
+  which the trust rule forbids, these say "press Run all", and an input change marks its readers stale.
+  After the first run everything is live as before.
+- **`notebook_run` writes only when asked, exports never touch it.** A headless run is the source of
+  truth for "what does the data say now", so reading the cache would only hide work; writing by default
+  would give every scripted run a side effect in the working directory. `cache := true` covers the case
+  of a job that prepares a notebook for readers. An export is a document of the data at export time, and
+  a stale entry must never leak into one.
+- **Unnamed cells hash their text.** A position would hand a moved cell another cell's result. A hash of
+  the text means an edited unnamed cell loses its result, which is the honest outcome; named cells keep
+  theirs and go stale.
+- **Size is bounded per result (4 MiB of JSON),** checked when written and when read, so a hand-edited
+  or foreign entry cannot make the editor parse something huge. Grids already keep one page, so the limit
+  is rarely reached.
+- **Not done:** entries are not shared between notebooks that compute the same thing, there is no
+  total size limit across notebooks, and the html-wasm export does not start from cached data.
+
+## 18. Presenting
+
+A notebook can be shown to a room: one screen at a time, large and centred, with nothing else on the
+page but a page number. It is the reading view taken a row at a time, in the editor (gear menu,
+**Present**) and in every HTML export (a faint `present` control, or `#present` in the address).
+`frontend/render-present.js` (`Present`) holds everything the two share; `app.js` and `viewer.js` still
+draw the cells and only ask it which ones.
+
+- **A screen is a row of the reading layout.** One cell, or the consecutive cells whose `span`s share a
+  row; an input goes with the row after it, so the audience sees what it changes. An author who laid a
+  notebook out for reading has already laid it out for presenting, and `screen=new`, `screen=join` and
+  `screen=skip` on a cell cover the rest (FORMAT §1). The obvious alternative, a new screen at each
+  heading, fails on both examples: `revenue.sql` has one heading and `charts.sql` one heading
+  over thirty charts, so each would be a single screen. Rows need no headings and give `charts.sql` two
+  charts to a screen, as its author arranged them.
+- **The screen is the reading layout, scaled.** The row is laid out as in the reading view, in a grid
+  no wider than what it holds (a title, a 640px chart or three KPIs do not need 1000px), and the whole
+  grid is scaled with one CSS transform and centred. Nothing about a cell changes: the same fonts, the
+  same charts, the same wobble, only larger. Scaling by font size instead would have meant a second
+  set of sizes for every piece.
+- **Too tall: shrink a little, then scroll.** A screen that fits is scaled up, to at most 2.5 times.
+  One taller than the window is scaled back down so it can be seen whole, but to no less than four
+  fifths of the reading view: text smaller than that cannot be read from the back of a room, and a
+  table shrunk to fit is worse than a table that scrolls. Past that the screen scrolls (wheel, or the
+  up and down arrows, which presenting leaves alone).
+- **Moving.** Right arrow, Space, Page Down or a click move on; Left arrow, Page Up or Shift+Space go
+  back; Home and End jump; Escape leaves, landing on the cell that was showing; F is full screen.
+  Clicks on controls, links, tabs, table paging and charts act on them instead. A picked value gives up
+  the keyboard focus so the arrows move between screens again.
+- **The pen writes each screen once.** Pieces of a presentation are keyed to it (`Present.prefix`), so
+  a screen is written when it first arrives even if the editor had already written the cell. Going
+  back, or forward again, to a screen already shown puts it on the page at once: the audience has seen
+  it written, and a presenter going back is looking for something. This needs no code: Ink never
+  writes the same key and signature twice. Moving on calls `Ink.fresh`, or the key press would make
+  the new screen a "quick" update. A key or click still finishes whatever is being written, and the
+  same press moves on: one press per screen, however fast the presenter goes.
+- **Live.** Presenting changes which cells are built, not how: inputs, brushing, tabs and paging go
+  through the same code as the reading view, in the editor and in precomputed and html-wasm exports.
+  Cells off screen are re-run all the same and show their new results when their screen comes.
+- **State is the address.** `#present=3` is written with `history.replaceState` as the presenter moves,
+  so a reload, a restored tab or a shared link opens the same screen, and Back is not filled with
+  screens. In the editor a reload starts a new session: the result cache (§17) puts the last results
+  on screen at once, and presenting runs the notebook so its inputs and brushes are live again.
+- **Print is unchanged.** `beforeprint` leaves presenting before the browser lays out the page, so paper
+  and PDF get the whole notebook.
+
+What building it taught us:
+
+- **The pen assumed nothing was scaled.** Its canvases are positioned from `getBoundingClientRect`,
+  which reports the scaled size, but they live inside the scaled grid and so were scaled a second
+  time. `layers()` now measures the scale of the canvas's host and works in the host's own px, with
+  the backing store that much denser so the writing stays sharp. At scale 1 the arithmetic is
+  unchanged. Shapes needed nothing: they are drawn inside their own SVG.
+- **Hidden pieces count as written.** Ink finishes a piece with no size at once, so cells kept in the
+  page but hidden would have appeared unwritten when their screen came. Presenting therefore builds
+  only the cells of the current screen, which also keeps a screen with thirty charts behind it cheap.
+- **"As wide as what it holds" had to be measured.** The first version scaled the 1000px reading
+  column, and a title or a chart sat small at the left of a centred, mostly empty box. The grid is now
+  measured at its `max-content` width before it is scaled. Outputs are size containers (KPI values are
+  sized in `cqw`), which by definition hides their content's width from layout, so containment is
+  lifted for the moment of measuring (`.nb-measure`). Tables were the other trap: a table shows the
+  columns that fit the width it has, so a screen measured narrow once dropped a column and then
+  measured narrower still. While measuring, every column counts.
+- **`position: fixed` is not fixed in dark mode.** The dark theme is a filter on `body`, and a filtered
+  element becomes the containing block of its fixed descendants. The page number stays in the corner
+  only because the presenting page does not scroll: the screen scrolls inside its own box.
+
+## 19. Peek under the pen
+
+While a query cell is being edited, the first rows of the CTE or sub-query the caret is in appear in a
+small paper note beside the code, and the part is marked in the code with the highlighter. The cell is
+not run and its result does not change. It is the cell-sized half of Instant SQL (§4): cells already
+show their own results, so what was missing was a look inside one.
+
+**How it works.**
+
+- **Finding the part** (`src/functions/peek.cpp`, `FindPeekTarget`, also `notebook_peek(sql, cursor)`).
+  DuckDB's parser gives the parts: every CTE (with the CTEs it can see, scope by scope) and every
+  sub-query in `FROM`, in an expression or under a set operation. The parse tree records where
+  expressions and table references are but not where a CTE or a sub-query begins and ends, so each
+  part is matched to a pair of parentheses: the innermost pair (from `SqlScanner`, so strings and
+  comments are skipped) around something the part contains, whose text parses to the same query.
+  A CTE also starts at its name, found with DuckDB's tokenizer, so the caret on `name AS (` counts.
+  The innermost part around the caret wins; in the main query there is nothing to show.
+- **Building the statement.** A CTE becomes `WITH <the CTEs it reads> SELECT * FROM name`; a sub-query
+  becomes `SELECT * FROM (<it>)` with the CTEs it reads. Scopes are kept nested as they were, so a name
+  means what it meant in the cell, and a CTE that is not read is left out. It is printed from the parse
+  tree (`ToString`), not cut out of the text.
+- **Running it** (`Runner::Peek`, `POST /api/peek`). On a copy of the session's state, so the views and
+  variables of the cells above are there and nothing is recorded; in `BEGIN TRANSACTION READ ONLY`,
+  rolled back; with `max_execution_time` of 1.5 s on that connection. It fetches six rows to show five,
+  and counts the rest only if that is quick (a third of the limit).
+- **Safety.** Only a plain `SELECT` statement is looked into: `INSERT ... SELECT`, `CREATE TABLE AS`, a
+  CTE holding `INSERT ... RETURNING` are refused wherever the caret is. A part that calls a volatile
+  scalar function (`nextval`, `setval`, `write_log`...; `random()` and `uuid()` are allowed), or a table
+  function on a short list of ones that change something (`checkpoint`, `copy_database`, the
+  `notebook_*` functions, `enable_*`/`disable_*`), is refused before it runs. Anything the list misses
+  in the local database is stopped by the read-only transaction: a macro that hides `nextval` fails with
+  "cannot write". Effects outside it (an extension's function that writes to a remote system) are not.
+- **Trust.** Opening a notebook does not run it (§3), so the server refuses to peek in a session until
+  the reader has run something, and again after the text has been replaced from the file on disk. Its
+  own flag (`Session::trusted`) is separate from the result cache's `ran` (§17): a notebook reopened
+  showing its cached results has not been run, so nothing is peeked at until it is.
+- **Quiet.** The editor asks 320 ms after the caret stops; a newer peek interrupts the one running on
+  the server, and a run interrupts any peek. An answer for a caret or a text that has since moved is
+  dropped. Errors, SQL that does not parse and "nothing here" all show nothing. Escape puts the note
+  away until the caret is in another part; leaving the cell takes it away; the gear menu's "peek"
+  switch turns it off, remembered per browser (`localStorage`, `nb.peek`).
+- **Look** (`frontend/app-peek.js`, `.nb-peek` in `style.css`). A note like the hover tip, drawn by
+  `Sketch.outline`: the part's name (the CTE's, or the sub-query's alias), up to six columns that fit
+  in 340 px, five rows, and "first 5 of 320 rows" when the count was cheap. It is `position: fixed` on
+  `<body>`, so it never moves the page. It goes in the right margin when the window has room, else at
+  the cell's right beside lines of code short enough to leave room, nearest the caret, else under the
+  code. It is handed to the pen (`Ink.present(note, 'peek', ...)`); typing never writes anything else.
+  Exports and presenting (§18) do not have it.
+
+**What building it taught us.**
+
+- **The parse tree has no spans for query nodes.** DuckDB 2.0's PEG transformer gives expressions and
+  table references a location, but a `QueryNode` or a CTE has none. Matching parentheses by
+  re-parsing their contents and comparing the result to the node is exact and stays clear of text
+  search; it costs a parse per candidate pair, which is fine for a cell.
+- **Read-only transactions are the real guard.** Function stability catches the obvious cases with a
+  clear message; `BEGIN TRANSACTION READ ONLY` catches the rest (macros, extension functions) without
+  a list to maintain. `max_execution_time` is a per-connection setting, so the limit dies with the
+  peek's connection.
+- **A peek must not disturb the session.** Runner records variables into the state it is given when it
+  goes away; peeking on a copy keeps the session exactly as it was.
+
+**Not done.** A part of a recursive CTE that reads the CTE itself (its rows depend on the iteration);
+table functions from other extensions cannot be judged, so one that acts on a remote system (for
+example `postgres_execute`) inside a CTE could run during a peek: the read-only transaction protects
+only the local database; the note can
+cover part of the cell's (stale) result in a narrow window when the code leaves no room beside it.
+Only Chromium was available for testing.

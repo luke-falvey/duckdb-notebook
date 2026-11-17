@@ -759,10 +759,15 @@ var Ink = (function () {
     host = host || document.body;
     var r = job.el.getBoundingClientRect(), hr = host.getBoundingClientRect();
     var positioned = host !== document.body || getComputedStyle(host).position !== 'static';
-    var left = positioned ? r.left - hr.left - host.clientLeft + host.scrollLeft : r.left + window.scrollX;
-    var top = positioned ? r.top - hr.top - host.clientTop + host.scrollTop : r.top + window.scrollY;
-    var w = Math.ceil(r.width + 2 * PAD), h = Math.ceil(r.height + 2 * PAD), k = dpr();
-    job.origin = { x: r.left - PAD, y: r.top - PAD };
+    // Inside a scaled ancestor (a screen being presented) the canvases are scaled with the piece: they
+    // are laid out and drawn in the piece's own px, z of them to a px on screen, and hold z times the dots.
+    var z = host.offsetWidth ? hr.width / host.offsetWidth : 1;
+    if (!(z > 0) || Math.abs(z - 1) < 0.002) z = 1;
+    job.z = z;
+    var left = positioned ? (r.left - hr.left) / z - host.clientLeft + host.scrollLeft : r.left + window.scrollX;
+    var top = positioned ? (r.top - hr.top) / z - host.clientTop + host.scrollTop : r.top + window.scrollY;
+    var w = Math.ceil(r.width / z + 2 * PAD), h = Math.ceil(r.height / z + 2 * PAD), k = job.k = dpr() * z;
+    job.origin = { x: r.left - PAD * z, y: r.top - PAD * z };
     job.layers = [0, 1].map(function () {
       var c = document.createElement('canvas');
       c.className = 'ink-layer';
@@ -797,7 +802,7 @@ var Ink = (function () {
   function measure1(job, u) {
     layers(job);
     u.chars = {};
-    var ox = job.origin.x, oy = job.origin.y, data = u.svg ? u.node.textContent : u.node.data;
+    var ox = job.origin.x, oy = job.origin.y, z = job.z, data = u.svg ? u.node.textContent : u.node.data;
     if (u.svg) {
       var ctm = u.node.getScreenCTM(), n = u.node.getNumberOfChars();
       if (!ctm) return;
@@ -808,7 +813,7 @@ var Ink = (function () {
           var p = u.node.getStartPositionOfChar(i);
           pt.x = p.x; pt.y = p.y;
           var q = pt.matrixTransform(ctm);
-          u.chars[i] = { m: [ctm.a, ctm.b, ctm.c, ctm.d, q.x - ox, q.y - oy], w: u.node.getSubStringLength(i, 1) };
+          u.chars[i] = { m: [ctm.a / z, ctm.b / z, ctm.c / z, ctm.d / z, (q.x - ox) / z, (q.y - oy) / z], w: u.node.getSubStringLength(i, 1) };
         } catch (e) { /* hidden by an ellipsis or out of range */ }
       }
       return;
@@ -821,7 +826,7 @@ var Ink = (function () {
       range.setEnd(u.node, j + (code >= 0xD800 && code < 0xDC00 ? 2 : 1));
       var r = range.getBoundingClientRect();
       if (!r.width || r.right <= clip.left || r.left >= clip.right || r.bottom <= clip.top || r.top >= clip.bottom) continue;
-      u.chars[j] = { m: [1, 0, 0, 1, r.left - ox, r.top + asc - oy], w: r.width, top: r.top - oy, h: r.height };
+      u.chars[j] = { m: [1, 0, 0, 1, (r.left - ox) / z, (r.top - oy) / z + asc], w: r.width / z, top: (r.top - oy) / z, h: r.height / z };
     }
     u.clip = clip;
   }
@@ -873,7 +878,7 @@ var Ink = (function () {
       if (!c) return;
       items.push({ u: u, c: c, g: a.sweep ? null : a.g, ch: textOf(u, a.i, a.n), i: a.i, n: a.n, p: a.p });
     });
-    job.box = paintSet(job.live, items, dpr(), job.box);
+    job.box = paintSet(job.live, items, job.k, job.box);
   }
 
   // items: {u, c, g, ch, p} for a glyph (g null: swept in), or {wipe: unit, p}. prev: the device box
@@ -1008,7 +1013,7 @@ var Ink = (function () {
   // A finished glyph is drawn once on the done layer, with the same transform as its last frame.
   function drawDone(job, a) {
     if (!job.done) return;
-    var ctx = job.done, k = dpr();
+    var ctx = job.done, k = job.k;
     var draw = function (u, i, n) {
       var c = u.chars[i];
       if (!c) return;

@@ -17,6 +17,8 @@ taught us and where it departs from the design.
 | `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
 | `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
 | `notebook_start`, `notebook_stop` | The HTTP server and browser UI | `src/functions/server.cpp` |
+| `notebook_peek(sql, cursor)` | The CTE or sub-query at a byte offset and the query that selects from it (DESIGN §19) | `src/functions/peek.cpp` |
+| `notebook_cache`, `notebook_cache_clear` | The result cache: what is kept, fresh or stale; clearing it | `src/functions/result_cache.cpp` |
 
 Every path argument also accepts `db:<name>[@version]` for a stored notebook.
 
@@ -33,7 +35,16 @@ Every piece of the page is written by a pen as it appears (`frontend/render-ink.
 `docs/HANDWRITING.md`). The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
 into `frontend/ink-strokes.js`.
 
-Not built: the result cache (FORMAT §8), a CodeMirror editor, charting libraries (see DESIGN §6).
+Presenting (DESIGN §18) is `frontend/render-present.js` (`Present`), shared by the editor and exports:
+it decides which cells make the current screen and scales them to the window; `app.js` and `viewer.js`
+still build the cells.
+
+The result cache (FORMAT §8, DESIGN §17) keeps each cell's last `/api/run` result beside the notebook
+(`.duckdb-notebook/`) or in `_notebook.cache`. Keys and the fresh/stale decision are in
+`src/core/cache.cpp`; the store and the session's copy in `src/functions/result_cache.cpp`. The editor
+reads it on open and writes it after every run; `notebook_run` writes it only with `cache := true`.
+
+Not built: a CodeMirror editor, charting libraries (see DESIGN §6).
 
 ## Layout
 
@@ -191,6 +202,13 @@ create, because all test files share one database.
   shells and stop everything you started before finishing a turn; stop servers by PID. Leftover
   detached shells piled up and got in the way of approval prompts.
 
+- While presenting, only the cells of the current screen are in the page, inside a grid scaled by a CSS
+  transform. Anything that measures the page there must allow for the scale (`getBoundingClientRect`
+  is scaled, `offsetWidth` is not; Ink's `layers()` shows how), and anything fixed to the window must
+  not rely on the page scrolling. A cell's place in a presentation is decided before it is built
+  (`A.presentable` in `app.js`, `parts` in `viewer.js`): keep those in step with what the cell shows.
+  A new control inside a cell must be matched by `ACTS` in `render-present.js`, or a click on it moves
+  to the next screen. Test with `#present=N` in the URL; `ink=off` goes in the query string.
 - A SQL cell's `body` is its full text, chart comments included; what runs is `Cell::sql`, and its charts
   are `Cell::charts`. Use `sql` for anything that executes or analyses SQL, and `ChartFrom` for the
   relation a cell's charts read. The editor edits `sql` and the specs separately and rebuilds `body`.
@@ -213,11 +231,19 @@ create, because all test files share one database.
   `duckdb/AGENTS.md` and copy from `duckdb/src/function/table/system/` when unsure.
 - sqllogictest expected results cannot contain blank lines or multi-line values. Flatten them in the
   query, as `test/sql/notebook_sql.test` does.
+- The result cache must never fail anything: every store operation catches and gives up quietly.
+  Opening a notebook must run no SQL, so cached variables are restored by casting text to their
+  recorded type, not by `SET VARIABLE`. A change to what a cache key covers or to the entry layout
+  raises `CACHE_FORMAT` in `src/core/cache.cpp`.
 - `to` is a reserved word: a table function cannot take `to :=`. Output paths are `file :=`.
 - `ExtensionCallback::OnConnectionClosed` runs with DuckDB's connection-manager lock held. Do not
   create or destroy connections from it.
 - Variables set from the browser arrive as JSON. Give them the SQL type of what produced them
   (`VariableSqlType`), or a brush on a timestamp axis compares text with timestamps.
+- Peek under the pen (`frontend/app-peek.js`, `POST /api/peek`, DESIGN §19): cursor positions sent to the
+  server are byte offsets, not JavaScript string indexes. A peek runs on a copy of the session's state,
+  in a read-only transaction with `max_execution_time`; keep all three if you change `Runner::Peek`.
+  The server refuses to peek until the reader has run something (`Session::trusted`, set by a run and cleared when the text is reloaded from disk; separate from the cache's `Session::ran`).
 - The html-wasm export runs on DuckDB-WASM 1.5: `$name` is rewritten to `getvariable('name')`, data
   is written with `STORAGE_VERSION 'v1.5.0'`, and selection variables start as typed NULLs.
 - clang-format re-indents lambdas inside `server.cpp` with mixed tabs and spaces; match on content,
@@ -228,6 +254,24 @@ create, because all test files share one database.
 - The version of DuckDB in the `duckdb` submodule, the `duckdb_version` in
   `.github/workflows/MainDistributionPipeline.yml`, and the `extension-ci-tools` branch must all name
   the same release.
+
+## Rules, bands and notes on charts
+
+`rules:`, `bands:` and `notes:` are spec-level keys of grammar charts (FORMAT §5.1, DESIGN §16).
+
+- Aggregates for rules and bands (`y: avg`) are compiled in `Compiler::References` in
+  `src/core/chart.cpp` from each layer's query *before* downsampling (`LayerInfo::base`), into one extra
+  query whose index is `render.reference_data`. Never compute them in the browser.
+- Notes need no query: `Compiler::Notes` only validates them and types their values by axis. Placement
+  is `drawNotes` in `frontend/render-chart.js`, which avoids what the marks leave for hover
+  (`plot.__points`, `__bars`, `__dots`, gathered by `markObstacles`) plus rules and their labels
+  (`refs.boxes`). Rule and band labels pick the least-covered of a few spots the same way
+  (`coverage`). A new mark kind that text should avoid must push its geometry there too.
+- Order in the chart's SVG is the pen's order: `nb-refs` (behind), `nb-plot`, `nb-ref-labels`,
+  `nb-notes`. Keep it, and keep `pointer-events: none` on notes so hover and brushing still reach the
+  marks.
+- Browser tests find gallery charts by cell position. Add new gallery charts at the end of
+  `examples/charts.sql`, or the positional checks move.
 
 ## Git
 

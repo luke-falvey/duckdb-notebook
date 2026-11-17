@@ -48,9 +48,11 @@ set(EXTENSION_SOURCES
     src/core/json.cpp
     src/core/yaml.cpp
     src/core/chart.cpp
+    src/core/cache.cpp
     src/functions/common.cpp
     src/functions/references.cpp
     src/functions/session.cpp
+    src/functions/result_cache.cpp
     src/functions/notebook_cells.cpp
     src/functions/notebook_sql.cpp
     src/functions/notebook_run.cpp
@@ -58,6 +60,7 @@ set(EXTENSION_SOURCES
     src/functions/storage.cpp
     src/functions/export.cpp
     src/functions/server.cpp
+    src/functions/peek.cpp
     ${NOTEBOOK_ASSET_CPP}
     src/notebook_extension.cpp)
 
