@@ -41,6 +41,16 @@ inline bool Contains(const std::vector<std::string> &values, const std::string &
 	return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+//! `text` with every `from` replaced by `to`.
+inline std::string ReplaceAll(std::string text, const std::string &from, const std::string &to) {
+	size_t pos = 0;
+	while ((pos = text.find(from, pos)) != std::string::npos) {
+		text.replace(pos, from.size(), to);
+		pos += to.size();
+	}
+	return text;
+}
+
 //! Appends `value` unless it is already there, keeping first-seen order.
 inline void AddUnique(std::vector<std::string> &values, const std::string &value) {
 	if (!Contains(values, value)) {

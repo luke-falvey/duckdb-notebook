@@ -49,6 +49,7 @@ set(EXTENSION_SOURCES
     src/core/yaml.cpp
     src/core/chart.cpp
     src/core/cache.cpp
+    src/core/document.cpp
     src/functions/common.cpp
     src/functions/references.cpp
     src/functions/session.cpp

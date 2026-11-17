@@ -7,6 +7,7 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "notebook/chart.hpp"
+#include "notebook/document.hpp"
 #include "notebook/functions.hpp"
 #include "notebook/graph.hpp"
 #include "notebook/result_cache.hpp"
@@ -138,7 +139,7 @@ Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) 
 	                .Set("source", Json::String(session.source))
 	                .Set("text", Json::String(session.text))
 	                .Set("preamble", Json::String(notebook.preamble))
-	                .Set("title", Json::String(NotebookTitle(notebook, session.source)))
+	                .Set("title", Json::String(notebook::NotebookTitle(notebook, session.source)))
 	                .Set("cells", CellsJson(notebook))
 	                .Set("sql_words", [&]() {
 		                Connection connection(db);

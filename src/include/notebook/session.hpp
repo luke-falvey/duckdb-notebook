@@ -132,9 +132,6 @@ notebook::Json BuildPayload(DatabaseInstance &db, const string &text, const stri
 string ExportDocument(DatabaseInstance &db, const string &text, const string &source, const ExportOptions &options,
                       string &note);
 
-//! The notebook's title: its [notebook] cell's `title:`, its first `# heading`, or the file name.
-string NotebookTitle(const notebook::Notebook &notebook, const string &source);
-
 //! The values a select input offers: its options= list or the distinct values of its from= column.
 vector<Value> InputChoices(Connection &connection, const notebook::Cell &cell, idx_t limit);
 

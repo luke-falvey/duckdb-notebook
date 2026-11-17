@@ -1,6 +1,7 @@
 // Tests for src/core, which has no DuckDB dependency. Build and run with `make core_test`.
 // End-to-end behaviour through SQL is covered by test/sql/*.test.
 #include "notebook/chart.hpp"
+#include "notebook/document.hpp"
 #include "notebook/format.hpp"
 #include "notebook/json.hpp"
 #include "notebook/yaml.hpp"
@@ -589,6 +590,40 @@ static void TestQueryCharts() {
 	CHECK(nb.cells[1].charts.size() == 1 && nb.cells[1].charts[0] == "mark: bar" && ChartFrom(nb.cells[1]) == "a");
 }
 
+static void TestDocument() {
+	// The title: [notebook] title:, else the first # heading, else the file name.
+	CHECK(NotebookTitle(ParseNotebook("-- %% [notebook]\n/*\ntitle: Sales\n*/\n-- %% [markdown]\n/*\n# Other\n*/\n"),
+	                    "x.sql") == "Sales");
+	CHECK(NotebookTitle(ParseNotebook("-- %% [markdown]\n/*\n# Revenue review\ntext\n*/\n"), "x.sql") ==
+	      "Revenue review");
+	CHECK(NotebookTitle(ParseNotebook("-- %% q\nSELECT 1;\n"), "/data/monthly.report.sql") == "monthly.report");
+	CHECK(NotebookTitle(ParseNotebook("-- %% q\nSELECT 1;\n"), ".hidden") == ".hidden");
+
+	// The Markdown export of a payload: prose, fenced code, tables of at most 20 rows, inputs and hide=.
+	std::string error;
+	auto payload = ParseJson(R"({"hide": "", "cells": [
+	  {"kind": "markdown", "output": "# Title"},
+	  {"kind": "sql", "sql": "SELECT a FROM t", "options": {},
+	   "table": {"columns": [{"name": "a|b"}], "rows": [[1], ["x\ny"]], "total": 30}},
+	  {"kind": "sql", "sql": "SELECT 2", "options": {"hide": "code"}, "error": "boom"},
+	  {"kind": "input", "name": "region", "options": {"label": "Region"}, "value": "EU"},
+	  {"kind": "chart", "options": {}, "chart": {"render": {"title": "Sales"}, "datasets": [{"columns": [{"name": "n"}], "rows": [[3]]}]}}
+	]})",
+	                         error);
+	CHECK(error.empty());
+	auto md = MarkdownDocument(payload);
+	CHECK(md.find("# Title\n\n") == 0);
+	CHECK(md.find("```sql\nSELECT a FROM t\n```") != std::string::npos);
+	CHECK(md.find("| a\\|b |\n| --- |\n| 1 |\n| x y |\n") != std::string::npos);
+	CHECK(md.find("30 rows in total.") != std::string::npos);
+	CHECK(md.find("SELECT 2") == std::string::npos && md.find("> Error: boom") != std::string::npos);
+	CHECK(md.find("**Region**: EU") != std::string::npos);
+	CHECK(md.find("*Sales* (chart data; charts are drawn in the HTML export)\n\n| n |") != std::string::npos);
+	payload.Set("hide", Json::String("output"));
+	md = MarkdownDocument(payload);
+	CHECK(md.find("boom") == std::string::npos && md.find("| 1 |") == std::string::npos && md.find("# Title") == 0);
+}
+
 static void TestTimingSetting() {
 	auto nb = ParseNotebook("-- %% [notebook]\n/*\ntitle: T\ntiming: false\n*/\n");
 	CHECK(nb.cells[0].errors.empty());
@@ -618,6 +653,7 @@ int main() {
 	TestChartReferences();
 	TestChartNotes();
 	TestCellOptions();
+	TestDocument();
 	TestQueryCharts();
 	TestTimingSetting();
 	TestCache();
