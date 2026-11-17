@@ -532,7 +532,7 @@ var App = (function () {
     var value = cell.result && cell.result.value !== undefined ? cell.result.value : cell.value;
     var view = Object.assign({}, cell, { value: value, choices: cell.choices });
     var box = NB.el('div');
-    var widget = A.inputWidget(view, function (c, v) { cell.value = v; if (cell.result) cell.result.value = v; A.setVariable(cell.name, v, cell); });
+    var widget = NB.inputWidget(view, function (c, v) { cell.value = v; if (cell.result) cell.result.value = v; A.setVariable(cell.name, v, cell); });
     box.appendChild(widget);
     if ((cell.widget === 'select' || cell.widget === 'multiselect') && !cell.choices && cell.name && !cell.fetching) {
       // Choices from a cell's column exist once that cell has run; /api/run refreshes them.
@@ -729,41 +729,6 @@ var App = (function () {
   }
 
   // Input widgets, shared with the exported viewer's look.
-  A.inputWidget = function (cell, onChange) {
-    var o = cell.options || {}, v = cell.value, w = cell.widget, box = NB.el('div', { 'class': 'nb-input' }), control;
-    box.appendChild(NB.el('label', { text: o.label || cell.name }));
-    var fire = function (value) { onChange(cell, value); };
-    if (w === 'select' || w === 'multiselect') {
-      var choices = cell.choices || (o.options ? o.options.split(',') : []);
-      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
-        var picked = Array.prototype.filter.call(control.options, function (x) { return x.selected; }).map(function (x) { return choices[+x.value]; });
-        fire(w === 'multiselect' ? picked : picked[0]);
-      } });
-      choices.forEach(function (x, i) {
-        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
-        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
-      });
-    } else if (w === 'checkbox') {
-      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
-    } else if (w === 'slider' || w === 'number') {
-      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : String(v) });
-      var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: o.min, max: o.max, step: o.step || 'any', value: v == null ? '' : v,
-        oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
-      box.appendChild(input);
-      box.appendChild(shown);
-    } else if (w === 'date') {
-      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: o.min, max: o.max, onchange: function () { fire(control.value); } });
-    } else if (w === 'daterange') {
-      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
-      a.onchange = b.onchange = function () { fire({ lo: a.value, hi: b.value }); };
-      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
-    } else {
-      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: o.placeholder, onchange: function () { fire(control.value); } });
-    }
-    if (control) box.appendChild(control);
-    return box;
-  };
-
   // ---- File sync ----------------------------------------------------------------------------
   A.watch = function () {
     if (!window.EventSource) return;

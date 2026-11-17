@@ -39,7 +39,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | C5 | `chart.cpp` does too much (1016 lines) | Safe | med | ±0 | todo |
 | C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | todo |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
-| B1–B30 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
+| B1–B31 | Bugs found on the way (B15–B19 from the docs-site PR #11, B20–B29 in the merged features) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
 | DOC1–DOC8 | Docs that disagree with the code | Docs | none | small | todo |
 
 \* Safe only if the single rule chosen is the one the current callers agree on; edge cases are listed.
@@ -307,6 +307,7 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B28 | low | Reference values: `IsNumber` accepts `inf`, `nan`, `0x10` (YAML does not); `inf` dumps as null and the rule vanishes. A note's `color` is not checked to be a scalar | `chart.cpp` |
 | B29 | low | Presenting writes the requested screen to the hash, not the one shown (`#present=99` stays 99) | `render-present.js:136` |
 | B30 | low | A map chart measures `color` twice (`Measure` with and without an encoding); a binned colour adds its `__bin_color` CTE twice | `chart.cpp` map branch |
+| B31 | low | An input looks different in the editor and an export: a slider shows `1000` in one and `1,000` in the other, and an empty `label=` or `step=` counts as unset in one and set in the other (`NB.inputWidget`'s `exported` flag keeps both until fixed) | `render-core.js` `NB.inputWidget` |
 
 Also: graph de-duplicates the "defined twice" error by matching the parser's message text
 (`graph.cpp:209-213` against `format.cpp:421-423`); hidden code is not drawn in HTML exports but is
@@ -346,4 +347,4 @@ Unreferenced: `docs/handwriting/*.gif` (1.2 MB) are linked from nowhere; link th
 
 R1, R2, R3, R4, R5, C1, C2, C3, C4, F1, F2, F3, F4, D1, T1 and the T2 test additions, and docs
 DOC1–DOC8. C6 only if it stays purely structural. C5 last, after the chart reference-lines feature has
-merged. R6 deferred (a behaviour change for odd paths). B1–B30 in a second PR after this one. N1–N3 are in scope (N1 with C5).
+merged. R6 deferred (a behaviour change for odd paths). B1–B31 in a second PR after this one. N1–N3 are in scope (N1 with C5).
