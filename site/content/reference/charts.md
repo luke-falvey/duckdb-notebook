@@ -25,6 +25,7 @@ A spec is YAML: either at the end of a query cell inside `/* chart … */`, or a
 | Key | Takes |
 |---|---|
 | `mark` | `line`, `area`, `bar`, `point` (or `circle`, `square`), `rect`, `rule`, `tick`, `text`, `arc`, `boxplot`, `histogram`, `density`, `hexbin` |
+| Mark options | Beside `mark`: `opacity` (a number), `strokeWidth` (lines), `point: true` (dots on a line), `innerRadius` (an `arc` as a donut, in pixels). Vega-Lite's `interpolate`, `stack` and `cornerRadius` are not drawn and are an error |
 | `type` | `kpi`, `gauge`, `table`, `pivot`, `map`, `sankey`, `chord`, `treemap`, `sunburst`, `icicle`, `network`, `funnel`, `candlestick`, `calendar`, `gantt`, `vega-lite`, `echarts`. Use instead of `mark` |
 | Channels | `x`, `y`, `x2`, `y2`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`, `theta`: a column name, or a mapping of the channel keys below |
 | `title` | The chart's title; in a query cell's tabs, the tab's label |
