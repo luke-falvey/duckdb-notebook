@@ -658,6 +658,14 @@ static void TestDocument() {
 	payload.Set("hide", Json::String("output"));
 	md = MarkdownDocument(payload);
 	CHECK(md.find("boom") == std::string::npos && md.find("| 1 |") == std::string::npos && md.find("# Title") == 0);
+	// B11: as in the HTML viewer, a prose or input cell's own hide=output leaves it out; the export's
+	// hide= does not.
+	auto own = ParseJson(R"({"hide": "", "cells": [
+	  {"kind": "markdown", "output": "# Kept"}, {"kind": "markdown", "output": "Hidden prose", "options": {"hide": "output"}},
+	  {"kind": "input", "name": "r", "options": {"hide": "all"}, "value": "EU"}]})",
+	                     error);
+	md = MarkdownDocument(own);
+	CHECK(md.find("# Kept") == 0 && md.find("Hidden prose") == std::string::npos && md.find("EU") == std::string::npos);
 }
 
 static void TestTimingSetting() {
