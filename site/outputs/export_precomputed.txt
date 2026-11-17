@@ -2,5 +2,5 @@
 │ format  │     path     │ bytes  │                               note                                │
 │ varchar │   varchar    │ int64  │                              varchar                              │
 ├─────────┼──────────────┼────────┼───────────────────────────────────────────────────────────────────┤
-│ html    │ revenue.html │ 499082 │ 3 precomputed state(s); frozen at their current value: min_amount │
+│ html    │ revenue.html │ 506235 │ 3 precomputed state(s); frozen at their current value: min_amount │
 └─────────┴──────────────┴────────┴───────────────────────────────────────────────────────────────────┘
