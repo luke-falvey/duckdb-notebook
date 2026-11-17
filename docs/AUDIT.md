@@ -39,7 +39,7 @@ Ranked by value for effort. The first group is the proposed scope of the simplif
 | C5 | `chart.cpp` does too much (1016 lines) | Safe | med | ±0 | todo |
 | C6 | `[notebook]` metadata parsed in three places | Safe* | low-med | small | todo |
 | R6 | Path / `db:name@version` / stem / extension logic in six variants | Safe* | low | ~60 moved | deferred: unifying odd paths changes behaviour |
-| B1–B14 | Bugs found on the way | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
+| B1–B19 | Bugs found on the way (B15–B19 from the docs-site PR #11) | Fix | low | small each | deferred: second PR after the refactor, one commit and failing-first test per bug |
 | DOC1–DOC8 | Docs that disagree with the code | Docs | none | small | todo |
 
 \* Safe only if the single rule chosen is the one the current callers agree on; edge cases are listed.
@@ -251,6 +251,11 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B12 | low | Catalog columns are `draggable` with no `dragstart`; tooltip says click, code uses double-click | `app-extra.js:28-33` |
 | B13 | low | `mark_innerRadius` read by JS but never forwarded; `interpolate`, `stack`, `cornerRadius` forwarded but never drawn | `render-chart.js:469`, `chart.cpp:589` |
 | B14 | medium | html-wasm viewer re-implements `JsonToSqlLiteral`/`VariableSqlType` partially and formats `{{ }}` differently | `viewer.js:26-34,92-94,166-204` |
+| B15 | low | `display=table\|none` is in the FORMAT §2 option table but nothing reads it. **Change the spec:** drop it; `hide=output` already does this | `docs/FORMAT.md` §2 |
+| B16 | low | FORMAT §3 says an input's file changes only on "save as default", a control that does not exist. **Change the spec:** say moving a widget never changes the file and the default is `default=` | `docs/FORMAT.md:201` |
+| B17 | low | `theme: light` appears in the FORMAT §6 metadata example; nothing reads it. **Change the spec:** remove it from the example (the theme is a viewer setting) | `docs/FORMAT.md` §6 |
+| B18 | low | The `hide=` error lists `code`, `output`, `all` but not `none`, which is valid. **Change the code:** list `none` too | `format.cpp:133` |
+| B19 | low | Graph view: a long-range edge's curve bends left by `depth * 2` px from x=200 and is clipped at the left edge. **Change the code:** cap the bend or widen the view box to fit the deepest edge | `app-extra.js:86` |
 
 Also: graph de-duplicates the "defined twice" error by matching the parser's message text
 (`graph.cpp:209-213` against `format.cpp:421-423`); hidden code is not drawn in HTML exports but is
@@ -287,4 +292,4 @@ Unreferenced: `docs/handwriting/*.gif` (1.2 MB) are linked from nowhere; link th
 
 R1, R2, R3, R4, R5, C1, C2, C3, C4, F1, F2, F3, F4, D1, T1 and the T2 test additions, and docs
 DOC1–DOC8. C6 only if it stays purely structural. C5 last, after the chart reference-lines feature has
-merged. R6 deferred (a behaviour change for odd paths). B1–B14 in a second PR after this one.
+merged. R6 deferred (a behaviour change for odd paths). B1–B19 in a second PR after this one.
