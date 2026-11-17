@@ -156,6 +156,18 @@ bands:
   - {y: [136000, 141000], label: target}
 */
 
+-- %% chart annotated from=daily
+/*
+title: Notes point at what matters
+mark: line
+x: {field: day, timeunit: month}
+y: {field: revenue, agg: sum, format: "$,.0f"}
+notes:
+  - {x: 2026-02-01, text: "February is a short month", circle: true}
+  - {x: [2026-05-01, 2026-08-01], text: steady summer}
+  - {x: 2026-11-01, text: "stock ran out", side: below}
+*/
+
 -- %% chart kpi from=gallery_sales span=4
 /*
 type: kpi

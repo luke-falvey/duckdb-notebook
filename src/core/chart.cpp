@@ -803,6 +803,151 @@ public:
 		plan.queries.push_back(sql);
 	}
 
+	// ---- Notes ----------------------------------------------------------------------------------
+
+	//! The type of the first layer's `axis`, or empty if the chart has none.
+	std::string AxisTypeOf(const std::string &axis) const {
+		for (auto &info : layer_info) {
+			auto &type = axis == "x" ? info.x_type : info.y_type;
+			if (!type.empty()) {
+				return type;
+			}
+		}
+		return std::string();
+	}
+
+	//! A position on `axis` written in a note: a number on a numeric axis, otherwise text (a date or
+	//! a category).
+	Json NoteValue(const Yaml &node, const std::string &axis) {
+		auto type = AxisTypeOf(axis);
+		if (type.empty()) {
+			Fail("notes: the chart has no " + axis + " axis");
+			return Json();
+		}
+		if (!node.IsScalar()) {
+			Fail("notes: " + axis + " must be a value or [from, to]");
+			return Json();
+		}
+		if (type == "quantitative") {
+			if (!IsNumber(node.scalar)) {
+				Fail("notes: " + axis + " must be a number, not '" + node.scalar + "'");
+				return Json();
+			}
+			return Json::Number(std::atof(node.scalar.c_str()));
+		}
+		return Json::String(node.scalar);
+	}
+
+	//! `notes:` of a grammar chart: short handwritten remarks attached to data positions. The
+	//! compiler checks them and passes them on; the renderer finds room for them.
+	void Notes(const Yaml &spec, Json &render) {
+		auto list = spec.Get("notes");
+		if (!list) {
+			return;
+		}
+		const std::string example = "{x: 2026-06-01, y: 1200, text: Launch}";
+		if (!list->IsList()) {
+			Fail("notes: must be a list of mappings such as " + example);
+			return;
+		}
+		for (auto &info : layer_info) {
+			if (info.mark == "arc") {
+				Fail("notes: an arc chart has no axes");
+				return;
+			}
+		}
+		static const std::set<std::string> KEYS = {"x", "y", "text", "circle", "side", "dx", "dy", "color"};
+		static const std::set<std::string> SIDES = {"above", "below", "left", "right"};
+		auto out = Json::Array();
+		for (auto &item : list->items) {
+			if (!item.IsMap()) {
+				Fail("notes: each item is a mapping such as " + example);
+				return;
+			}
+			for (auto &entry : item.entries) {
+				if (!KEYS.count(entry.first)) {
+					Fail("notes: unknown key '" + entry.first + "' (x, y, text, circle, side, dx, dy, color)");
+					return;
+				}
+			}
+			auto json = Json::Object();
+			bool range = false;
+			size_t positions = 0;
+			for (auto axis : {"x", "y"}) {
+				auto node = item.Get(axis);
+				if (!node) {
+					continue;
+				}
+				positions++;
+				if (node->IsList()) {
+					if (node->items.size() != 2 || range) {
+						Fail(range ? "notes: only one of x and y can be a range"
+						           : std::string("notes: ") + axis + " as a range must be [from, to]");
+						return;
+					}
+					range = true;
+					json.Set(axis,
+					         Json::Array().Push(NoteValue(node->items[0], axis)).Push(NoteValue(node->items[1], axis)));
+				} else {
+					json.Set(axis, NoteValue(*node, axis));
+				}
+			}
+			if (!positions) {
+				Fail("notes: each note needs x: or y: (or both), the data position it points at");
+				return;
+			}
+			auto circle = item.Str("circle");
+			if (!circle.empty() && circle != "true" && circle != "false") {
+				Fail("notes: circle must be true or false");
+				return;
+			}
+			if (circle == "true" && range) {
+				Fail("notes: circle needs a point, not a range");
+				return;
+			}
+			auto text = item.Get("text");
+			if (text && !text->IsScalar()) {
+				Fail("notes: text must be a short piece of text");
+				return;
+			}
+			if ((!text || text->scalar.empty()) && circle != "true" && !range) {
+				Fail("notes: a note needs text: (or circle: true)");
+				return;
+			}
+			if (text && !text->scalar.empty()) {
+				json.Set("text", Json::String(text->scalar));
+			}
+			if (circle == "true") {
+				json.Set("circle", Json::Bool(true));
+			}
+			auto side = Lower(item.Str("side"));
+			if (item.Get("side")) {
+				if (!SIDES.count(side)) {
+					Fail("notes: side must be above, below, left or right, not '" + item.Str("side") + "'");
+					return;
+				}
+				json.Set("side", Json::String(side));
+			}
+			for (auto key : {"dx", "dy"}) {
+				if (auto offset = item.Get(key)) {
+					if (!offset->IsScalar() || !IsNumber(offset->scalar)) {
+						Fail(std::string("notes: ") + key + " must be a number of pixels");
+						return;
+					}
+					json.Set(key, Json::Number(std::atof(offset->scalar.c_str())));
+				}
+			}
+			if (auto color = item.Get("color")) {
+				json.Set("color", Json::String(color->scalar));
+			}
+			if (!error.empty()) {
+				return;
+			}
+			out.Push(json);
+		}
+		render.Set("notes", out);
+	}
+
 	//! A measure such as `value: {field: revenue, agg: sum}`; the default agg applies to bare fields.
 	std::string Measure(const Yaml *node, const std::string &name, const std::string &default_agg, Json *encoding) {
 		auto channel = ParseChannel(name, node);
@@ -1153,6 +1298,9 @@ ChartPlan CompileChart(const std::string &spec_text, const std::string &from, co
 		render.Set("layers", layers);
 		if (compiler.error.empty()) {
 			compiler.References(spec, render);
+		}
+		if (compiler.error.empty()) {
+			compiler.Notes(spec, render);
 		}
 		if (spec.Get("facet")) {
 			render.Set("facet", Json::Object()

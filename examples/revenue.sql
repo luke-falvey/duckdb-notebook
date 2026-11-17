@@ -56,6 +56,8 @@ y: {field: revenue, format: "$,.0f"}
 color: category
 rules:
   - {y: avg, label: "average {value}"}
+notes:
+  - {x: [2026-08-01, 2026-12-01], text: fewer orders in the second half}
 select: {as: picked_months, type: interval, on: x}
 */
 /* chart

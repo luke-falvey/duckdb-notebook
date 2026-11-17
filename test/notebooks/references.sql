@@ -32,7 +32,19 @@ rules:
   - {y: avg, label: "average {value}"}
   - {x: b}
 bands:
-  - {y: [2000, 2400], label: Target}
+  - {y: [2000, 2700], label: Target}
+notes:
+  - {x: b, text: the bigger group}
+*/
+/* chart
+title: Notes
+mark: line
+x: day
+y: n
+notes:
+  - {x: 2026-03-01, y: 59, text: "A note that is long enough to wrap", circle: true}
+  - {x: 2026-01-20, text: start, side: below}
+  - {x: [2026-03-15, 2026-04-05], text: spring}
 */
 
 -- %% bad

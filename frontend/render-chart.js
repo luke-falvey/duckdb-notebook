@@ -302,7 +302,7 @@
         if (!pts.length) return;
         var c = colorOf(group[0]);
         // Every point of a line answers hover, even where no dot is drawn (see hoverPoints).
-        if (g.__points) pts.forEach(function (p) { g.__points.push({ x: p[0], y: p[1], text: tipText(layer, p[2]), color: c }); });
+        if (g.__points) { g.__series = (g.__series || 0) + 1; pts.forEach(function (p) { g.__points.push({ x: p[0], y: p[1], text: tipText(layer, p[2]), color: c, series: g.__series }); }); }
         if (kind === 'area') {
           var base = y(Math.max(y.domain ? y.domain[0] : 0, 0));
           var area = Sketch.smooth(pts) + 'L' + pts[pts.length - 1][0].toFixed(1) + ',' + base + 'L' + pts[0][0].toFixed(1) + ',' + base + 'Z';
@@ -360,6 +360,7 @@
         var px = x.kind === 'band' ? x.center(r[ex.column]) : x(numeric(r[ex.column], ex.type));
         var py = y ? (y.kind === 'band' ? y.center(r[ey.column]) : y(numeric(r[ey.column], ey.type))) : h / 2;
         if (!isFinite(px) || !isFinite(py)) return;
+        if (g.__dots) g.__dots.push({ x: px, y: py });
         var el, c = colorOf(r);
         if (kind === 'text') {
           el = s('text', { x: px, y: py, 'text-anchor': 'middle', 'class': 'nb-mark-text', fill: c }, g);
@@ -578,9 +579,15 @@
   function drawReferences(g, refs, x, y, w, h) {
     if (!refs.rules.length && !refs.bands.length) return function () {};
     var layer = s('g', { 'class': 'nb-refs' }, g), labels = [];
+    // What notes should keep clear of: the lines and their labels.
+    refs.boxes = [];
     var clamp = function (p, max) { return Math.max(0, Math.min(max, p)); };
     var label = function (parent, text, px, py, anchor) {
-      if (text) labels.push({ color: parent.style.color, text: text.length > 40 ? text.slice(0, 39) + '…' : text, x: f1(px), y: f1(py), anchor: anchor });
+      if (!text) return;
+      text = text.length > 40 ? text.slice(0, 39) + '…' : text;
+      labels.push({ color: parent.style.color, text: text, x: f1(px), y: f1(py), anchor: anchor });
+      var wide = text.length * 7 + 4;
+      refs.boxes.push([anchor === 'end' ? px - wide : px, py - 12, anchor === 'end' ? px : px + wide, py + 4, 6]);
     };
     refs.bands.forEach(function (b) {
       var scale = b.axis === 'x' ? x : y, max = b.axis === 'x' ? w : h, a = span(scale, b.lo), c = span(scale, b.hi);
@@ -610,9 +617,11 @@
       var style = { stroke: 'currentColor', width: 1.4, dash: '7 6', rough: 0.6, double: false };
       if (r.axis === 'y') {
         Sketch.line(e, 0, p, w, p, style);
+        refs.boxes.push([0, p - 3, w, p + 3, 2]);
         label(e, text, w - 4, p < 16 ? p + 15 : p - 5, 'end');
       } else {
         Sketch.line(e, p, 0, p, h, style);
+        refs.boxes.push([p - 3, 0, p + 3, h, 2]);
         if (p + text.length * 7 + 8 <= w) label(e, text, p + 5, 12, 'start'); else label(e, text, p - 5, 12, 'end');
       }
       if (text) e.setAttribute('data-ref', text);
@@ -626,6 +635,121 @@
         t.textContent = l.text;
       });
     };
+  }
+  // ---- Notes ----------------------------------------------------------------------------------
+
+  // Handwriting is wide: a note is a few short lines.
+  function wrapNote(text) {
+    var lines = [], line = '';
+    String(text).split(/\s+/).filter(Boolean).forEach(function (word) {
+      if (line && (line + ' ' + word).length > 18) { lines.push(line); line = word; } else line = line ? line + ' ' + word : word;
+    });
+    if (line) lines.push(line);
+    if (lines.length > 4) { lines = lines.slice(0, 4); lines[3] = lines[3].slice(0, 17) + '…'; }
+    return lines;
+  }
+
+  // Notes (render.notes) sit in data coordinates and are drawn after the marks: text where there is
+  // room, a curved arrow to the point, optionally a ring round it; a range gets a bracket. What is in
+  // the way is what the marks left behind for hover (points, bars) plus the notes already placed.
+  function drawNotes(g, notes, x, y, w, h, plot, taken) {
+    if (!notes || !notes.length) return;
+    var layer = s('g', { 'class': 'nb-notes' }, g), CH = 7.4, LH = 17;
+    var obstacles = taken.slice();
+    plot.__bars.forEach(function (b) { obstacles.push([b.x0, b.y0, b.x1, b.y1, 1]); });
+    plot.__dots.forEach(function (d) { obstacles.push([d.x - 5, d.y - 5, d.x + 5, d.y + 5, 3]); });
+    plot.__points.forEach(function (p, i) {
+      obstacles.push([p.x - 5, p.y - 5, p.x + 5, p.y + 5, 3]);
+      var q = plot.__points[i + 1];
+      if (!q || q.series !== p.series) return;
+      var n = Math.ceil(Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) / 10);
+      for (var k = 1; k < n; k++) { var cx = p.x + (q.x - p.x) * k / n, cy = p.y + (q.y - p.y) * k / n; obstacles.push([cx - 4, cy - 4, cx + 4, cy + 4, 3]); }
+    });
+    var mid = function (scale, v) { var p = span(scale, v); return p ? (p[0] + p[1]) / 2 : NaN; };
+    // The marks at a position on one axis: their extreme on the other (the top of a bar, the highest
+    // line), in pixels.
+    var reach = function (axis, lo, hi) {
+      var best = NaN, take = function (v) { if (isFinite(v)) best = isFinite(best) ? (axis === 'x' ? Math.min(best, v) : Math.max(best, v)) : v; };
+      plot.__bars.forEach(function (b) {
+        if (axis === 'x' ? b.x1 >= lo - 1 && b.x0 <= hi + 1 : b.y1 >= lo - 1 && b.y0 <= hi + 1) take(axis === 'x' ? b.y0 : b.x1);
+      });
+      var pts = plot.__points.concat(plot.__dots), near = Infinity;
+      pts.forEach(function (p) { var v = axis === 'x' ? p.x : p.y; near = Math.min(near, v < lo ? lo - v : v > hi ? v - hi : 0); });
+      pts.forEach(function (p) { var v = axis === 'x' ? p.x : p.y, d = v < lo ? lo - v : v > hi ? v - hi : 0; if (d <= near + 2) take(axis === 'x' ? p.y : p.x); });
+      return best;
+    };
+    var overlap = function (box) {
+      var total = 0;
+      obstacles.forEach(function (o) {
+        var ox = Math.min(box[2], o[2]) - Math.max(box[0], o[0]), oy = Math.min(box[3], o[3]) - Math.max(box[1], o[1]);
+        if (ox > 0 && oy > 0) total += ox * oy * o[4];
+      });
+      // Outside the plot costs most of all: the note would be cut off or sit on the axes.
+      var inside = Math.max(0, Math.min(box[2], w) - Math.max(box[0], 0)) * Math.max(0, Math.min(box[3], h - 2) - Math.max(box[1], -M.top + 2));
+      return total + ((box[2] - box[0]) * (box[3] - box[1]) - inside) * 60;
+    };
+    var write = function (parent, lines, bx, by, anchor) {
+      lines.forEach(function (line, i) {
+        s('text', { x: f1(bx), y: f1(by + 13 + i * LH), 'text-anchor': anchor || 'start', 'class': 'nb-note-text' }, parent).textContent = line;
+      });
+    };
+    var DIRS = { 'above-right': [0.7, -0.7], 'above-left': [-0.7, -0.7], right: [1, 0], left: [-1, 0], above: [0, -1], 'below-right': [0.7, 0.7], 'below-left': [-0.7, 0.7], below: [0, 1] };
+    var ORDER = ['above-right', 'above-left', 'right', 'left', 'above', 'below-right', 'below-left', 'below'];
+    notes.forEach(function (note) {
+      var lines = wrapNote(note.text || ''), tw = lines.reduce(function (m, l) { return Math.max(m, l.length); }, 0) * CH + 4, th = lines.length * LH;
+      var e = s('g', { 'class': 'nb-note' }, layer);
+      if (note.color) e.style.color = note.color;
+      var rangeAxis = Array.isArray(note.x) ? 'x' : Array.isArray(note.y) ? 'y' : null;
+      if (rangeAxis) {
+        // A bracket over a range, just clear of the marks under it, with the text beyond it.
+        var scale = rangeAxis === 'x' ? x : y, r = note[rangeAxis], a = span(scale, r[0]), b = span(scale, r[1]);
+        if (!a || !b) return;
+        var max = rangeAxis === 'x' ? w : h, p0 = Math.max(0, Math.min(a[0], b[0])), p1 = Math.min(max, Math.max(a[1], b[1]));
+        var other = rangeAxis === 'x' ? note.y : note.x, at = other != null ? mid(rangeAxis === 'x' ? y : x, other) : reach(rangeAxis, p0, p1);
+        var style = { stroke: 'currentColor', width: 1.4, rough: 0.7 }, T = 6;
+        if (rangeAxis === 'x') {
+          var by = Math.max(th + 8 - M.top, (isFinite(at) ? at : 30) - 12) + (note.dy || 0);
+          Sketch.line(e, p0, by + T, p0, by, style); Sketch.line(e, p0, by, p1, by, style); Sketch.line(e, p1, by, p1, by + T, style);
+          write(e, lines, (p0 + p1) / 2 + (note.dx || 0), by - th - 4, 'middle');
+          obstacles.push([p0, by - th - 6, p1, by + T, 6]);
+        } else {
+          var bx = Math.min(w - tw - 8, (isFinite(at) ? at : w - 60) + 12) + (note.dx || 0);
+          Sketch.line(e, bx - T, p0, bx, p0, style); Sketch.line(e, bx, p0, bx, p1, style); Sketch.line(e, bx, p1, bx - T, p1, style);
+          write(e, lines, bx + 6, (p0 + p1) / 2 - th / 2 + (note.dy || 0), 'start');
+          obstacles.push([bx - T, p0, bx + tw + 8, p1, 6]);
+        }
+        return;
+      }
+      var ax = note.x != null ? mid(x, note.x) : NaN, ay = note.y != null ? mid(y, note.y) : NaN;
+      if (note.x != null && !isFinite(ax) || note.y != null && !isFinite(ay)) return;
+      if (!isFinite(ay)) { ay = reach('x', ax, ax); if (!isFinite(ay)) ay = h / 2; }
+      if (!isFinite(ax)) { ax = reach('y', ay, ay); if (!isFinite(ax)) ax = w / 2; }
+      ax = Math.max(0, Math.min(w, ax)); ay = Math.max(0, Math.min(h, ay));
+      var ring = note.circle ? 11 : 0;
+      if (ring) { Sketch.ellipse(e, ax, ay, ring + 1, ring - 1, { stroke: 'currentColor', width: 1.5, rough: 1.2 }); obstacles.push([ax - ring - 2, ay - ring - 2, ax + ring + 2, ay + ring + 2, 6]); }
+      if (!lines.length) return;
+      var names = ORDER.filter(function (n) { return !note.side || n.indexOf(note.side) >= 0; });
+      if (note.side) names.sort(function (a2, b2) { return (a2 === note.side ? 0 : 1) - (b2 === note.side ? 0 : 1); });
+      var best = null, bestScore = Infinity;
+      [30, 56, 84].forEach(function (dist, di) {
+        names.forEach(function (name, ni) {
+          var u = DIRS[name], reachOut = dist + ring;
+          var bx = ax + u[0] * reachOut + (u[0] > 0.3 ? 0 : u[0] < -0.3 ? -tw : -tw / 2);
+          var by = ay + u[1] * reachOut + (u[1] > 0.3 ? 0 : u[1] < -0.3 ? -th : -th / 2);
+          var score = overlap([bx - 3, by - 3, bx + tw + 3, by + th + 3]) + ni * 25 + di * 60;
+          if (score < bestScore) { bestScore = score; best = [bx, by]; }
+        });
+      });
+      var tx = best[0] + (note.dx || 0), ty = best[1] + (note.dy || 0);
+      write(e, lines, tx, ty);
+      obstacles.push([tx - 2, ty - 2, tx + tw + 2, ty + th + 2, 6]);
+      // The arrow leaves the edge of the text nearest the point and stops just short of it.
+      var sx = Math.max(tx - 3, Math.min(tx + tw + 3, ax)), sy = Math.max(ty - 1, Math.min(ty + th + 3, ay));
+      var len = Math.sqrt((ax - sx) * (ax - sx) + (ay - sy) * (ay - sy)), gap = ring ? ring + 3 : 6;
+      if (len < gap + 10) return;
+      var ex = ax - (ax - sx) / len * gap, ey = ay - (ay - sy) / len * gap;
+      Sketch.arrow(e, sx, sy, ex, ey, { bend: sx <= ax ? 0.16 : -0.16, width: 1.3, stroke: 'currentColor' });
+    });
   }
   function f1(n) { return Math.round(n * 10) / 10; }
 
@@ -737,6 +861,7 @@
         var plot = s('g', { 'class': 'nb-plot' }, g);
         plot.__points = [];
         plot.__bars = [];
+        plot.__dots = [];
         allLayers.forEach(function (l) {
           var rows = l.rows.filter(function (r) {
             return (fr === null || key(r.facet_row) === key(fr)) && (fc === null || key(r.facet_col) === key(fc));
@@ -744,6 +869,7 @@
           drawLayer(plot, Object.assign({}, l, { rows: rows }), x, y, color, w, h, size);
         });
         refLabels();
+        drawNotes(g, render.notes, x, y, w, h, plot, refs.boxes || []);
         var sel = render.selection;
         if (sel && sel.type === 'interval') brush(g, sel, x, y, w, h, opts);
         if (sel && sel.type === 'point') pointSelect(svgEl, sel, allLayers, opts);

@@ -300,7 +300,7 @@ column of `from` is a constant (`color: red`); `{value: …}` says so explicitly
 takes its angle from `theta` (or `y`) and its slices from `color`.
 
 Spec-level keys: `title`; `limit` (rows a query may return, default 10,000); `sample: <n>`;
-`facet: {row: …, col: …}`; `rules` and `bands` (below).
+`facet: {row: …, col: …}`; `rules`, `bands` and `notes` (below).
 
 **Layers.** `layers:` is a list of specs drawn in one frame, sharing `from` and scales:
 
@@ -340,6 +340,32 @@ band, is replaced by the value in the axis's format) and `color`. The axis grows
 band outside the data. Quote a category that reads as an aggregate (`x: "max"`). `rules` and `bands`
 are read from the top level of the spec only and need a chart with axes (not `arc`); `boxplot` takes
 values but not aggregates. Any other key or shape is a chart error.
+
+**Notes.** `notes:` writes short remarks on the chart, each attached to a data position, so they stay
+with the data when the chart is resized or its query returns other rows:
+
+```yaml
+notes:
+  - {x: 2026-02-01, text: "February is a short month", circle: true}
+  - {x: 2026-06-01, y: 182000, text: Launch week}
+  - {x: [2026-05-01, 2026-08-01], text: steady summer}
+  - {y: Hardware, text: new supplier, side: right}
+```
+
+| Key | Meaning |
+|---|---|
+| `x`, `y` | The position, in the values of each axis. With only one, the note points at the mark there: the top of the bar or the highest line at that `x`, the end of the bar at that `y`. One of them may be a range, `[from, to]`, which is drawn as a bracket over the marks in it |
+| `text` | A few words. Handwriting is wide: it is wrapped at about 18 characters and cut after four lines. Required unless the note is a `circle` or a range |
+| `circle` | `true` draws a hand-drawn ring round the point |
+| `side` | `above`, `below`, `left` or `right`: where the text goes. Without it the renderer picks the side with most room, clear of the marks, rules and other notes |
+| `dx`, `dy` | Pixels to move the text from where it was placed (right and down are positive); the arrow follows |
+| `color` | Ink colour of the note |
+
+A note is text with a curved arrow to its point. Notes are drawn, and written by the pen, after the
+marks; they appear in every export; the pointer passes through them to the marks. A position outside
+the axes is drawn at the edge, and a category the data does not have draws nothing. In a faceted
+chart a note is drawn in every panel. `notes` is read from the top level of the spec only and needs a
+chart with axes. Positions are values, not aggregates. Any other key or shape is a chart error.
 
 **Large data.** The compiler never ships raw rows for a mark that would overplot: `line` over a
 continuous x is reduced to at most four points per horizontal pixel (M4) once `from` has more than four

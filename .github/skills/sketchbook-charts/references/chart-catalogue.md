@@ -107,6 +107,18 @@ bands:
   - {y: [136000, 141000], label: target}
 ```
 
+Notes: a circled point, a bracket over a range, a forced side:
+```yaml
+title: Notes point at what matters
+mark: line
+x: {field: day, timeunit: month}
+y: {field: revenue, agg: sum, format: "$,.0f"}
+notes:
+  - {x: 2026-02-01, text: "February is a short month", circle: true}
+  - {x: [2026-05-01, 2026-08-01], text: steady summer}
+  - {x: 2026-11-01, text: "stock ran out", side: below}
+```
+
 Small multiples:
 ```yaml
 title: Monthly revenue, one panel per region

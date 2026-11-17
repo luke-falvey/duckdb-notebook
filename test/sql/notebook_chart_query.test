@@ -111,5 +111,24 @@ bands:
 ----
 bands: x must be [from, to]
 
+# Notes are checked and passed to the renderer; they need no query
+query II
+SELECT len(queries), render LIKE '%"notes":[{"x":1,"text":"the middle group","circle":true}]%' FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}
+notes:
+  - {x: 1, text: the middle group, circle: true}', 'nb_chart_t')
+----
+1	true
+
+statement error
+FROM notebook_chart_query('mark: bar
+x: g
+y: {field: i, agg: sum}
+notes:
+  - {x: 1}', 'nb_chart_t')
+----
+notes: a note needs text:
+
 statement ok
 DROP TABLE nb_chart_t

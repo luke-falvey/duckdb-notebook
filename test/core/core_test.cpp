@@ -445,6 +445,55 @@ static void TestChartReferences() {
 	CHECK(CompileChart("mark: boxplot\nx: region\ny: amount\nrules:\n  - {y: 10}\n", "orders", context).error.empty());
 }
 
+static void TestChartNotes() {
+	ChartContext context;
+	context.columns = {{"ts", "TIMESTAMP"}, {"region", "VARCHAR"}, {"amount", "DECIMAL(18,2)"}, {"n", "BIGINT"}};
+	context.row_count = 100;
+	std::string base = "mark: line\nx: {field: ts, timeunit: month}\ny: {field: amount, agg: sum}\n";
+	auto plan = CompileChart(base + "notes:\n  - {x: 2026-06-01, y: 1200, text: \"Launch week\"}\n"
+	                                "  - {x: 2026-08-01, text: dip, circle: true, side: below, dx: 10, dy: -4}\n"
+	                                "  - {x: [2026-03-01, 2026-05-01], text: Promo, color: red}\n",
+	                         "orders", context);
+	// Notes are positions for the renderer: no query, values typed by their axis.
+	CHECK(plan.error.empty() && plan.queries.size() == 1);
+	auto &notes = plan.render.Get("notes")->Items();
+	CHECK(notes.size() == 3 && notes[0].Get("x")->Str() == "2026-06-01" && notes[0].Get("y")->Num() == 1200);
+	CHECK(notes[0].Get("text")->Str() == "Launch week" && notes[0].Get("circle") == nullptr);
+	CHECK(notes[1].Get("y") == nullptr && notes[1].Get("circle")->Truthy() && notes[1].Get("side")->Str() == "below");
+	CHECK(notes[1].Get("dx")->Num() == 10 && notes[1].Get("dy")->Num() == -4);
+	CHECK(notes[2].Get("x")->Items().size() == 2 && notes[2].Get("x")->Items()[1].Str() == "2026-05-01");
+	CHECK(notes[2].Get("color")->Str() == "red");
+
+	// A category position, on either axis.
+	auto bars = CompileChart("mark: bar\nx: {field: amount, agg: sum}\ny: region\nnotes:\n  - {y: EU, text: ours}\n",
+	                         "orders", context);
+	CHECK(bars.error.empty() && bars.render.Get("notes")->Items()[0].Get("y")->Str() == "EU");
+
+	auto fails = [&](const std::string &extra, const std::string &message) {
+		auto bad = CompileChart(base + extra, "orders", context);
+		if (bad.error.find(message) == std::string::npos) {
+			printf("    expected '%s', got '%s'\n", message.c_str(), bad.error.c_str());
+		}
+		return bad.error.find(message) != std::string::npos && bad.queries.empty();
+	};
+	CHECK(fails("notes: {x: 1}\n", "notes: must be a list"));
+	CHECK(fails("notes:\n  - hello\n", "each item is a mapping"));
+	CHECK(fails("notes:\n  - {text: hello}\n", "needs x: or y:"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01}\n", "needs text:"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, y: high, text: a}\n", "y must be a number, not 'high'"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, side: north}\n", "side must be above, below, left or right"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, dx: far}\n", "dx must be a number"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, label: b}\n", "unknown key 'label'"));
+	CHECK(fails("notes:\n  - {x: [2026-06-01, 2026-07-01], y: [1, 2]}\n", "only one of x and y"));
+	CHECK(fails("notes:\n  - {x: [2026-06-01], text: a}\n", "must be [from, to]"));
+	CHECK(fails("notes:\n  - {x: [2026-06-01, 2026-07-01], circle: true}\n", "circle needs a point"));
+	CHECK(CompileChart("mark: arc\ntheta: {field: amount, agg: sum}\ncolor: region\nnotes:\n  - {x: 1, text: a}\n",
+	                   "orders", context)
+	          .error.find("no axes") != std::string::npos);
+	CHECK(CompileChart("mark: histogram\nx: amount\nnotes:\n  - {x: 40, text: most orders}\n", "orders", context)
+	          .error.empty());
+}
+
 static void TestCellOptions() {
 	auto nb = ParseNotebook("-- %% a hide=code rows=25\nSELECT 1;\n-- %% b hide=everything\nSELECT 2;\n"
 	                        "-- %% c rows=0\nSELECT 3;\n-- %% d rows=lots\nSELECT 4;\n-- %% e hide=all\nSELECT 5;\n");
@@ -529,6 +578,7 @@ int main() {
 	TestLiterals();
 	TestChartCompiler();
 	TestChartReferences();
+	TestChartNotes();
 	TestCellOptions();
 	TestQueryCharts();
 	TestTimingSetting();
