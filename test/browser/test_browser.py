@@ -398,6 +398,8 @@ def test_exports(browser, work, chromium):
     pivot.scroll_into_view_if_needed()
     check(pivot.locator(".nb-col-range").text_content() == "columns 1–2 of 4" and pivot.locator("th:not(.nb-col-off)").count() == 3,
           "a table too wide for its cell shows the columns that fit, and says how many there are")
+    check(pivot.locator("select.nb-page-size").count() == 0 and page.locator(".nb-cell[data-idx='3'] select.nb-page-size").count() == 1,
+          "a table short enough for any page size has no page-size picker; a longer one does")
     pivot.locator("button.nb-col-page", has_text="›").click()
     page.wait_for_timeout(100)
     check(pivot.locator(".nb-col-range").text_content() == "columns 3–4 of 4" and pivot.locator("th:not(.nb-col-off)").first.text_content() == ""
