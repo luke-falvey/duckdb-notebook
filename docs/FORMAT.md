@@ -300,7 +300,7 @@ column of `from` is a constant (`color: red`); `{value: …}` says so explicitly
 takes its angle from `theta` (or `y`) and its slices from `color`.
 
 Spec-level keys: `title`; `limit` (rows a query may return, default 10,000); `sample: <n>`;
-`facet: {row: …, col: …}`.
+`facet: {row: …, col: …}`; `rules`, `bands` and `notes` (below).
 
 **Layers.** `layers:` is a list of specs drawn in one frame, sharing `from` and scales:
 
@@ -309,6 +309,63 @@ layers:
   - {mark: area, x: month, y: {field: revenue, agg: sum}, opacity: 0.3}
   - {mark: rule, y: {field: revenue, agg: avg}, color: red}
 ```
+
+**Rules and bands.** `rules:` draws reference lines and `bands:` shades ranges, behind the marks in
+muted ink:
+
+```yaml
+mark: line
+x: month
+y: {field: revenue, agg: sum, format: "$,.0f"}
+rules:
+  - {y: avg, label: "average {value}"}
+  - {y: 150000, label: Target}
+  - {x: 2026-06-01, label: Launch}
+bands:
+  - {y: [p25, p75], label: Middle half}
+```
+
+Each item names one axis, `x` or `y`. A rule takes one value there and a band takes two, `[from, to]`.
+A value is:
+
+| Written | Meaning |
+|---|---|
+| A number, date or category (`150000`, `2026-06-01`, `Hardware`) | That position on the axis. On a category axis a rule runs through the category and a band covers from one category to the other |
+| `avg` (or `mean`), `median`, `min`, `max`, `p05`…`p99` | That aggregate of the values the chart draws on the axis, across all series and panels: with `y: {field: revenue, agg: sum}` over months, `avg` is the average monthly sum. Needs a numeric or date axis; dates have no `avg` |
+| `{field: budget, agg: max}` | An aggregate of a column of `from`, with any channel `agg` |
+
+Aggregates are computed by DuckDB in one extra query, over the marks before any downsampling.
+Optional keys: `label` (short text by the line or in the band; `{value}`, or `{from}` and `{to}` in a
+band, is replaced by the value in the axis's format) and `color`. The axis grows to include a rule or
+band outside the data. Quote a category that reads as an aggregate (`x: "max"`). `rules` and `bands`
+are read from the top level of the spec only and need a chart with axes (not `arc`); `boxplot` takes
+values but not aggregates. Any other key or shape is a chart error.
+
+**Notes.** `notes:` writes short remarks on the chart, each attached to a data position, so they stay
+with the data when the chart is resized or its query returns other rows:
+
+```yaml
+notes:
+  - {x: 2026-02-01, text: "February is a short month", circle: true}
+  - {x: 2026-06-01, y: 182000, text: Launch week}
+  - {x: [2026-05-01, 2026-08-01], text: steady summer}
+  - {y: Hardware, text: new supplier, side: right}
+```
+
+| Key | Meaning |
+|---|---|
+| `x`, `y` | The position, in the values of each axis. With only one, the note points at the mark there: the top of the bar or the highest line at that `x`, the end of the bar at that `y`. One of them may be a range, `[from, to]`, which is drawn as a bracket over the marks in it |
+| `text` | A few words. Handwriting is wide: it is wrapped at about 18 characters and cut after four lines. Required unless the note is a `circle` or a range |
+| `circle` | `true` draws a hand-drawn ring round the point |
+| `side` | `above`, `below`, `left` or `right`: where the text goes. Without it the renderer picks the side with most room, clear of the marks, rules and other notes |
+| `dx`, `dy` | Pixels to move the text from where it was placed (right and down are positive); the arrow follows |
+| `color` | Ink colour of the note |
+
+A note is text with a curved arrow to its point. Notes are drawn, and written by the pen, after the
+marks; they appear in every export; the pointer passes through them to the marks. A position outside
+the axes is drawn at the edge, and a category the data does not have draws nothing. In a faceted
+chart a note is drawn in every panel. `notes` is read from the top level of the spec only and needs a
+chart with axes. Positions are values, not aggregates. Any other key or shape is a chart error.
 
 **Large data.** The compiler never ships raw rows for a mark that would overplot: `line` over a
 continuous x is reduced to at most four points per horizontal pixel (M4) once `from` has more than four
@@ -411,12 +468,16 @@ attach:
 extensions: [spatial]
 theme: light
 timing: false
+cache: false
 */
 ```
 
 `format` is the version of this specification. `timing` (`true` by default) shows how long each cell
 took to run, in the bottom right corner of its box in the editor; `timing: false` hides it. Any other
-value is an error. The editor's gear menu has a switch that writes this line. `attach` and `extensions` are applied before the first
+value is an error. The editor's gear menu has a switch that writes this line. `cache` (`true` by
+default) keeps each cell's last result for the editor to show when the notebook is next opened
+(§8); `cache: false` keeps none and removes what was kept. Any other value is an error, and the gear
+menu's *keep results* switch writes this line. `attach` and `extensions` are applied before the first
 cell runs (`LOAD` for each extension, `ATTACH IF NOT EXISTS` for each database). Paths are relative to
 the notebook file.
 
@@ -447,21 +508,83 @@ Three levels, from least to most capable:
 
 ## 8. Sidecar cache
 
-*Not implemented yet.* The editor shows results from the current session only.
+The editor keeps the last result of every cell, so a notebook reopens showing its output at once,
+without running anything. The cache is disposable: deleting it loses nothing but time, and the
+notebook file is never touched by it.
 
-Outputs are cached next to the notebook in `.duckdb-notebook/`, which belongs in `.gitignore`:
+**Where it lives.** For a notebook file, in `.duckdb-notebook/` beside it, one directory per notebook
+(the file name without its extension). The extension writes a `.gitignore` there that ignores the
+whole directory, so it never needs adding to a project's own:
 
 ```
 .duckdb-notebook/
+  .gitignore                     *
   revenue/
-    monthly.<hash>.parquet        result page shown in the grid
-    revenue_trend.<hash>.arrow    data behind a chart
-    state.json                    last input values, collapsed cells
+    monthly.json                 a named cell's result
+    @3f1c0a9d2e4b7c10.json       an unnamed cell's result, by a hash of its text
+    @state.json                  the variables the results were made with
 ```
 
-`<hash>` covers the cell's source, the hashes of the cells it reads, and the values of the variables
-it reads. A cell whose hash has a cache file opens instantly with no query. The cache is disposable:
-deleting it loses nothing but time.
+For a notebook stored in a database (`db:<name>`), in that database's `_notebook.cache` table,
+`(name, cell, format, key, saved_at, result)` with one row per cell and one for `@state`. A remote
+notebook (a URL, an object store) and a notebook not saved yet have no cache. A location that cannot be
+written means no cache, quietly; a run never fails because of it.
+
+**An entry** is JSON: `{format, cell, key, saved_at, result}`. `result` is exactly what the editor was
+sent when the cell ran: its status and error, row count and timing, the rendered prose, the first page
+of a query's rows (as many as the page shows), each chart's render description and data, an input's
+value and choices. Rows and chart data are JSON, as everywhere else in the editor (DESIGN §12), not
+Parquet or Arrow. A result larger than **4 MiB** of JSON is not kept: that cell reopens empty, as
+every cell did before there was a cache. A chart's data is already bounded by the chart compiler's
+aggregation, and a grid keeps one page, so in practice only very wide pages or point clouds reach it.
+
+**Identity.** A named cell's result is stored under its name; an unnamed cell's under `@` and a hash
+of its marker line and body, so it keeps its result when cells around it move and loses it when it is
+edited. This is why naming cells you care about matters (§2).
+
+**The key.** Every entry records the key of the cell when its result was made. The key is a hash of:
+
+- the cell's kind, name, widget and SQL (or text), and its options except the ones that only lay it
+  out (`hide`, `span`, `run`);
+- the keys of the cells it reads, so a change anywhere upstream reaches every cell below it;
+- the type and value of every variable its SQL reads (unset, `NULL` and a value are all different).
+
+What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width` and
+`height`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
+that filters it changes that cell's key, not the keys of the cells that read it.
+
+**Fresh or stale.** When a notebook is opened, each cell's key is computed from the text as it is now
+and the variables recorded in `@state` (the last values of its inputs and selections). A cell whose key
+equals its entry's is *fresh* and looks exactly like a result just computed. A cell whose key differs
+is *stale*: the cell, something it reads, or a variable it reads changed after the result was made. Its
+last result is shown in fainter ink with the note *from an earlier run* until it runs. A cell with an
+error shows nothing from the cache.
+
+**Trust.** Showing cached output executes nothing (DESIGN §3): opening a notebook reads files or rows
+and computes hashes. The inputs show the values the results were made with, and the session is given
+those values, but no cell runs until the reader runs one. Until then, changing an input marks what reads
+it stale instead of running it, a brush asks for a run, and only the remembered page of a grid can be
+seen.
+
+**Disposable and safe.** An entry that is not whole (truncated, not JSON, the wrong shape, another
+`format`, another cell's) is ignored, never an error. Entries are written to a temporary file and moved
+into place. Entries of cells that no longer exist are removed on the next run. The `format` number
+is raised whenever what a key covers or how an entry is laid out changes, and an entry with another
+number is simply ignored.
+
+**Who reads and writes it.**
+
+| | reads | writes |
+|---|---|---|
+| The editor | when a notebook is opened | after every run, redraw and input change |
+| `notebook_run` | never: a run computes from the data as it is | only with `cache := true` |
+| `notebook_export` | never: an export shows the data as it is now | never: an export has no side effects |
+| `notebook_cache(path)` | lists entries with `status` fresh or stale | |
+| `notebook_cache_clear(path)` | | removes the notebook's entries |
+
+`notebook_run(path, cache := true)` is how a scheduled job or a colleague prepares a notebook so it
+opens with results. In the editor, the gear menu's *Forget* clears the cache and *keep results* writes
+`cache:` in the `[notebook]` cell (§6).
 
 Teams who want reviewable outputs can commit an export (HTML or Markdown) instead of the cache.
 

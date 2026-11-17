@@ -5,7 +5,7 @@ var App = (function () {
   var params = new URLSearchParams(location.search);
   var A = {
     token: params.get('token') || '', source: params.get('nb') || '', preamble: '', cells: [],
-    dirty: false, autorun: true, reading: false, graph: false, selected: {}, running: false, lastText: '',
+    dirty: false, autorun: true, live: false, reading: false, graph: false, selected: {}, running: false, lastText: '',
     // Rows per page for tables whose cell has no rows= option; remembered in this browser.
     pageSize: +(localStorage.getItem('nb.pageSize') || 25)
   };
@@ -62,6 +62,7 @@ var App = (function () {
     A.preamble = data.preamble || '';
     A.cells = [];
     A.merge(data.cells);
+    A.kept(data);
     A.lastText = data.text;
     A.dirty = false;
     // Code is written when a notebook is opened or reloaded from disk, never while it is typed.
@@ -71,6 +72,46 @@ var App = (function () {
     if (window.Ink) { Ink.present($('title'), 'toolbar/title'); Ink.present($('source'), 'toolbar/source'); }
     document.title = (data.title || A.source) + ' · DuckDB Notebook';
     A.render();
+  };
+
+  // The result cache (FORMAT §8): the last result of each cell, sent when a notebook is opened so the
+  // page shows what it showed last time without running anything. A result made from inputs that
+  // have changed since is stale. Until something runs in this session the page is a picture of the
+  // last run (A.live is false): inputs and brushes do not run cells on their own.
+  A.kept = function (data) {
+    A.live = !!data.ran;
+    (data.cached || []).forEach(function (item) {
+      var c = A.cells[item.idx];
+      if (!c || !item.result) return;
+      c.result = item.result;
+      c.kept = item.saved_at || true;
+      c.offset = 0;
+      if (item.result.choices) c.choices = item.result.choices;
+      c.state = item.stale ? 'stale' : item.result.status === 'error' ? 'failed' : 'fresh';
+    });
+    var shown = data.variables || {};
+    A.cells.forEach(function (c) {
+      if (c.kind !== 'input' || !(c.name in shown)) return;
+      c.value = shown[c.name];
+      if (c.result) c.result.value = shown[c.name];
+      delete shown[c.name];
+    });
+    // What is left are chart selections: the brush or the picked marks are drawn again.
+    Object.keys(shown).forEach(function (name) { A.selected[name] = shown[name]; });
+    return (data.cached || []).length;
+  };
+  // A stale result that is still on the page: drawn fainter, with a note, until the cell runs.
+  A.outdated = function (cell) {
+    var r = cell.result;
+    return cell.state === 'stale' && !!r && !!r.status && r.status !== 'skipped';
+  };
+  A.forget = function () {
+    return A.api('POST', '/api/cache/clear', {}).then(function (r) {
+      // Results this session computed stay on the page; ones only remembered go.
+      A.cells.forEach(function (c) { if (c.kept) { c.result = null; c.kept = null; c.state = 'stale'; } });
+      A.status(r.removed ? 'Forgot the results of ' + r.removed + ' cell' + (r.removed === 1 ? '' : 's') : 'No results were kept');
+      A.render();
+    }).catch(function (e) { A.status(e.message); });
   };
 
   // A query cell's body: its SQL, then one /* chart */ comment per chart.
@@ -120,6 +161,7 @@ var App = (function () {
   A.run = function (indexes, redraw) {
     if (A.running) return Promise.resolve();
     A.running = true;
+    A.live = true;
     $('interrupt').hidden = false;
     (indexes || A.cells.map(function (_, i) { return i; })).concat(redraw || []).forEach(function (i) { if (A.cells[i]) A.cells[i].state = 'running'; });
     A.render();
@@ -136,6 +178,7 @@ var App = (function () {
           return;
         }
         c.result = res;
+        c.kept = null;
         c.offset = 0;
         if (res.choices) c.choices = res.choices;
         c.state = res.status === 'error' ? 'failed' : 'fresh';
@@ -179,12 +222,31 @@ var App = (function () {
       var full = readers.filter(function (j) { return redraw.indexOf(j) < 0; });
       var list = full.concat(A.downstream(full));
       list.forEach(function (j) { A.cells[j].state = 'stale'; });
+      if (!A.live) {
+        // Nothing has run in this session: the cells that read the value wait for a run.
+        redraw.forEach(function (j) { A.cells[j].state = 'stale'; });
+        A.status('Set ' + name + '. Nothing has run yet: press Run all.');
+        A.render();
+        return;
+      }
       redraw = redraw.filter(function (j) { return list.indexOf(j) < 0 && A.cells[j].result && A.cells[j].result.data; });
       var auto = list.filter(function (j) { return A.isAuto(A.cells[j]); });
       auto = auto.filter(function (j, k) { return auto.indexOf(j) === k; }).sort(function (a, b) { return a - b; });
       if (A.autorun && (auto.length || redraw.length)) return A.run(auto, redraw);
       A.render();
     }).catch(function (e) { A.status(e.message); });
+  };
+
+  // A brush or a click on a chart. On a page that only shows the last run's results there is nothing
+  // to filter yet.
+  A.select = function (name, value, cell) {
+    if (!A.live) {
+      A.status('These are the last run\'s results: press Run all, then select.');
+      A.render();
+      return;
+    }
+    A.selected[name] = value;
+    A.setVariable(name, value, cell);
   };
 
   A.save = function () {
@@ -323,20 +385,31 @@ var App = (function () {
   A.notebookCell = function () {
     return A.cells.find(function (c) { return c.kind === 'notebook'; });
   };
-  A.timing = function () {
-    var nb = A.notebookCell(), m = nb && /^timing:\s*(\S+)\s*$/m.exec(nb.content || '');
+  // cache: false in the [notebook] cell keeps no results for this notebook (FORMAT §8).
+  A.flag = function (key) {
+    var nb = A.notebookCell(), m = nb && new RegExp('^' + key + ':\\s*(\\S+)\\s*$', 'm').exec(nb.content || '');
     return !(m && m[1] === 'false');
   };
-  A.setTiming = function (on) {
+  A.timing = function () { return A.flag('timing'); };
+  A.caching = function () { return A.flag('cache'); };
+  A.setTiming = function (on) { A.setFlag('timing', on); };
+  A.setCaching = function (on) {
+    A.setFlag('cache', on);
+    // Switching it off forgets what was kept: the server does so when it reads the new text.
+    if (!on) A.cells.forEach(function (c) { if (c.kept) { c.result = null; c.kept = null; c.state = 'stale'; } });
+    A.status(on ? 'Results will be kept from the next run on' : 'Results are no longer kept for this notebook');
+    A.render();
+  };
+  A.setFlag = function (key, on) {
     var nb = A.notebookCell();
     if (!nb) {
       if (on) return;
       nb = { head: '[notebook]', body: '/*\n*/', kind: 'notebook', state: 'stale', options: {}, content: '' };
       A.cells.unshift(nb);
     }
-    var lines = (nb.content || '').split('\n').filter(function (l) { return !/^timing:/.test(l); });
+    var lines = (nb.content || '').split('\n').filter(function (l) { return l.indexOf(key + ':') !== 0; });
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (!on) lines.push('timing: false');
+    if (!on) lines.push(key + ': false');
     nb.content = lines.join('\n');
     nb.body = '/*\n' + nb.content + (nb.content ? '\n' : '') + '*/';
     A.edited(nb);
@@ -365,9 +438,13 @@ var App = (function () {
 
   // The bottom right corner of a cell: rows, what it defines, and how long it took.
   function footer(cell) {
-    var r = cell.result;
-    if (!r || r.status === 'skipped' || A.reading) return null;
-    var parts = [];
+    var r = cell.result, parts = [];
+    if (!r || r.status === 'skipped') return null;
+    if (A.outdated(cell)) {
+      parts.push(NB.el('span', { 'class': 'nb-outdated', text: 'from an earlier run',
+        title: 'This result is from an earlier run' + (cell.kept && cell.kept !== true ? ' (' + NB.formatValue(cell.kept) + ' UTC)' : '') + '. The cell, or something it reads, has changed since: run it to bring it up to date.' }));
+    }
+    if (A.reading) return parts.length ? NB.el('div', { 'class': 'nb-foot' }, parts) : null;
     if (r.row_count != null) parts.push(NB.el('span', { text: NB.formatNumber(r.row_count, ',') + (r.row_count === 1 ? ' row' : ' rows') }));
     if (cell.defines && cell.defines.length) parts.push(NB.el('span', { text: 'defines ' + cell.defines.join(', ') }));
     if (r.elapsed_ms != null && A.timing()) parts.push(NB.el('span', { 'class': 'nb-time', text: elapsed(r.elapsed_ms), title: 'Time this cell took to run' }));
@@ -386,7 +463,7 @@ var App = (function () {
       var text = r.output != null ? r.output : (cell.content || '').replace(/\{\{([\s\S]*?)\}\}/g, function (_, e) { return '`' + e.trim() + '`'; });
       out.appendChild(NB.el('div', { 'class': 'nb-md', html: NB.markdown(text) }));
     } else if (cell.kind === 'chart' && r.data) {
-      NB.chart(out, r.data, { selected: A.selected, onSelect: function (name, value) { A.selected[name] = value; A.setVariable(name, value, cell); } });
+      NB.chart(out, r.data, { selected: A.selected, onSelect: function (name, value) { A.select(name, value, cell); } });
     } else if (cell.kind === 'sql') {
       queryOutput(cell, out);
     }
@@ -410,7 +487,7 @@ var App = (function () {
       var holder = NB.el('div', { 'class': 'nb-tab-body' });
       out.appendChild(holder);
       var chart = (r.charts || [])[tab];
-      if (chart) NB.chart(holder, chart, { selected: A.selected, seed: 'cell' + cell.idx + '/' + tab, inTab: true, onSelect: function (name, value) { A.selected[name] = value; A.setVariable(name, value, cell); } });
+      if (chart) NB.chart(holder, chart, { selected: A.selected, seed: 'cell' + cell.idx + '/' + tab, inTab: true, onSelect: function (name, value) { A.select(name, value, cell); } });
       else holder.appendChild(NB.el('div', { 'class': 'nb-stub', text: 'Not drawn yet: run the cell (Shift+Enter).' }));
       if (!A.reading) {
         out.appendChild(stub((cell.editingChart ? '▾ ' : '▸ edit ') + 'chart spec', function () { cell.editingChart = !cell.editingChart; A.render(); }));
@@ -430,6 +507,8 @@ var App = (function () {
     if (r.data) {
       var size = +((cell.options && cell.options.rows) || A.pageSize);
       var fetchPage = function (offset, limit) {
+        // A remembered result holds one page; the rest is in a session that has not run yet.
+        if (!A.live) { A.status('This is the first page of the last run: press Run all to see the rest.'); return Promise.resolve(); }
         return A.api('GET', '/api/page?cell=' + cell.idx + '&offset=' + offset + '&limit=' + limit).then(function (data) {
           cell.offset = offset; data.total = r.data.total; r.data = data; A.render();
         }).catch(function (e) { A.status(e.message); });
@@ -514,7 +593,7 @@ var App = (function () {
       var hideOutput = hidden.output && !(cell.peekOutput && !A.reading);
       // Reading view shows results, not code; markdown and inputs have no code to show there.
       if (A.reading) hideCode = true;
-      var box = NB.el('div', { 'class': 'nb-cell' + (hideCode ? ' hide-code' : '') + (hideOutput ? ' hide-output' : ''), 'data-kind': cell.kind, 'data-idx': i, 'data-seed': 'cell' + i + (cell.name || '') });
+      var box = NB.el('div', { 'class': 'nb-cell' + (hideCode ? ' hide-code' : '') + (hideOutput ? ' hide-output' : '') + (A.outdated(cell) ? ' outdated' : ''), 'data-kind': cell.kind, 'data-idx': i, 'data-seed': 'cell' + i + (cell.name || '') });
       if (i === pointed) {
         box.classList.add('pointed');
         box.addEventListener('mouseleave', function () { box.classList.remove('pointed'); }, { once: true });
@@ -564,7 +643,15 @@ var App = (function () {
       if (hidden.output && !A.reading) {
         body.appendChild(stub(cell.peekOutput ? '▾ output (hidden when reading)' : '▸ output hidden', function () { cell.peekOutput = !cell.peekOutput; A.render(); }));
       }
-      body.appendChild(output(cell));
+      var out;
+      try { out = output(cell); } catch (e) {
+        // A remembered result that cannot be drawn is dropped, never an error.
+        if (!cell.kept) throw e;
+        cell.result = null; cell.kept = null; cell.state = 'stale';
+        box.classList.remove('outdated');
+        out = output(cell);
+      }
+      body.appendChild(out);
       var foot = footer(cell);
       if (foot) body.appendChild(foot);
       box.appendChild(body);
@@ -584,6 +671,7 @@ var App = (function () {
     main.scrollTop = scrollTop;
     var timing = $('show-timing');
     if (timing) timing.checked = A.timing();
+    if ($('keep-results')) $('keep-results').checked = A.caching();
   };
 
   // Hands each piece of a cell to the pen (render-ink.js): its bracket, margin, state, and each part
@@ -700,6 +788,8 @@ var App = (function () {
       localStorage.setItem('nb.theme', next);
     };
     $('show-timing').onchange = function (e) { A.setTiming(e.target.checked); };
+    $('keep-results').onchange = function (e) { A.setCaching(e.target.checked); };
+    $('forget-results').onclick = function () { A.forget(); };
     NB.pageSizes.forEach(function (n) { $('page-size').appendChild(NB.el('option', { value: n, text: n, selected: n === A.pageSize ? 'selected' : null })); });
     $('page-size').onchange = function (e) {
       A.pageSize = +e.target.value;
@@ -737,7 +827,8 @@ var App = (function () {
       A.load(data);
       A.watch();
       if (window.AppExtra) { AppExtra.catalog(); AppExtra.picker(); }
-      A.status('Opened. Nothing has run yet: press Run all.');
+      var kept = (data.cached || []).length;
+      A.status(!kept ? 'Opened. Nothing has run yet: press Run all.' : A.live ? 'Showing the last results.' : 'Showing the last results. Nothing has run yet: press Run all.');
     }).catch(function (e) { A.status(e.message); $('cells').appendChild(NB.el('div', { 'class': 'nb-error', text: e.message })); });
   };
 

@@ -41,8 +41,12 @@ y: revenue
   Change one and everything that depends on it updates.
 - **Charts are declarative.** A query shows a table until you give it charts: short YAML specs after
   the query, shown as tabs. Each compiles to an aggregate query, so charts stay fast on large tables.
+  A chart can carry reference lines and bands (an average, a target range), computed by DuckDB, and
+  handwritten notes that point at the data.
 - **Notebooks can live in the database.** The same text is stored with version history in a table.
 - **Share without DuckDB.** Export to a single self-contained HTML file, or to PDF.
+- **Reopens with its results.** The last result of each cell is kept beside the notebook, so it opens
+  showing them without running anything; results whose inputs changed since are marked.
 - **Looks like a sketchbook.** Paper, handwriting and hand-drawn charts, after Excalidraw, in the
   editor and in every export.
 
@@ -59,6 +63,11 @@ SELECT idx, name, defines, reads, depends_on, errors FROM notebook_cells('exampl
 
 -- Run every cell in a session of its own, charts included; params override inputs
 SELECT name, status, row_count, error FROM notebook_run('examples/revenue.sql', params := {region: 'US'});
+
+-- Keep the results, so the notebook opens showing them; list or clear what is kept
+FROM notebook_run('examples/revenue.sql', cache := true);
+SELECT cell, status, saved_at FROM notebook_cache('examples/revenue.sql');
+FROM notebook_cache_clear('examples/revenue.sql');
 
 -- Exports: a single HTML file that needs no DuckDB, and the other formats
 FROM notebook_export('examples/revenue.sql', file := 'revenue.html');
@@ -92,7 +101,7 @@ FROM notebook_export('examples/revenue.sql', format := 'html-wasm', wasm_runtime
 
 [examples/charts.sql](examples/charts.sql) shows every chart type.
 
-Not yet built: the result cache, a CodeMirror editor (the editor is a text area with SQL
+Not yet built: a CodeMirror editor (the editor is a text area with SQL
 highlighting and completion), and charting libraries for zoomable maps and GPU-scale networks (the built-in SVG
 renderers draw every chart type, simply). [docs/DESIGN.md](docs/DESIGN.md) §9 and §12 have the
 details.

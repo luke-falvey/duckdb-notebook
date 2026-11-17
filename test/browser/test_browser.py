@@ -329,6 +329,234 @@ def test_metadata_error(browser, work):
     shell.communicate(timeout=30)
 
 
+def test_cache(browser, work):
+    """The result cache (FORMAT §8): a reopened notebook shows its last results without running anything,
+    results whose inputs changed are marked, and the cache can be cleared or switched off."""
+    folder = os.path.join(work, "cache")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "revenue.sql")
+    shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
+    db = os.path.join(folder, "cache.duckdb")
+    sidecar = os.path.join(folder, ".duckdb-notebook", "revenue")
+
+    def start(source=notebook):
+        shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list", db], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=folder, bufsize=1)
+        shell.stdin.write(f"SELECT url FROM notebook_start('{source}', open := false);\n")
+        shell.stdin.flush()
+        return shell, shell.stdout.readline().strip()
+
+    def stop(shell):
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+    def open_page(url):
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.errors = watch(page)
+        # What the page asks the server to do: a reopened notebook must not run or query anything.
+        page.calls = []
+        page.on("request", lambda r: page.calls.append(r.url.split("/api/")[1].split("?")[0]) if "/api/" in r.url else None)
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        return page
+
+    def run_all(page):
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+
+    def outdated(page):
+        return page.evaluate("() => Array.from(document.querySelectorAll('.nb-cell.outdated')).map(c => +c.dataset.idx)")
+
+    def shown(page):
+        """What a reader sees of the results: the prose, a grid's page, the charts and the input."""
+        return page.evaluate("""() => ({
+            prose: document.querySelector(".nb-cell[data-idx='1'] .nb-md").textContent,
+            grid: document.querySelector(".nb-cell[data-idx='6'] .nb-output").innerHTML,
+            charts: document.querySelector(".nb-cell[data-idx='7'] .nb-output").innerHTML,
+            kpi: document.querySelector(".nb-cell[data-idx='8'] .nb-output").innerHTML,
+            top: document.querySelector(".nb-cell[data-idx='10'] .nb-output").innerHTML,
+            foot: document.querySelector(".nb-cell[data-idx='6'] .nb-foot").textContent,
+            region: (s => s.options[s.selectedIndex].text)(document.querySelector(".nb-input select")),
+            badges: Array.from(document.querySelectorAll('.nb-cell-head .nb-badge')).map(b => b.className)
+        })""")
+
+    # ---- First session: run, pick an input, brush. ----
+    shell, url = start()
+    page = open_page(url)
+    check(page.locator(".nb-badge.fresh").count() == 0 and "Opened" in page.locator("#status").text_content(),
+          "a notebook that has never run opens with no results")
+    check(not os.path.exists(sidecar), "opening a notebook writes no cache")
+    run_all(page)
+    page.locator(".nb-input select").first.select_option(label="US")
+    page.wait_for_function("document.querySelector('.nb-md').textContent.includes('US')", timeout=30000)
+    before_top = page.locator(".nb-cell[data-idx='10'] table.nb-grid tbody tr").first.text_content()
+    overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
+    overlay.scroll_into_view_if_needed()
+    box = overlay.bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + 20)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.3, box["y"] + 40, steps=5)
+    page.mouse.up()
+    page.wait_for_function(
+        "(b) => { const r = document.querySelector(\".nb-cell[data-idx='10'] table.nb-grid tbody tr\"); "
+        "return r && r.textContent !== b && !App.running; }", arg=before_top, timeout=30000)
+    page.mouse.move(5, 5)
+    page.wait_for_timeout(300)
+    first = shown(page)
+    check("US" in first["prose"] and first["region"] == "US" and all("fresh" in b for b in first["badges"][1:]),
+          "the first session ends with every cell fresh, for the region picked")
+    names = sorted(os.listdir(sidecar)) if os.path.isdir(sidecar) else []
+    check("monthly.json" in names and "@state.json" in names and "filtered.json" in names
+          and len([n for n in names if n.startswith("@") and n != "@state.json"]) == 2,
+          f"running keeps each cell's result beside the notebook ({len(names)} files in .duckdb-notebook/revenue)")
+    check(open(os.path.join(folder, ".duckdb-notebook", ".gitignore")).read().strip().endswith("*"),
+          "the cache directory ignores itself in git")
+    check(max(os.path.getsize(os.path.join(sidecar, n)) for n in names) < 4 * 1024 * 1024, "every entry is under the size limit")
+    check(not page.errors, f"no browser errors while running {page.errors[:3]}")
+    page.close()
+    stop(shell)
+
+    # ---- A new process: the page shows the same results at once, and nothing runs. ----
+    shell, url = start()
+    page = open_page(url)
+    again = shown(page)
+    check(again["badges"] == first["badges"] and again["region"] == "US" and again["prose"] == first["prose"],
+          "reopening shows the last results: the same states, input value and prose")
+    check(again["grid"] == first["grid"] and again["top"] == first["top"] and again["foot"] == first["foot"],
+          "a remembered grid is the same page of rows, drawn exactly as when it was computed")
+    check(again["charts"] == first["charts"] and again["kpi"] == first["kpi"]
+          and page.locator(".nb-cell[data-idx='7'] rect.nb-brush").get_attribute("width") not in (None, "0"),
+          "remembered charts are drawn exactly as before, the brush included")
+    check(set(page.calls) <= {"notebook", "catalog", "notebooks", "events"},
+          f"reopening runs nothing: the page only asks for the notebook ({sorted(set(page.calls))})")
+    check(outdated(page) == [] and "last results" in page.locator("#status").text_content()
+          and "Run all" in page.locator("#status").get_attribute("title"),
+          "nothing is marked stale, and the status says these are the last results")
+    stopped = sql(os.path.join(folder, "other.duckdb"), "SELECT count(*) FROM duckdb_views() WHERE view_name = 'monthly'").strip()
+    check(stopped == "0", "showing results defines nothing")
+
+    # Paging and brushing need a session that has run: they say so instead of running or failing.
+    page.locator(".nb-cell[data-idx='6'] button.nb-page").last.click()
+    check("first page of the last run" in page.locator("#status").text_content(), "paging a remembered grid asks for a run")
+    overlay = page.locator(".nb-cell[data-idx='7'] .nb-brush-overlay")
+    overlay.scroll_into_view_if_needed()
+    box = overlay.bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.6, box["y"] + 20)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.7, box["y"] + 40, steps=5)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    check("last run" in page.locator("#status").text_content() and shown(page)["charts"] == first["charts"],
+          "brushing a remembered chart asks for a run and leaves the chart as it was")
+    check("run" not in page.calls and "page" not in page.calls and "variable" not in page.calls,
+          "neither ran or queried anything")
+
+    # An input changes: what reads it is stale, in fainter ink with a note, and still nothing runs.
+    page.locator(".nb-input select").first.select_option(label="APAC")
+    page.wait_for_function("document.querySelectorAll('.nb-cell.outdated').length > 0")
+    check(outdated(page) == [1, 6, 7, 8, 9, 10], f"changing an input marks the cells that read it, and their readers ({outdated(page)})")
+    faint = page.evaluate("""() => ['6', '3'].map(i => +getComputedStyle(document.querySelector(`.nb-cell[data-idx='${i}'] .nb-output`)).opacity)""")
+    note = page.locator(".nb-cell[data-idx='6'] .nb-foot .nb-outdated")
+    check(faint[0] < 0.6 and faint[1] == 1 and note.text_content() == "from an earlier run" and "earlier run" in note.get_attribute("title"),
+          f"a stale result is fainter ({faint[0]}) and says it is from an earlier run; a fresh one is not")
+    check(shown(page)["grid"] == first["grid"], "the stale result itself is still the last one")
+    check("run" not in page.calls, "changing an input before anything has run does not run cells")
+    page.click("#gear")
+    page.click("#view-reading")
+    page.keyboard.press("Escape")
+    check(page.locator(".nb-cell[data-idx='6'] .nb-outdated").is_visible(), "reading view keeps the note on a stale result")
+    page.click("#gear")
+    page.click("#view-reading")
+    page.keyboard.press("Escape")
+    for theme in ("dark", "light"):
+        page.evaluate("t => document.documentElement.setAttribute('data-theme', t)", theme)
+        colour = page.evaluate("() => getComputedStyle(document.querySelector('.nb-outdated')).color")
+        check(colour == "rgb(240, 140, 0)", f"the note is drawn in the stale colour in {theme} mode")
+
+    # Running brings everything up to date.
+    run_all(page)
+    check(outdated(page) == [] and page.locator(".nb-badge.stale").count() == 0, "after a run nothing is stale")
+    check(not page.errors, f"no browser errors on a reopened notebook {page.errors[:3]}")
+    page.close()
+    stop(shell)
+
+    # ---- An upstream cell is edited on disk, and two entries are damaged. ----
+    text = open(notebook).read()
+    with open(notebook, "w") as f:
+        f.write(text.replace("count(*) AS orders\nFROM filtered", "count(*) AS order_count\nFROM filtered"))
+    with open(os.path.join(sidecar, "top_orders.json"), "w") as f:
+        f.write("this is not a result")
+    damaged = open(os.path.join(sidecar, "order_sizes.json")).read()
+    with open(os.path.join(sidecar, "order_sizes.json"), "w") as f:
+        f.write(damaged[:len(damaged) // 2])
+    shell, url = start()
+    page = open_page(url)
+    check(outdated(page) == [1, 7, 8], f"an edited cell and the cells that read it (the prose reads monthly) are stale; the rest stay fresh ({outdated(page)})")
+    check(page.locator(".nb-cell[data-idx='6'] .nb-badge.fresh").count() == 1 and page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1,
+          "a cell above the edit keeps its fresh result")
+    check(page.locator(".nb-cell[data-idx='9'] svg.nb-chart-svg").count() == 0 and page.locator(".nb-cell[data-idx='10'] table.nb-grid").count() == 0
+          and page.locator(".nb-error").count() == 0 and not page.errors,
+          "a corrupt entry and a truncated one are ignored: those cells are simply empty")
+    run_all(page)
+    check(outdated(page) == [] and page.locator(".nb-cell[data-idx='10'] table.nb-grid").count() == 1, "running fills them in again")
+
+    # ---- The gear menu: forget the results, or keep none. ----
+    page.click("#gear")
+    check(page.locator("#keep-results").is_checked() and page.locator("#forget-results").is_visible(),
+          "the gear menu has the two cache controls, results kept by default")
+    page.click("#forget-results")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('Forgot')")
+    check(not os.path.exists(sidecar) and page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1,
+          "Forget removes the notebook's cache and leaves this session's results on the page")
+    page.keyboard.press("Escape")
+    page.reload()
+    page.wait_for_selector(".nb-cell")
+    page.wait_for_function("document.getElementById('status').textContent !== ''")
+    check(page.locator("table.nb-grid").count() == 0 and "Opened" in page.locator("#status").text_content(),
+          "after Forget the notebook opens with no results")
+    run_all(page)
+    check(os.path.isdir(sidecar), "the next run keeps results again")
+    page.click("#gear")
+    page.click("#keep-results")
+    page.wait_for_function("App.text().includes('cache: false')")
+    page.wait_for_timeout(1200)
+    check(not os.path.exists(sidecar), "unticking keep results writes cache: false in the [notebook] cell and removes the cache")
+    page.keyboard.press("Escape")
+    run_all(page)
+    check(not os.path.exists(sidecar) and page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1,
+          "with cache: false a run keeps nothing")
+    page.click("#gear")
+    page.click("#keep-results")
+    page.wait_for_function("!App.text().includes('cache: false')")
+    page.keyboard.press("Escape")
+    run_all(page)
+    check(os.path.isdir(sidecar), "ticking it again keeps results from the next run")
+    check(not page.errors, f"no browser errors using the cache controls {page.errors[:3]}")
+    page.close()
+
+    # ---- A notebook stored in the database keeps its cache there. ----
+    shell.stdin.write(f"SELECT saved FROM notebook_save('{os.path.join(ROOT, 'examples', 'revenue.sql')}', name := 'stored');\n")
+    shell.stdin.flush()
+    shell.stdout.readline()
+    page = open_page(url.split("&nb=")[0] + "&nb=db:stored")
+    run_all(page)
+    page.close()
+    stop(shell)
+    rows = sql(db, "SELECT count(*), count(*) FILTER (cell = 'monthly') FROM _notebook.cache WHERE name = 'stored'").strip()
+    check(rows.split("|")[0].isdigit() and int(rows.split("|")[0]) >= 10 and rows.split("|")[1] == "1",
+          f"a stored notebook's results are rows of _notebook.cache ({rows})")
+    shell, url = start("db:stored")
+    page = open_page(url)
+    check(page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1 and outdated(page) == [] and "run" not in page.calls
+          and page.locator(".nb-badge.fresh").count() == 11,
+          "a stored notebook reopens with its results too")
+    check(not page.errors, f"no browser errors with a stored notebook {page.errors[:3]}")
+    page.close()
+    stop(shell)
+
+
 def test_exports(browser, work, chromium):
     notebook = os.path.join(ROOT, "examples", "revenue.sql")
     db = os.path.join(work, "exports.duckdb")
@@ -700,6 +928,108 @@ def test_ink_editor(browser, work):
         shell.communicate(timeout=30)
 
 
+def test_chart_marks(browser, work):
+    """Rules and bands on charts (FORMAT 5.1), in an export of test/notebooks/references.sql."""
+    db = os.path.join(work, "marks.duckdb")
+    out = os.path.join(work, "references.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'test', 'notebooks', 'references.sql')}', file := '{out}')")
+    page = browser.new_page(viewport={"width": 1300, "height": 950})
+    errors = watch(page)
+    page.goto(still("file://" + out))
+    page.wait_for_function("window.__NB_READY === true")
+    chart = page.locator(".nb-cell[data-idx='1']")
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(chart.locator(".nb-ref-rule").count() == 6 and chart.locator(".nb-ref-band").count() == 2,
+          "a chart draws its rules and bands")
+    check("average 49.5" in labels and "24.75 to 74.25" in labels and "budget 100" in labels,
+          f"aggregates are computed by DuckDB and written into the labels ({labels})")
+    order = chart.locator("svg.nb-chart-svg > g").evaluate(
+        "g => Array.from(g.children).map(e => e.getAttribute('class')).filter(c => /nb-refs|nb-plot|nb-ref-labels/.test(c || ''))")
+    check(order == ["nb-refs", "nb-plot", "nb-ref-labels"], f"rules and bands are drawn behind the marks, their labels over them ({order})")
+    muted = chart.locator(".nb-ref-rule path").first.evaluate("e => getComputedStyle(e).stroke")
+    red = chart.locator(".nb-ref-rule").nth(5).locator("path").first.evaluate("e => getComputedStyle(e).stroke")
+    check(muted == "rgb(134, 142, 150)" and red == "rgb(224, 49, 49)", f"they are in muted ink unless given a colour ({muted}, {red})")
+    # y: 120 is above every point (n < 100): the axis grows to show it.
+    clear = chart.evaluate("""(cell) => {
+      const line = cell.querySelector('.nb-plot .nb-line'), n = line.getTotalLength(), m = line.getScreenCTM(), pts = [];
+      for (let i = 0; i <= 800; i++) { const p = line.getPointAtLength(n * i / 800).matrixTransform(m); pts.push([p.x, p.y]); }
+      return Array.from(cell.querySelectorAll('.nb-ref-labels text')).filter(t => {
+        const b = t.getBoundingClientRect();
+        return pts.some(p => p[0] > b.left && p[0] < b.right && p[1] > b.top && p[1] < b.bottom);
+      }).map(t => t.textContent);
+    }""")
+    check(clear == [], f"rule and band labels are placed clear of the line ({clear})")
+    target = chart.locator(".nb-ref-rule[data-ref='Target'] path").first.bounding_box()
+    frame, line = chart.locator("svg.nb-chart-svg").bounding_box(), chart.locator(".nb-plot .nb-line").bounding_box()
+    check(target is not None and frame["y"] <= target["y"] < line["y"], "the axis grows to include a rule outside the data")
+    chart.locator(".nb-tab", has_text="Bars by group").click()
+    labels = chart.locator(".nb-ref-labels text").evaluate_all("els => els.map(e => e.textContent)")
+    check(labels == ["Target", "average 2,475"], f"a rule's label uses the axis's format ({labels})")
+    check(chart.locator(".nb-ref-rule").count() == 2, "a rule on a category axis runs through its category")
+
+    # Notes (FORMAT 5.1): handwriting attached to data positions, drawn after the marks.
+    boxes = """(cell) => {
+      const box = e => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; };
+      return { texts: Array.from(cell.querySelectorAll('.nb-note')).map(n => Array.from(n.querySelectorAll('text')).map(t => ({ text: t.textContent, box: box(t) }))),
+               bars: Array.from(cell.querySelectorAll('.nb-plot .nb-mark .sk-hit')).map(box),
+               paths: Array.from(cell.querySelectorAll('.nb-note')).map(n => n.querySelectorAll('path').length) }; }"""
+    geo = chart.evaluate(boxes)
+    note, bar = geo["texts"][0][0], max(geo["bars"], key=lambda b: b[3] - b[1])
+    check(note["text"] == "the bigger group" and note["box"][3] <= bar[1] + 2 and note["box"][0] < bar[2] + 60 and note["box"][2] > bar[0] - 60,
+          f"a note on a category sits above its bar ({note['box']} over {bar})")
+    chart.locator(".nb-tab", has_text="Notes").click()
+    geo = chart.evaluate(boxes)
+    lines = [t["text"] for t in geo["texts"][0]]
+    check(len(geo["texts"]) == 3 and len(lines) >= 2 and all(len(l) <= 18 for l in lines) and " ".join(lines) == "A note that is long enough to wrap",
+          f"a long note is wrapped into short lines ({lines})")
+    order = chart.locator("svg.nb-chart-svg > g").evaluate(
+        "g => Array.from(g.children).map(e => e.getAttribute('class')).filter(c => /nb-plot|nb-notes/.test(c || ''))")
+    check(order == ["nb-plot", "nb-notes"] and chart.locator(".nb-notes").evaluate("e => getComputedStyle(e).pointerEvents") == "none",
+          "notes are drawn after the marks and leave the pointer to them")
+    # The ring of the first note is on the line at its date; no note's text touches the line.
+    hits = chart.evaluate("""(cell) => {
+      const line = cell.querySelector('.nb-plot .nb-line'), n = line.getTotalLength(), m = line.getScreenCTM(), pts = [];
+      for (let i = 0; i <= 400; i++) { const p = line.getPointAtLength(n * i / 800).matrixTransform(m); pts.push([p.x, p.y]); }
+      const ring = cell.querySelector('.nb-note path').getBoundingClientRect(), cx = (ring.left + ring.right) / 2, cy = (ring.top + ring.bottom) / 2;
+      const near = Math.min(...pts.map(p => Math.hypot(p[0] - cx, p[1] - cy)));
+      const texts = Array.from(cell.querySelectorAll('.nb-note text')).map(t => t.getBoundingClientRect());
+      const touching = texts.filter(b => pts.some(p => p[0] > b.left && p[0] < b.right && p[1] > b.top && p[1] < b.bottom)).length;
+      return { near, touching, width: ring.width };
+    }""")
+    check(hits["near"] < 4 and 18 < hits["width"] < 34, f"a circled note rings its data point ({hits})")
+    check(hits["touching"] == 0, "notes are placed clear of the line they point at")
+    check(geo["paths"][0] >= 2 and geo["paths"][1] >= 1 and geo["paths"][2] == 3, f"a note has an arrow, a range has a bracket ({geo['paths']})")
+    bad = page.locator(".nb-cell[data-idx='2']")
+    check("rules: avg needs a numeric or date x axis" in bad.text_content(), "a bad rule is reported as the chart's error")
+    # The pen writes a chart in document order: rules and bands, then the marks, then the notes.
+    pen = browser.new_page(viewport={"width": 1300, "height": 950})
+    pen.add_init_script("window.__INK_PAUSE = true")
+    opened(pen, "file://" + out)
+    order = """() => {
+      const out = { refs: [], plot: [], notes: [] };
+      Ink.jobs().forEach(j => (j.atoms || []).forEach(a => {
+        const el = a.el || (a.unit && a.unit.el) || (a.nodes && a.nodes[0]);
+        if (!el || !el.closest || !el.isConnected || !el.closest('.nb-cell[data-idx="1"] svg.nb-chart-svg')) return;
+        const part = el.closest('.nb-notes') ? 'notes' : el.closest('.nb-plot') ? 'plot' : el.closest('.nb-refs') ? 'refs' : null;
+        if (part) out[part].push([a.t0, a.order]);
+      }));
+      const span = list => list.length ? [Math.min(...list.map(a => a[0])), Math.max(...list.map(a => a[0])), Math.min(...list.map(a => a[1])), Math.max(...list.map(a => a[1]))] : null;
+      return { refs: span(out.refs), plot: span(out.plot), notes: span(out.notes) };
+    }"""
+    starts = pen.evaluate(order)
+    check(starts["refs"] and starts["plot"] and starts["refs"][1] <= starts["plot"][0] and starts["refs"][3] < starts["plot"][2],
+          f"the pen draws rules and bands before the marks ({starts})")
+    pen.locator(".nb-cell[data-idx='1'] .nb-tab", has_text="Notes").click()
+    frames(pen, 3)
+    starts = pen.evaluate(order)
+    # What follows a click is drawn almost at once, but still in order.
+    check(starts["notes"] and starts["plot"] and starts["plot"][0] <= starts["notes"][0] and starts["plot"][3] < starts["notes"][2],
+          f"the pen writes notes after the marks ({starts})")
+    pen.close()
+    check(not errors, f"no browser errors drawing rules and bands {errors[:3]}")
+    page.close()
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -707,11 +1037,13 @@ def main():
         try:
             test_server(browser, work)
             test_metadata_error(browser, work)
+            test_cache(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))
             chromium = shells[0] if shells else p.chromium.executable_path
             test_exports(browser, work, chromium)
+            test_chart_marks(browser, work)
             test_ink(browser, work, chromium)
             test_ink_editor(browser, work)
         finally:
