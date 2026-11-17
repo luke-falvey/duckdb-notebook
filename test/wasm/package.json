@@ -1,0 +1,9 @@
+{
+  "name": "duckdb-notebook-wasm-test",
+  "private": true,
+  "description": "Loads the notebook extension's WebAssembly build into DuckDB-WASM in headless Chromium (test/wasm/README.md)",
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev118.0",
+    "esbuild": "0.25.12"
+  }
+}
