@@ -4,7 +4,7 @@
 runs `notebook_cells`, `notebook_sql`, `notebook_chart_query`, `notebook_run` and a markdown
 `notebook_export` on `examples/revenue.sql`, which it hands to DuckDB-WASM's virtual file system. It
 checks that the result cache stays off there (no directories), and that `notebook_start`, `notebook_stop` and the pdf export fail with a clear message, since
-the WebAssembly build has no server (docs/DESIGN.md §20).
+the WebAssembly build has no server (docs/DESIGN.md §21).
 
 The files are served by an HTTP server inside the test process, on 127.0.0.1 and a free port, closed
 when the run ends, with the headers that make the page cross-origin isolated (the threads bundle needs
@@ -25,7 +25,7 @@ OVERRIDE_GIT_DESCRIBE=v2.0.0 make wasm_eh
 stamped with a commit hash and DuckDB-WASM refuses it. Do not set `GEN=ninja`: the wasm targets
 run `emmake make`. The first build compiles DuckDB for WebAssembly and takes about 12 minutes on 4
 cores. `make wasm_threads` builds the threaded variant (the `Makefile` adds two flags extension-ci-tools'
-release branch leaves out; DESIGN §20). In the threads bundle `LOAD` hangs about one time in eight,
+release branch leaves out; DESIGN §21). In the threads bundle `LOAD` hangs about one time in eight,
 for DuckDB's own extensions too, so the test retries a hung `LOAD` there in a fresh page and says so.
 
 Then, with Node and the Playwright package (pre-installed in Claude's cloud sessions; otherwise

@@ -494,7 +494,7 @@ a browser to produce the SVG.
 | S2 | ~~Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder?~~ | **Done: neither; JSON.** Pages and chart data are small after aggregation. See §11 |
 | S3 | ~~Size of the extension with the frontend embedded; lazy loading of heavy renderers~~ | **Done: 132 KB of frontend source, 30 KB compressed**, negligible next to the extension itself |
 | S4 | ~~DuckDB-WASM inlined in a single HTML file, opened from `file://`~~ | **Done: it works in Chromium.** See [the spike](../spikes/wasm-single-file/README.md). Firefox, Safari and inlined extensions are untested |
-| S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Done: yes** (§20). `html-wasm` does not need it yet: it ships precompiled chart SQL (§7) |
+| S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Done: yes** (§21). `html-wasm` does not need it yet: it ships precompiled chart SQL (§7) |
 | S6 | Will the community repository accept an extension that embeds an HTTP server and a multi-megabyte asset bundle? | Distribution. The process itself is documented: a pull request with a descriptor file, after which DuckDB's CI builds for Linux, macOS, Windows and Wasm |
 | S7 | ~~Chart compiler coverage: how much of the grammar compiles cleanly to one query~~ | **Done: all of FORMAT.md §5** compiles, with layers and sparklines as one query each. See `examples/charts.sql` |
 
@@ -993,7 +993,77 @@ only the local database; the note can
 cover part of the cell's (stale) result in a narrow window when the code leaves no room beside it.
 Only Chromium was available for testing.
 
-## 20. The extension in DuckDB-WASM
+## 20. Building for every platform
+
+The extension is built by DuckDB's shared pipeline (`extension-ci-tools`) for every native platform
+DuckDB distributes for: Linux amd64 and arm64 (glibc and musl), macOS amd64 and arm64, Windows amd64
+and arm64 (MSVC) and amd64 with MinGW. The community extension repository requires all of them. The
+WebAssembly builds are covered in §21.
+
+### What the binary is made of
+
+The loadable extension on linux_amd64 was 49.2 MB (on the tree with the result cache). Measured, not
+guessed, with the link map (`-Wl,-Map`), `nm --size-sort` and test links:
+
+- **DuckDB is about 95% of it, and has to be.** DuckDB 2.0 distributes C++ extensions with
+  `EXTENSION_STATIC_BUILD` (the default in `extension-ci-tools`): each `.duckdb_extension` links
+  `libduckdb_static.a` with `--gc-sections` and `--exclude-libs,ALL`. The link map puts 39.5 MB of the
+  43 MB of mapped sections in objects from that archive: casts 2.2 MB, the PEG transformer 1.8 MB,
+  the expression executor 1.7 MB, the optimizer 1.4 MB, and so on through the engine.
+- **It is not a linking accident.** `--gc-sections` keeps only what the extension can reach, and an
+  extension that runs SQL through a `Connection` reaches the parser, binder, optimizer, every operator
+  and every built-in function. A minimal extension whose only code is
+  `Connection(db).Query("SELECT 42")`, linked the same way and stripped, is **38.9 MB**. DuckDB's own
+  extensions built here agree: `json` 48.8 MB and `loadable_extension_demo` (which opens a
+  `Connection`) 47.5 MB unstripped; demos that only register functions are about 13 MB.
+- **Leaving DuckDB out does not load.** Linked without `libduckdb_static.a` the extension is 1.8 MB,
+  about what the first versions measured, with 132 undefined DuckDB symbols. The released DuckDB 2.0.0
+  Python package refuses it (`undefined symbol: _ZTIN6duckdb14SimpleFunctionE`): a host that loads
+  DuckDB as a library with `RTLD_LOCAL` leaves no DuckDB symbols to resolve against, which is the
+  reason DuckDB's build gives for linking itself into every extension.
+- **Our code is about 1.8 MB** at `-O3`: the frontend assets 0.46 MB, the HTTP server (cpp-httplib)
+  0.37 MB, the chart compiler 0.19 MB, the rest smaller.
+- **The symbol table was 8.6 MB** (`.symtab` and `.strtab`): the binary was not stripped. Release
+  builds have no debug information.
+
+What was changed, linux_amd64, bytes (gzip -9, which is how extensions are downloaded):
+
+| Step | Size | gzip |
+|---|--:|--:|
+| Before | 49,219,368 | 16,925,258 |
+| Strip at link time (`-s`; `-Wl,-x` on macOS; MSVC keeps symbols in a PDB) | 40,642,310 | 15,284,437 |
+| Our sources at `-Os` (GCC and Clang) | 40,021,158 | 15,009,028 |
+
+The floor is the 38.9 MB minimal extension; ours is 1.1 MB above it. The CI job "Extension sizes"
+reports every platform.
+
+Considered and not done, with numbers:
+
+- **Identical code folding** (`--icf` in gold or lld) saved another 1–2 MB, but needs a linker that
+  DuckDB's toolchains do not promise on every platform, and folding is only safe when nothing compares
+  function addresses, which DuckDB does (casts, table functions).
+- **Compressing the frontend** would save about 250 KB: the fonts are already woff2, and the
+  JavaScript and CSS gzip from 360 KB to 110 KB. Not worth a decompressor in the server and exports.
+- **Building DuckDB for size.** CI links DuckDB's prebuilt `duckdb_static` for each platform, so its
+  flags are DuckDB's, not ours.
+- **Not linking DuckDB.** The way to a small binary is an extension against DuckDB's C API, which
+  links nothing (`cpp_api_demo` here is 0.5 MB). This extension walks DuckDB's parse tree and uses
+  `ClientContext`, the object cache and C++ table functions, so that is a rewrite, not a build flag.
+
+### Platform notes
+
+- **No POSIX in portable code.** `unistd.h`, `getcwd` and `/tmp` broke the MSVC build; DuckDB's
+  `FileSystem` has what is needed (`GetWorkingDirectory`, `IsPathAbsolute`, `JoinPath`,
+  `GetEnvVariable`).
+- **PDF export runs a browser through the shell**, so quoting differs: single quotes for `sh`, double
+  quotes for `cmd.exe`, which also strips the outer pair of a command line that starts with a quote.
+  Chrome and Edge are looked for on `PATH` and in their usual install places on Windows and macOS.
+- **Error messages differ by platform.** A test that expected Linux's "No such file or directory"
+  failed on Windows ("The system cannot find the file specified"). Match the part DuckDB writes.
+- **The pipeline does not test everywhere it builds**: it runs `test/sql` on linux_amd64 (and musl),
+  linux_arm64_musl, osx_arm64 and Windows, not on linux_arm64 or osx_amd64.
+
+## 21. The extension in DuckDB-WASM
 
 The extension builds for WebAssembly and loads into DuckDB-WASM 2.0. This answers S5, which §7 had
 set aside as not needed.

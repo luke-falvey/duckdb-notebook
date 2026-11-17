@@ -15,7 +15,6 @@
 #include <cstdlib>
 #include <random>
 #include <set>
-#include <unistd.h>
 
 // notebook_export (docs/DESIGN.md section 7). Every format starts from one run of the notebook in
 // a session of its own; BuildPayload collects what that run shows, and each format presents it.
@@ -32,6 +31,21 @@ string Gzip(const string &data) {
 	stream.Compress(data.data(), data.size(), &out[0], &size);
 	out.resize(size);
 	return out;
+}
+
+//! Where scratch files go: TMPDIR (or TEMP/TMP on Windows), else the system default.
+string TempDirectory() {
+	for (auto name : {"TMPDIR", "TEMP", "TMP"}) {
+		auto value = FileSystem::GetEnvVariable(name);
+		if (!value.empty()) {
+			return value;
+		}
+	}
+#ifdef _WIN32
+	return ".";
+#else
+	return "/tmp";
+#endif
 }
 
 string Base64(const string &data) {
@@ -296,9 +310,8 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 			}
 		}
 	}
-	const char *tmp = std::getenv("TMPDIR");
 	std::random_device random;
-	auto path = string(tmp ? tmp : "/tmp") + "/notebook_export_" + std::to_string(random()) + ".duckdb";
+	auto path = TempDirectory() + "/notebook_export_" + std::to_string(random()) + ".duckdb";
 	auto check = [&](const string &sql) {
 		auto result = connection.Query(sql);
 		if (result->HasError()) {
@@ -680,38 +693,85 @@ struct ExportState : public GlobalTableFunctionState {
 	bool done = false;
 };
 
+bool IsFile(const string &path) {
+	if (FILE *f = fopen(path.c_str(), "r")) {
+		fclose(f);
+		return true;
+	}
+	return false;
+}
+
+//! A Chrome, Chromium or Edge for printing PDFs: chrome :=, NOTEBOOK_CHROME, PATH, then the usual install places.
 string FindBrowser(const string &requested) {
 	if (!requested.empty()) {
 		return requested;
 	}
-	if (auto env = std::getenv("NOTEBOOK_CHROME")) {
+	auto env = FileSystem::GetEnvVariable("NOTEBOOK_CHROME");
+	if (!env.empty()) {
 		return env;
 	}
+#ifdef _WIN32
+	const char separator = ';';
+	const char *names[] = {"chrome.exe", "msedge.exe", "chromium.exe", "chrome-headless-shell.exe"};
+#else
+	const char separator = ':';
 	const char *names[] = {"chromium",       "chromium-browser", "google-chrome",        "google-chrome-stable",
 	                       "microsoft-edge", "chrome",           "chrome-headless-shell"};
-	const char *path = std::getenv("PATH");
-	string dirs = path ? path : "/usr/bin:/usr/local/bin";
+#endif
+	auto dirs = FileSystem::GetEnvVariable("PATH");
 	size_t start = 0;
-	while (start <= dirs.size()) {
-		auto colon = dirs.find(':', start);
-		auto dir = dirs.substr(start, colon == string::npos ? string::npos : colon - start);
+	while (!dirs.empty() && start <= dirs.size()) {
+		auto end = dirs.find(separator, start);
+		auto dir = dirs.substr(start, end == string::npos ? string::npos : end - start);
 		for (auto name : names) {
 			auto candidate = dir + "/" + name;
-			if (FILE *f = fopen(candidate.c_str(), "r")) {
-				fclose(f);
+			if (!dir.empty() && IsFile(candidate)) {
 				return candidate;
 			}
 		}
-		if (colon == string::npos) {
+		if (end == string::npos) {
 			break;
 		}
-		start = colon + 1;
+		start = end + 1;
+	}
+	vector<string> installed;
+#if defined(_WIN32)
+	for (auto root : {"PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"}) {
+		auto dir = FileSystem::GetEnvVariable(root);
+		if (!dir.empty()) {
+			installed.push_back(dir + "\\Google\\Chrome\\Application\\chrome.exe");
+			installed.push_back(dir + "\\Microsoft\\Edge\\Application\\msedge.exe");
+			installed.push_back(dir + "\\Chromium\\Application\\chrome.exe");
+		}
+	}
+#elif defined(__APPLE__)
+	for (auto app : {"Google Chrome", "Chromium", "Microsoft Edge"}) {
+		installed.push_back(string("/Applications/") + app + ".app/Contents/MacOS/" + app);
+	}
+#endif
+	for (auto &candidate : installed) {
+		if (IsFile(candidate)) {
+			return candidate;
+		}
 	}
 	return string();
 }
 
+//! Quotes one argument for the shell std::system runs: sh, or cmd.exe on Windows.
 string ShellQuote(const string &text) {
+#ifdef _WIN32
+	return "\"" + text + "\"";
+#else
 	return "'" + ReplaceAll(text, "'", "'\\''") + "'";
+#endif
+}
+
+//! A file:// URL for a local path, relative paths resolved against the working directory.
+string FileUrl(FileSystem &fs, const string &path) {
+	auto absolute = fs.IsPathAbsolute(path) ? path : fs.JoinPath(FileSystem::GetWorkingDirectory(), path);
+	absolute = ReplaceAll(absolute, "\\", "/");
+	// Windows drive paths (C:/x) need a third slash: file:///C:/x.
+	return string(absolute.compare(0, 1, "/") == 0 ? "file://" : "file:///") + absolute;
 }
 
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
@@ -847,17 +907,16 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		html = ReplaceAll(html, "<html lang=\"en\">", "<html lang=\"en\" data-ink=\"off\">");
 		auto html_path = bind.to + ".html";
 		WriteTextFile(context, html_path, html);
-		string absolute = html_path;
-		if (!absolute.empty() && absolute[0] != '/') {
-			char cwd[4096];
-			if (getcwd(cwd, sizeof(cwd))) {
-				absolute = string(cwd) + "/" + absolute;
-			}
-		}
 		auto command = ShellQuote(browser) +
 		               " --headless --disable-gpu --no-sandbox --no-pdf-header-footer --virtual-time-budget=10000 "
 		               "--print-to-pdf=" +
-		               ShellQuote(bind.to) + " " + ShellQuote("file://" + absolute) + " >/dev/null 2>&1";
+		               ShellQuote(bind.to) + " " + ShellQuote(FileUrl(fs, html_path));
+#ifdef _WIN32
+		// cmd.exe strips the first and last quote of a command line that starts with one.
+		command = "\"" + command + " >NUL 2>&1\"";
+#else
+		command += " >/dev/null 2>&1";
+#endif
 		auto status = std::system(command.c_str());
 		fs.RemoveFile(html_path);
 		if (status != 0 || !fs.FileExists(bind.to)) {

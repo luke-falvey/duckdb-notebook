@@ -117,7 +117,15 @@ ninja -C build/v2.0.0 notebook_loadable_extension   # configured once with -DOVE
 duckdb -unsigned -init /dev/null -c "FORCE INSTALL '$PWD/build/v2.0.0/extension/notebook/notebook.duckdb_extension'"
 ```
 
-Then `LOAD notebook` in `duckdb -unsigned`.
+Then `LOAD notebook` in `duckdb -unsigned`. A quicker check that a local build loads into a released
+DuckDB is the Python package, which also loads extensions with `RTLD_LOCAL` as most clients do:
+`pip install duckdb==2.0.0`, connect with `allow_unsigned_extensions` and
+`allow_extensions_metadata_mismatch` set, and `LOAD` the file.
+
+The loadable extension is about 40 MB on linux_amd64 (15 MB gzipped), and about 95% of that is DuckDB
+itself, linked statically as DuckDB 2.0 distributes every C++ extension. It is stripped at link time
+(`CMakeLists.txt`). Do not expect a flag to make it much smaller: `docs/DESIGN.md` ("Building for every
+platform") has the breakdown and what was tried. CI's "Extension sizes" job reports every platform.
 
 Run one test file with `./build/release/test/unittest "test/sql/notebook_run.test"`.
 
@@ -141,7 +149,7 @@ packages, `dpkg -x` them into a directory and point `LD_LIBRARY_PATH` at its `us
 
 ### WebAssembly (DuckDB-WASM)
 
-The extension also builds for DuckDB-WASM (`wasm_eh`, `wasm_threads`; DESIGN §20). Install the
+The extension also builds for DuckDB-WASM (`wasm_eh`, `wasm_threads`; DESIGN §21). Install the
 Emscripten version DuckDB's extension pipeline uses, 6.0.9, once:
 
 ```bash
@@ -223,6 +231,12 @@ create, because all test files share one database.
 
 ## Things that are easy to get wrong
 
+- Code in `src/functions` is compiled with MSVC, MinGW, Apple clang and musl as well as glibc gcc. No
+  POSIX headers (`unistd.h`), `getcwd` or hard-coded `/tmp`: use DuckDB's `FileSystem`
+  (`GetWorkingDirectory`, `IsPathAbsolute`, `JoinPath`, `GetEnvVariable`). Anything passed to
+  `std::system` is quoted per shell (`ShellQuote` in `export.cpp`). A SQL test must not expect an
+  OS-specific error message: Windows words "file not found" differently.
+
 - Watch mode keeps the gentle mode's rules: nothing new animates outside `Ink`, and a watched page
   ends identical to `ink=off`. Its times are on the pen clock (`Ink.penNow()`), which `Ink.advance(ms)`
   moves at the reader's speed; `test_ink_watch` shows how to drive it. A piece is taken apart only when
@@ -280,7 +294,7 @@ create, because all test files share one database.
   The server refuses to peek until the reader has run something (`Session::trusted`, set by a run and cleared when the text is reloaded from disk; separate from the cache's `Session::ran`).
 - The html-wasm export runs on DuckDB-WASM 1.5: `$name` is rewritten to `getvariable('name')`, data
   is written with `STORAGE_VERSION 'v1.5.0'`, and selection variables start as typed NULLs.
-  The extension itself targets DuckDB-WASM 2.0 (npm `next`, `1.33.1-dev110.0` and later); see DESIGN §20
+  The extension itself targets DuckDB-WASM 2.0 (npm `next`, `1.33.1-dev110.0` and later); see DESIGN §21
   for which of these workarounds 2.0 makes unnecessary.
 - The WebAssembly build has no server, no PDF export and no process spawning: `NOTEBOOK_HOST_FEATURES`
   is off under Emscripten, `server_unavailable.cpp` replaces `server.cpp`, and `export.cpp` has one
@@ -327,4 +341,7 @@ create, because all test files share one database.
 ## Git
 
 Develop on a feature branch and open a pull request against `main`. CI runs the core tests and
-DuckDB's extension pipeline (currently `linux_amd64` only).
+DuckDB's extension pipeline on every native platform: Linux amd64 and arm64 (glibc and musl), macOS
+amd64 and arm64, Windows amd64 and arm64 (MSVC) and amd64 with MinGW. The WebAssembly builds are in
+`exclude_archs` for now. The pipeline runs `test/sql` on most of them (not linux_arm64 or osx_amd64), so
+a test must pass on Windows too. A job takes about 5 to 15 minutes because DuckDB comes prebuilt.

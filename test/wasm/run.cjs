@@ -78,7 +78,7 @@ async function testArch(browser, arch, origin) {
     if (!ok) failures.push(name);
   };
   // DuckDB-WASM's threads bundle sometimes hangs in LOAD (about one load in eight here, DuckDB's own
-  // icu extension as well as this one; docs/DESIGN.md section 20). A hung LOAD is retried in a fresh
+  // icu extension as well as this one; docs/DESIGN.md section 21). A hung LOAD is retried in a fresh
   // page for wasm_threads only, at most LOAD_ATTEMPTS times, and every retry is reported.
   const attempts = arch === 'wasm_threads' ? LOAD_ATTEMPTS : 1;
   let context;
