@@ -1216,9 +1216,25 @@ std::string RelationSql(const std::string &from) {
 }
 
 SelectionInfo ChartSelectionInfo(const std::string &spec_text) {
-	SelectionInfo info;
 	std::string error;
-	auto spec = ParseYaml(spec_text, error);
+	return ChartSelectionInfo(ParseYaml(spec_text, error));
+}
+
+std::map<std::string, SelectionInfo> NotebookSelections(const Notebook &notebook) {
+	std::map<std::string, SelectionInfo> selections;
+	for (auto &cell : notebook.cells) {
+		for (auto &spec : cell.charts) {
+			auto selection = ChartSelectionInfo(spec);
+			if (!selection.name.empty()) {
+				selections[selection.name] = selection;
+			}
+		}
+	}
+	return selections;
+}
+
+SelectionInfo ChartSelectionInfo(const Yaml &spec) {
+	SelectionInfo info;
 	auto select = spec.Get("select");
 	if (!select || !select->IsMap()) {
 		return info;
@@ -1289,7 +1305,7 @@ ChartPlan CompileChart(const std::string &spec_text, const std::string &from, co
 			                        .Set("row", Json::Bool(spec.Get("facet")->Get("row") != nullptr))
 			                        .Set("col", Json::Bool(spec.Get("facet")->Get("col") != nullptr)));
 		}
-		auto selection = ChartSelectionInfo(spec_text);
+		auto selection = ChartSelectionInfo(spec);
 		if (!selection.name.empty()) {
 			auto json = Json::Object();
 			json.Set("as", Json::String(selection.name));

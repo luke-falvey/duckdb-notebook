@@ -337,14 +337,7 @@ Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cel
 			}
 		}
 	}
-	for (auto &other : notebook.cells) {
-		for (auto &other_spec : other.charts) {
-			auto selection = notebook::ChartSelectionInfo(other_spec);
-			if (!selection.name.empty()) {
-				context.selections[selection.name] = selection;
-			}
-		}
-	}
+	context.selections = notebook::NotebookSelections(notebook);
 	auto plan = notebook::CompileChart(spec, from, context);
 	if (!plan.error.empty()) {
 		return Json::Object().Set("error", Json::String(plan.error));

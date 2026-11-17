@@ -150,6 +150,12 @@ static void TestChartSpec() {
 	CHECK(ChartSelection("mark: bar\nselect: {as: picked, type: point, on: x}\n") == "picked");
 	CHECK(ChartSelection("select:\n  type: interval\n  as: \"brush\"\nmark: line") == "brush");
 	CHECK(ChartSelection("mark: bar\nlayers:\n  - select: {as: nested}") == "");
+	// Every selection in a notebook, by name.
+	auto selecting =
+	    ParseNotebook("-- %% a\nSELECT 1 AS x\n/* chart\nmark: bar\nx: x\nselect: {as: pick, type: point}\n*/\n"
+	                  "-- %% b\nSELECT 2 AS x\n/* chart\nmark: line\nx: x\n*/\n");
+	auto selections = NotebookSelections(selecting);
+	CHECK(selections.size() == 1 && selections["pick"].type == "point" && selections["pick"].channels.size() == 1);
 	CHECK(ChartFilters("filter: picked # from the trend chart") == std::vector<std::string> {"picked"});
 	CHECK((ChartFilters("filter: [a, 'b']") == std::vector<std::string> {"a", "b"}));
 	CHECK((ChartFilters("filter:\n  - a\n  - b\nmark: bar") == std::vector<std::string> {"a", "b"}));
