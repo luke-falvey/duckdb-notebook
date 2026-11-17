@@ -1,0 +1,11 @@
+┌───────────────────────────────────────────────────┬──────────────────────────────────────────────────┐
+│                      queries                      │                      render                      │
+│                     varchar[]                     │                     varchar                      │
+├───────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ ['WITH __src AS (SELECT * FROM "orders")\nSELECT  │ {"width":640,"height":320,"kind":"grammar","laye │
+│ "region" AS "x", sum("amount") AS "y"\nFROM __src │ rs":[{"mark":"bar","data":0,"encoding":{"x":{"co │
+│ \nGROUP BY ALL\nORDER BY x\nLIMIT 10000']         │ lumn":"x","field":"region","type":"nominal","tit │
+│                                                   │ le":"region"},"y":{"column":"y","field":"amount" │
+│                                                   │ ,"type":"quantitative","agg":"sum","title":"sum( │
+│                                                   │ amount)"}}}]}                                    │
+└───────────────────────────────────────────────────┴──────────────────────────────────────────────────┘

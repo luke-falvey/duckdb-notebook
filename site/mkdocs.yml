@@ -1,0 +1,69 @@
+# The documentation site, published to GitHub Pages by .github/workflows/docs.yml.
+# Build from the repository root:  mkdocs build --strict -f site/mkdocs.yml
+# Preview:                         mkdocs serve -f site/mkdocs.yml
+site_name: duckdb-notebook
+site_description: A notebook for DuckDB where the notebook is a plain .sql file.
+site_url: https://luke-falvey.github.io/duckdb-notebook/
+repo_url: https://github.com/luke-falvey/duckdb-notebook
+edit_uri: edit/main/site/content/
+docs_dir: content
+site_dir: ../build/site
+strict: true
+
+theme:
+  name: null
+  custom_dir: theme
+  locale: en
+
+hooks:
+  - hooks.py
+
+plugins:
+  - search
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+markdown_extensions:
+  - toc:
+      permalink: "#"
+  - tables
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.highlight:
+      use_pygments: true
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      # Set to the repository root by hooks.py, so pages include notebooks with --8<-- "examples/x.sql".
+      check_paths: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Overview: start/index.md
+      - Install: start/install.md
+      - Your first notebook: start/first-notebook.md
+  - Guides:
+      - Overview: guides/index.md
+      - Writing a notebook: guides/writing.md
+      - Inputs and parameters: guides/inputs.md
+      - Charts: guides/charts.md
+      - Selections and cross-filtering: guides/selections.md
+      - Reading and presenting: guides/reading.md
+      - Keeping results: guides/cache.md
+      - Storing notebooks in a database: guides/storing.md
+      - Exporting and sharing: guides/exporting.md
+      - Running headless and in CI: guides/headless.md
+  - Reference:
+      - Overview: reference/index.md
+      - File format: reference/format.md
+      - Chart spec: reference/charts.md
+      - SQL functions: reference/functions.md
+      - Settings: reference/settings.md
+      - The editor: reference/editor.md
+      - Troubleshooting: reference/troubleshooting.md
+  - Examples: examples/index.md

@@ -1,0 +1,17 @@
+┌───────┬──────────┬─────────────┬─────────┬───────────┬─────────┐
+│  idx  │   kind   │    name     │ status  │ row_count │  error  │
+│ int32 │ varchar  │   varchar   │ varchar │   int64   │ varchar │
+├───────┼──────────┼─────────────┼─────────┼───────────┼─────────┤
+│     0 │ notebook │ NULL        │ skipped │      NULL │ NULL    │
+│     2 │ sql      │ orders      │ ok      │      NULL │ NULL    │
+│     3 │ sql      │ regions     │ ok      │         3 │ NULL    │
+│     4 │ input    │ region      │ ok      │      NULL │ NULL    │
+│     5 │ input    │ min_amount  │ ok      │      NULL │ NULL    │
+│     6 │ sql      │ filtered    │ ok      │     16667 │ NULL    │
+│     7 │ sql      │ monthly     │ ok      │        36 │ NULL    │
+│     1 │ markdown │ NULL        │ ok      │      NULL │ NULL    │
+│     8 │ chart    │ headline    │ ok      │         1 │ NULL    │
+│     9 │ chart    │ order_sizes │ ok      │       168 │ NULL    │
+│    10 │ sql      │ top_orders  │ ok      │        20 │ NULL    │
+└───────┴──────────┴─────────────┴─────────┴───────────┴─────────┘
+  11 rows                                              6 columns
