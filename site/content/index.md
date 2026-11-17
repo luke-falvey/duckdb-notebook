@@ -35,6 +35,7 @@ by name, and `$region` is an ordinary DuckDB variable, which the input cell sets
 <a class="card" href="guides/inputs/"><strong>Parameterise</strong><span>Sliders, selects and dates that set DuckDB variables.</span></a>
 <a class="card" href="guides/selections/"><strong>Cross-filter</strong><span>Brush or click a chart; the cells that read it update.</span></a>
 <a class="card" href="guides/storing/"><strong>Store</strong><span>Keep notebooks in the database, with every version.</span></a>
+<a class="card" href="guides/cache/"><strong>Reopen</strong><span>A notebook opens showing its last results, marked when stale.</span></a>
 <a class="card" href="guides/exporting/"><strong>Share</strong><span>One HTML file, PDF, Markdown, plain SQL or Parquet.</span></a>
 <a class="card" href="guides/headless/"><strong>Automate</strong><span>Run a notebook from SQL, a script or CI.</span></a>
 <a class="card" href="reference/format/"><strong>Look it up</strong><span>The format, every chart key, every function.</span></a>
@@ -52,6 +53,6 @@ by name, and `$region` is an ordinary DuckDB variable, which the input cell sets
   every export. Each piece is written onto the page by a pen as it appears.
 
 !!! note "Status"
-    Early, but every part of the design works. Not built yet: the result cache, a CodeMirror editor,
-    and charting libraries for zoomable maps (charts are drawn by the built-in SVG renderers). The
+    Early, but every part of the design works. Not built yet: a CodeMirror editor, and charting
+    libraries for zoomable maps (charts are drawn by the built-in SVG renderers). The
     notebook format is version 1, still marked draft.

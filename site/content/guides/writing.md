@@ -125,12 +125,14 @@ attach:
   - {path: warehouse.duckdb, as: wh, read_only: true}
 extensions: [spatial]
 timing: false
+cache: false
 */
 ```
 
 `title` names the notebook in the editor and in exports. `attach` and `extensions` are applied before
 the first cell runs (`ATTACH IF NOT EXISTS` and `LOAD`); paths are relative to the notebook file.
-`timing: false` hides how long each cell took. `format` is the format version, `1`.
+`timing: false` hides how long each cell took. `cache: false` stops the editor
+[keeping results](cache.md) between sessions. `format` is the format version, `1`.
 
 ## Options every cell takes
 

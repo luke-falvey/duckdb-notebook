@@ -14,6 +14,8 @@ through DuckDB's file system, so remote paths work when `httpfs` is loaded.
 | [`notebook_sql(path)`](#notebook_sql) | The notebook as a plain SQL script |
 | [`notebook_export(path)`](#notebook_export) | Writes HTML, html-wasm, PDF, Markdown, SQL or data files |
 | [`notebook_chart_query(spec, from)`](#notebook_chart_query) | The SQL and render description a chart spec compiles to |
+| [`notebook_cache(path)`](#notebook_cache) | Lists the results the editor keeps for a notebook, fresh or stale |
+| [`notebook_cache_clear(path)`](#notebook_cache_clear) | Removes them |
 | [`notebook_save(path)`](#notebook_save) | Stores a version of a notebook in the database |
 | [`notebook_checkout(name)`](#notebook_checkout) | Reads a stored version back, optionally to a file |
 | [`notebook_start(path)`](#notebook_start) | Starts the editor's server and opens the browser |
@@ -58,7 +60,7 @@ on a malformed notebook: problems are returned in `errors` and `warnings`.
 ## notebook_run
 
 ```sql
-notebook_run(path VARCHAR, params := STRUCT)
+notebook_run(path VARCHAR, params := STRUCT, cache := BOOLEAN)
 ```
 
 Runs every cell, charts included, in a connection of its own, and returns one row per cell in the
@@ -68,6 +70,7 @@ caller's session. See [running headless](../guides/headless.md).
 | Argument | Meaning |
 |---|---|
 | `params` | A struct of variable values, `{region: 'US', min_amount: 100}`. Replaces input defaults; sets variables nothing sets, such as selections |
+| `cache` | `true` writes every cell's result to the [result cache](../guides/cache.md), so the notebook opens in the editor showing them. Default `false`: a run neither reads nor writes the cache |
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -139,6 +142,41 @@ Compiles a chart spec against a relation (a table or view name) without drawing 
 The relation's columns are looked up on a separate connection, so a temporary view of your own
 session cannot be described; the spec is then compiled without column types. A spec that does not
 compile raises an error with the reason.
+
+## notebook_cache
+
+```sql
+notebook_cache(path VARCHAR)
+```
+
+Lists the results [kept](../guides/cache.md) for a notebook, and whether each is still fresh against
+the notebook as it is now. Runs nothing.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `cell` | `VARCHAR` | The name the result is kept under: the cell's name, or `@` and a hash of an unnamed cell's text |
+| `idx` | `INTEGER` | The cell's position |
+| `kind` | `VARCHAR` | The cell's kind |
+| `status` | `VARCHAR` | `fresh`, or `stale` when the cell, something it reads or a variable it reads changed since |
+| `saved_at` | `TIMESTAMP` | When the result was kept, UTC |
+| `bytes` | `BIGINT` | Size of the kept result |
+
+```sql
+--8<-- "site/outputs/cache.sql"
+```
+
+```text
+--8<-- "site/outputs/cache.txt"
+```
+
+## notebook_cache_clear
+
+```sql
+notebook_cache_clear(path VARCHAR)
+```
+
+Removes every result kept for the notebook. Returns one row, `removed`: the number of entries
+removed. Nothing else is lost: running the notebook keeps them again.
 
 ## notebook_save
 

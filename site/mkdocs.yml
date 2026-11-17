@@ -52,6 +52,7 @@ nav:
       - Charts: guides/charts.md
       - Selections and cross-filtering: guides/selections.md
       - Reading and presenting: guides/reading.md
+      - Keeping results: guides/cache.md
       - Storing notebooks in a database: guides/storing.md
       - Exporting and sharing: guides/exporting.md
       - Running headless and in CI: guides/headless.md

@@ -2,5 +2,5 @@
 │ format  │    path    │ bytes  │  note   │
 │ varchar │  varchar   │ int64  │ varchar │
 ├─────────┼────────────┼────────┼─────────┤
-│ html    │ hello.html │ 413305 │ NULL    │
+│ html    │ hello.html │ 429178 │ NULL    │
 └─────────┴────────────┴────────┴─────────┘

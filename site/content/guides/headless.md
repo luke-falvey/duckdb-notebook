@@ -19,6 +19,10 @@ cell, which makes a notebook usable as a scheduled job, a data test, or a report
 - `row_count` is the rows a query cell returned, or the rows of a chart's data query.
 - `output` holds a markdown cell's text with each `{{ }}` replaced by its value.
 - Effect cells run too, whatever their `run=` option.
+- A run neither reads nor writes the editor's [result cache](cache.md) unless you pass
+  `cache := true`, which keeps every result so the notebook opens in the editor showing them. A
+  nightly job can run `FROM notebook_run('report.sql', cache := true)` so readers open a notebook
+  that is already up to date.
 
 The run happens **in a session of its own**. Tables the notebook creates stay in the database; its
 temporary views and variables are gone when it returns. To get the views in your own session, run

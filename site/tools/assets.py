@@ -190,6 +190,23 @@ def shoot_editor(browser, server):
     page.close()
 
 
+def shoot_reopen(browser, work):
+    """A fresh server opening hello.sql after it ran: the kept results show without running anything,
+    and a changed input marks what reads it stale."""
+    server = Server(work)
+    try:
+        page = browser.new_page(viewport={"width": 1360, "height": 860}, device_scale_factor=2)
+        page.goto(server.url("hello.sql"))
+        ready(page)
+        page.wait_for_timeout(400)
+        page.select_option(".nb-cell[data-idx='1'] select", label="Oslo")
+        page.wait_for_timeout(600)
+        page.screenshot(path=os.path.join(IMAGES, "cache-stale.png"))
+        page.close()
+    finally:
+        server.stop()
+
+
 def shoot_charts(browser):
     """Each chart cell of examples/charts.sql, from its HTML export."""
     os.makedirs(os.path.join(IMAGES, "cells"), exist_ok=True)
@@ -240,6 +257,8 @@ def main():
                 with sync_playwright() as p:
                     browser = p.chromium.launch()
                     shoot_editor(browser, server)
+                    server.stop()
+                    shoot_reopen(browser, work)
                     shoot_charts(browser)
                     browser.close()
             finally:

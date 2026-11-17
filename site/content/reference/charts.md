@@ -29,6 +29,9 @@ A spec is YAML: either at the end of a query cell inside `/* chart … */`, or a
 | Channels | `x`, `y`, `x2`, `y2`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`, `theta`: a column name, or a mapping of the channel keys below |
 | `title` | The chart's title; in a query cell's tabs, the tab's label |
 | `layers` | A list of specs drawn in one frame, sharing data and scales |
+| `rules` | Reference lines: `[{y: avg, label: "average {value}"}, {x: 2026-06-01}]`. See [below](#rules-and-bands) |
+| `bands` | Shaded ranges: `[{y: [p25, p75], label: middle half}]` |
+| `notes` | Short remarks with an arrow to a data position: `[{x: 2026-02-01, text: short month}]`. See [below](#notes) |
 | `facet` | `{row: col}`, `{col: col}` or both: one panel per value |
 | `limit` | Rows a chart query may return. Default 10,000 (5,000 for raw specs) |
 | `sample` | `<n>`: draw a random sample of n rows instead of downsampling |
@@ -137,6 +140,49 @@ A value with its average as a reference line.
 ### Small multiples
 
 <!-- cell facets -->
+
+## Rules, bands and notes
+
+### Rules and bands
+
+`rules:` draws reference lines and `bands:` shades ranges, behind the marks in muted ink. Each item
+names one axis, `x` or `y`: a rule takes one value, a band two (`[from, to]`).
+
+| A value written as | Means |
+|---|---|
+| A number, date or category: `150000`, `2026-06-01`, `Hardware` | That position on the axis |
+| `avg` (or `mean`), `median`, `min`, `max`, `p05` … `p99` | That aggregate of what the chart draws on the axis, across all series and panels. With `y: {field: revenue, agg: sum}` by month, `avg` is the average monthly sum. Numeric or date axes; dates have no `avg` |
+| `{field: budget, agg: max}` | An aggregate of a column of the relation |
+
+Each item may also have a `label` (`{value}` is replaced by the value in the axis's format; in a band,
+`{from}` and `{to}`) and a `color`. The axis grows to include a rule or band outside the data. Quote a
+category that reads like an aggregate (`x: "max"`). Rules and bands need a chart with axes (not
+`arc`); `boxplot` takes values but not aggregates.
+
+<!-- cell references -->
+
+### Notes
+
+`notes:` writes short remarks on the chart, each with a curved arrow to a data position, so it stays
+with the data when the chart is resized or the query returns other rows.
+
+| Key | Meaning |
+|---|---|
+| `x`, `y` | The position, in each axis's values. With only one, the note points at the mark there (the top of the bar or highest line at that `x`). One may be a range, `[from, to]`, drawn as a bracket |
+| `text` | A few words; wrapped at about 18 characters and cut after four lines. Required unless the note is a `circle` or a range |
+| `circle` | `true` draws a ring round the point |
+| `side` | `above`, `below`, `left` or `right`. Without it, the side with most room is chosen |
+| `dx`, `dy` | Pixels to move the text from where it was placed |
+| `color` | The note's ink colour |
+
+Positions are values, not aggregates. A position outside the axes is drawn at the edge; a category
+the data does not have draws nothing. In a faceted chart each note is drawn in every panel.
+
+<!-- cell annotated -->
+
+`examples/revenue.sql` uses both on its trend chart: a rule at the average and a note over the second
+half of the year. Any other key or shape in `rules`, `bands` or `notes` is a chart error. The full
+rules are in [the format, §5.1](format.md#51-grammar-charts).
 
 ## Typed charts
 

@@ -59,7 +59,8 @@ when a chart reads a table that is already in the database, or to put charts sid
 | Places | `type: map` with `lat`/`lon`, or `geometry` with the spatial extension |
 | A styled table | `type: table` with `columns`, `format`, `bar`, `heat` |
 | The same chart per group | add `facet: {col: region}` (or `row`) |
-| A reference line | `layers:` with a `rule` (`agg: avg`) over an `area` or `line` |
+| A reference line or target range | `rules:` (`{y: avg}`, `{y: 150000}`) and `bands:` (`{y: [p25, p75]}`) |
+| A remark about one point or period | `notes:` (`{x: 2026-02-01, text: short month}`) |
 
 ## Aggregating in the spec
 
@@ -90,6 +91,31 @@ a daily one.
   for long names.
 - Bars and areas always start at zero. Lines zoom to their range; add `scale: {zero: true}` when the
   size of a change matters.
+
+## Reference lines, bands and notes
+
+A chart often needs a yardstick or a remark more than another series. Three spec keys add them without
+any SQL:
+
+```yaml
+mark: line
+x: month
+y: {field: revenue, agg: sum, format: "$,.0f"}
+rules:
+  - {y: avg, label: "average {value}"}
+  - {x: 2026-07-01, label: price change}
+bands:
+  - {y: [136000, 141000], label: target}
+notes:
+  - {x: 2026-02-01, text: "February is a short month", circle: true}
+  - {x: [2026-05-01, 2026-08-01], text: steady summer}
+```
+
+Rules and bands sit behind the marks in muted ink; `avg`, `median`, `min`, `max` and `p05`…`p99`
+are computed by DuckDB over what the chart draws. Notes are written after the marks, with an arrow to
+their point, a ring with `circle: true`, or a bracket over a range. Keep note text to a few words:
+handwriting is wide. See [the chart spec](../reference/charts.md#rules-bands-and-notes) for every
+key, with pictures.
 
 ## Sizing and layout
 

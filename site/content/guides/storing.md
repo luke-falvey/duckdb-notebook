@@ -67,6 +67,7 @@ The first save creates a `_notebook` schema:
 | `_notebook.notebooks` | `name` (primary key), `created_at` |
 | `_notebook.versions` | `name`, `version`, `content`, `content_hash` (sha256), `saved_at`, `message`; primary key `(name, version)` |
 | `_notebook.current` | A view: the latest version of each notebook |
+| `_notebook.cache` | Results the editor keeps for stored notebooks: `name`, `cell`, `format`, `key`, `saved_at`, `result`. Created on first use; see [keeping results](cache.md) |
 
 They are ordinary tables, so you can query history with SQL:
 

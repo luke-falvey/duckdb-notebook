@@ -37,6 +37,8 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
     | ∿ | Chart |
 
 - **Right margin**: the state dot: fresh, stale (something it reads changed), running or failed.
+  A stale result kept from an earlier session is drawn in fainter ink with the note *from an earlier
+  run* until the cell runs ([keeping results](../guides/cache.md)).
 - **Buttons**, shown when the pointer is over the cell, top right: ▶ run, `</>` hide code, `◫` hide
   output, ↑ and ↓ move, ✕ delete. The hide buttons write `hide=` into the `-- %%` line.
 - **Bottom right**: rows returned, what the cell defines, and how long it took (hidden with
@@ -68,6 +70,8 @@ process you called it from, on 127.0.0.1, and edits the `.sql` file directly.
 | Notebook picker | Open another notebook: the `.sql` files in DuckDB's working directory, notebooks stored in the database, and those already open |
 | **Save** | Write the file (or a new version, for a `db:` notebook) |
 | **auto-run** | Re-run cells when something they read changes. Off: they turn stale instead |
+| **keep results** | Keep each cell's last result so the notebook reopens showing it. Writes `cache:` into the `[notebook]` cell |
+| **Forget** | Clear the results kept for this notebook |
 | **Reading** | The [reading view](../guides/reading.md): no code, cells on the `span=` grid |
 | **Graph** | The dependency graph |
 | **Catalog** | A side panel of tables, views and their columns. Click a column to insert it; drag or double-click a table |
@@ -89,6 +93,8 @@ error shows in red beside it.
 
 ## Files and sessions
 
+- A notebook opens showing the results [kept](../guides/cache.md) from its last run, without running
+  anything.
 - The editor keeps a **session** per notebook: its variables and views live as long as the server.
   Each request runs in a fresh connection that replays them, so the editor never holds your database
   open.
