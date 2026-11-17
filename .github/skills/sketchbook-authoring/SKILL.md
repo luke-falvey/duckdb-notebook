@@ -61,7 +61,8 @@ Related skills: **sketchbook-charts** (chart specs), **sketchbook-design** (maki
   literal `*/` as `*\/`.
 
 Options any cell takes: `hide=code|output|all|none`, `span=1..12` (reading-view grid width),
-`rows=1..10000` (table page size). Values are checked; anything else is an error on the cell.
+`rows=1..10000` (table page size), `screen=new|join|skip` (where the cell goes when the notebook is
+presented; sketchbook-design). Values are checked; anything else is an error on the cell.
 
 ## Parameters and variables
 
@@ -83,7 +84,7 @@ Options any cell takes: `hide=code|output|all|none`, `span=1..12` (reading-view 
 | Chart comments on a cell that does not end in a query | Make the last statement a SELECT, or use a chart cell |
 | `chart cell needs from=<cell or table>` | Add `from=` |
 | `[markdown]` / `chart` body is not a single block comment | Remove the `--` comment lines inside such cells; put notes in the prose |
-| `hide=` / `rows=` value not valid | `hide=code|output|all|none`; `rows` 1 to 10000 |
+| `hide=` / `rows=` / `screen=` value not valid | `hide=code|output|all|none`; `rows` 1 to 10000; `screen=new|join|skip` |
 | Input body is not `SET VARIABLE <same name> = ...;` | Make the statement and the head name match |
 
 Warnings do not stop a run but are worth fixing: a variable no cell sets (reads as NULL), a
