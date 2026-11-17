@@ -48,7 +48,7 @@ private:
 
 	bool Prepare();
 	string FilePath(const string &id) const;
-	bool Write(const string &id, const string &key, const string &saved_at, const string &text);
+	bool Write(const string &id, const string &key, const string &data, const string &saved_at, const string &text);
 	vector<string> StoredIds();
 };
 

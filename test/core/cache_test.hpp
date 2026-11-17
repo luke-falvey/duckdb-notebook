@@ -140,6 +140,7 @@ static void TestCacheSetting() {
 static void TestCacheEntries() {
 	CacheEntry entry;
 	entry.key = "0123456789abcdef";
+	entry.data = "fedcba9876543210";
 	entry.saved_at = "2026-11-17 10:00:00";
 	entry.result = "{\"status\":\"ok\",\"row_count\":2,\"elapsed_ms\":1.5,\"data\":{\"columns\":[{\"name\":\"a\","
 	               "\"type\":\"INTEGER\"}],\"rows\":[[1],[2]],\"total\":2,\"truncated\":false}}";
@@ -147,7 +148,10 @@ static void TestCacheEntries() {
 	auto text = DumpCacheEntry("monthly", entry);
 	CacheEntry read;
 	CHECK(ParseCacheEntry(text, "monthly", read));
-	CHECK(read.key == entry.key && read.saved_at == entry.saved_at && read.result == entry.result);
+	CHECK(read.key == entry.key && read.data == entry.data && read.saved_at == entry.saved_at &&
+	      read.result == entry.result);
+	// B26: an entry without its data key is from before it was kept, and is not used.
+	CHECK(!ParseCacheEntry(Replaced(text, ",\"data\":\"fedcba9876543210\"", ""), "monthly", read));
 
 	// Anything that is not a whole entry of this format for this cell is ignored.
 	CacheEntry untouched;
@@ -210,7 +214,7 @@ static void TestCacheFreshness() {
 	auto ids = CacheCellIds(nb);
 	std::map<std::string, CacheEntry> entries;
 	for (size_t i = 0; i < ids.size(); i++) {
-		entries[ids[i]] = CacheEntry {keys[i].result, "2026-11-17 10:00:00", "{\"status\":\"ok\"}"};
+		entries[ids[i]] = CacheEntry {keys[i].result, keys[i].data, "2026-11-17 10:00:00", "{\"status\":\"ok\"}"};
 	}
 	auto stale = [&](const Notebook &notebook, const std::map<std::string, std::string> &values) {
 		std::string result;

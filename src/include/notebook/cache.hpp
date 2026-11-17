@@ -65,6 +65,8 @@ std::set<std::string> SettableVariables(const Notebook &notebook);
 struct CacheEntry {
 	//! CacheKey::result of the cell when the result was made.
 	std::string key;
+	//! CacheKey::data then: a redraw (charts only) may refresh the entry only while the data is unchanged.
+	std::string data;
 	//! When it was made: `YYYY-MM-DD hh:mm:ss`, UTC.
 	std::string saved_at;
 	//! The cell's result as the editor receives it from a run, as JSON text.

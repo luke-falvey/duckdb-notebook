@@ -342,6 +342,7 @@ std::string DumpCacheEntry(const std::string &id, const CacheEntry &entry) {
 	    .Set("format", Json::Number(CACHE_FORMAT))
 	    .Set("cell", Json::String(id))
 	    .Set("key", Json::String(entry.key))
+	    .Set("data", Json::String(entry.data))
 	    .Set("saved_at", Json::String(entry.saved_at))
 	    .Set("result", Json::Raw(entry.result))
 	    .Dump();
@@ -358,8 +359,9 @@ bool ParseCacheEntry(const std::string &text, const std::string &id, CacheEntry 
 		return false;
 	}
 	auto cell = StringField(json, "cell"), key = StringField(json, "key"), saved_at = StringField(json, "saved_at");
+	auto data = StringField(json, "data");
 	auto result = json.Get("result");
-	if (!cell || *cell != id || !key || key->empty() || !saved_at || !result || !ValidResult(*result)) {
+	if (!cell || *cell != id || !key || key->empty() || !data || !saved_at || !result || !ValidResult(*result)) {
 		return false;
 	}
 	auto dumped = result->Dump();
@@ -367,6 +369,7 @@ bool ParseCacheEntry(const std::string &text, const std::string &id, CacheEntry 
 		return false;
 	}
 	entry.key = *key;
+	entry.data = *data;
 	entry.saved_at = *saved_at;
 	entry.result = std::move(dumped);
 	return true;

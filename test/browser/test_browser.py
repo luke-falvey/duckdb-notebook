@@ -402,6 +402,37 @@ def test_cache_written_later(browser, work):
         stop(shell)
 
 
+def test_cache_redraw_stale(browser, work):
+    # B26: drawing a stale result's charts again does not make its rows fresh.
+    folder = os.path.join(work, "cache_redraw")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "redraw.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% input n slider min=1 max=5\nSET VARIABLE n = 1;\n\n"
+                "-- %% q\nSELECT $n AS v\n\n/* chart\nmark: bar\nx: v\ny: v\n*/\n")
+    db = os.path.join(folder, "redraw.duckdb")
+    sql(db, f"SELECT count(*) FROM notebook_run('{notebook}', cache := true)")
+    shell, url = serve(folder, notebook, db)
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        # Everything runs (v = 1); the input changes without running, so q's kept result is stale; then only
+        # q's charts are drawn again, from its view, which now gives v = 2.
+        page.evaluate("() => App.api('POST', '/api/run', {text: App.text(), cells: null, redraw: []})")
+        page.evaluate("() => App.api('POST', '/api/variable', {name: 'n', value: 2, cell: 0})")
+        page.evaluate("() => App.api('POST', '/api/run', {text: App.text(), cells: [], redraw: [1]})")
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.getElementById('status').textContent !== ''")
+        state = page.evaluate("() => { const c = document.querySelector(\".nb-cell[data-idx='1']\"); return {outdated: c.classList.contains('outdated'), kept: !!c.querySelector('.nb-output svg, table.nb-grid')} }")
+        check(state["kept"] and state["outdated"], f"a stale result whose charts were drawn again is still stale ({state})")
+        page.close()
+    finally:
+        stop(shell)
+
+
 def test_cache(browser, work):
     """The result cache (FORMAT §8): a reopened notebook shows its last results without running anything,
     results whose inputs changed are marked, and the cache can be cleared or switched off."""
@@ -1898,6 +1929,7 @@ def main():
             test_metadata_first(browser, work)
             test_cache(browser, work)
             test_cache_written_later(browser, work)
+            test_cache_redraw_stale(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "~/.cache/ms-playwright") + "/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"))

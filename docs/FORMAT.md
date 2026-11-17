@@ -562,12 +562,13 @@ whole directory, so it never needs adding to a project's own:
 ```
 
 For a notebook stored in a database (`db:<name>`), in that database's `_notebook.cache` table,
-`(name, cell, format, key, saved_at, result)` with one row per cell and one for `@state`. A remote
+`(name, cell, format, key, data, saved_at, result)` with one row per cell and one for `@state`. A remote
 notebook (a URL, an object store) and a notebook not saved yet have no cache. A location that cannot be
 written means no cache, quietly; a run never fails because of it.
 
-**An entry** is JSON: `{format, cell, key, saved_at, result}`. `result` is exactly what the editor was
-sent when the cell ran: its status and error, row count and timing, the rendered prose, the first page
+**An entry** is JSON: `{format, cell, key, data, saved_at, result}`. `key` and `data` are the cell's keys when the
+result was made (a redraw of its charts may refresh it only while `data` still matches). `result` is exactly
+what the editor was sent when the cell ran: its status and error, row count and timing, the rendered prose, the first page
 of a query's rows (as many as the page shows), each chart's render description and data, an input's
 value and choices. Rows and chart data are JSON, as everywhere else in the editor (DESIGN §12), not
 Parquet or Arrow. A result larger than **4 MiB** of JSON is not kept: that cell reopens empty, as
