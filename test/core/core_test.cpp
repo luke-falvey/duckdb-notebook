@@ -353,6 +353,9 @@ static void TestLiterals() {
 	CHECK(JsonToSqlLiteral(ParseJson("\"it's\"", error)) == "'it''s'");
 	CHECK(JsonToSqlLiteral(ParseJson("5", error), "DOUBLE") == "5::DOUBLE");
 	CHECK(JsonToSqlLiteral(ParseJson("[\"a\", \"b\"]", error), "VARCHAR[]") == "['a'::VARCHAR, 'b'::VARCHAR]");
+	// B20: raw JSON text (kept by the result cache) becomes the literal of the value it holds.
+	CHECK(JsonToSqlLiteral(Json::Raw("[1, 2]"), "INTEGER[]") == "[1::INTEGER, 2::INTEGER]");
+	CHECK(JsonToSqlLiteral(Json::Raw("\"EU\"")) == "'EU'");
 	CHECK(JsonToSqlLiteral(ParseJson("{\"lo\": \"2026-01-01\", \"hi\": null}", error), "STRUCT(lo DATE, hi DATE)") ==
 	      "{'lo': '2026-01-01'::DATE, 'hi': NULL::DATE}");
 	CHECK(JsonToSqlLiteral(ParseJson("{\"x\": {\"lo\": 1, \"hi\": 2}}", error),

@@ -92,10 +92,15 @@ std::string JsonToSqlLiteral(const Json &value, const std::string &type) {
 		auto literal = value.Dump();
 		return type.empty() ? literal : literal + "::" + type;
 	}
-	case Json::Type::STRING:
-	case Json::Type::RAW: {
+	case Json::Type::STRING: {
 		auto literal = QuoteString(value.Str());
 		return type.empty() ? literal : literal + "::" + type;
+	}
+	case Json::Type::RAW: {
+		// JSON text kept as it was serialised: the literal of the value it holds.
+		std::string error;
+		auto parsed = ParseJson(value.Dump(), error);
+		return error.empty() ? JsonToSqlLiteral(parsed, type) : "NULL";
 	}
 	case Json::Type::ARRAY: {
 		std::string out = "[";
