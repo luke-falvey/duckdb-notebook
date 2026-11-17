@@ -736,3 +736,28 @@ table, and every existing notebook still parses.
   one thing ruled out is a cell's SQL reading its own chart's selection.
 - **A failing chart keeps its result.** The query ran, so its rows and row count stay; the cell is
   reported as an error with the chart's message, which shows in that chart's tab.
+
+## 15. The page is written, not shown
+
+Every piece of a notebook arrives as if a pen wrote it: text letter by letter, shapes stroke by stroke,
+tables row by row, in a wave down the page ([HANDWRITING.md](HANDWRITING.md) is the plan and records
+what was built). It is a renderer concern like the look itself: nothing in the file format changed.
+
+- **The finished page is the page.** The DOM is built exactly as without the animation, and Ink
+  (`frontend/render-ink.js`) lays the animation over it and takes it away again. When a piece is done
+  its DOM is identical to a page drawn with the animation off, and so are its pixels; both are tested.
+  If the script fails, is switched off or is interrupted, the page is simply complete.
+- **Text stays text.** Glyphs are made transparent (`-webkit-text-fill-color`), never removed or
+  inserted, so selection, find and screen readers see the whole page from the first frame. A canvas over
+  the piece writes each real glyph, revealed through a fat copy of pen strokes recovered from the fonts
+  offline (`tools/font_strokes.py`), so the last frame of a glyph is the glyph itself.
+- **Time, not state.** A piece's progress is a function of the clock and when it started. `render()`
+  rebuilds every cell on every change, so pieces are named by a key and a signature of what they show:
+  the same key and signature is never written twice, and a rebuilt element takes over a running piece
+  where it was.
+- **One pen, one budget.** A single scheduler paces everything: constant pen speed, everything on screen
+  within about 2.5 seconds, caps on what is in motion at once, with tables and long code falling back to
+  sweeps. What follows the reader's own action is drawn within 200 ms; a click or a key finishes
+  everything; content below the fold waits until it is scrolled to.
+- **Off when it should be.** Reduced motion, print, PDF export, the gear menu's setting and `ink=off`
+  all give the plain page. The existing browser tests run with `ink=off`.

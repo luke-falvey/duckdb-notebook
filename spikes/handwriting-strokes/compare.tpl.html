@@ -1,0 +1,62 @@
+<!doctype html><meta charset="utf-8"><style>
+@font-face{font-family:Excalifont;src:url(Excalifont.ttf)}@font-face{font-family:Cascadia;src:url(CascadiaCode.ttf)}
+body{margin:20px;background:#f8f7f2;font-family:Excalifont;color:#1e1e1e} .row{position:relative;margin:0 0 6px} .lab{font:11px sans-serif;color:#999;margin-top:10px}
+canvas{display:block}
+</style><body><script>
+var DATA=__DATA__;
+var samples=[['Excalifont',44,'Revenue review'],['Excalifont',22,'Synthetic orders for 2026, generated in the orders cell so the notebook has'],
+ ['Excalifont',22,'The quick brown fox jumps over the lazy dog? 0123456789 $4,490,867.00 (APAC, EU & US) #1 @ 50%'],
+ ['Excalifont',16,'ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz month category revenue orders'],
+ ['Cascadia',13.5,"SELECT date_trunc('month', ts) AS month, sum(amount) AS revenue FROM filtered WHERE i >= $lowest GROUP BY ALL;"],
+ ['Cascadia',22,"CREATE OR REPLACE TABLE orders AS {[i % 3] + 0.25} != <= => #@&*~^|\\ 0123456789"]];
+function drawGlyph(ctx,g,x,base,size,t){
+  var k=size/1000, lens=g.s.map(function(s){var L=0;for(var i=2;i<s.length;i+=2)L+=Math.hypot(s[i]-s[i-2],s[i+1]-s[i-1]);return L+60;});
+  var total=lens.reduce(function(a,b){return a+b},0), budget=t*total;
+  g.s.forEach(function(s,si){ if(budget<=0)return; var L=lens[si], f=Math.min(1,budget/L); budget-=L;
+    ctx.beginPath(); var n=s.length/2, P=function(i){return [x+s[2*i]*k, base+s[2*i+1]*k];};
+    var p0=P(0); ctx.moveTo(p0[0],p0[1]);
+    if(n===1){ctx.lineTo(p0[0]+0.01,p0[1]);}
+    else if(n===2){var p1=P(1);ctx.lineTo(p1[0],p1[1]);}
+    else{ for(var i=1;i<n-1;i++){var c=P(i),d=P(i+1); var mx=(c[0]+d[0])/2,my=(c[1]+d[1])/2; if(i===n-2){ctx.quadraticCurveTo(c[0],c[1],d[0],d[1]);} else ctx.quadraticCurveTo(c[0],c[1],mx,my);} }
+    if(f<1){var px=(L-60)*k; ctx.setLineDash([Math.max(0.01,px*f),px*2+10]);} else ctx.setLineDash([]);
+    ctx.stroke(); });
+}
+function makeMasked(font,size,text,t){
+  var key=font==='Cascadia'?'CascadiaCode':'Excalifont', F=DATA[key], dpr=2;
+  var lab=document.createElement('div');lab.className='lab';lab.textContent=font+' '+size+'px MASKED: real glyphs revealed through fat pen strokes at '+Math.round(t*100)+'%';document.body.appendChild(lab);
+  var c=document.createElement('canvas'), h=Math.ceil(size*1.5), w=1250; c.width=w*dpr;c.height=h*dpr;c.style.width=w+'px';c.style.height=h+'px';document.body.appendChild(c);
+  var ctx=c.getContext('2d');ctx.scale(dpr,dpr);
+  var sc=document.createElement('canvas'); sc.width=Math.ceil(size*2*dpr); sc.height=h*dpr; var sx=sc.getContext('2d');
+  var base=F.ascent*size/1000+2, n=text.replace(/ /g,'').length, done=0, x=0;
+  ctx.font=size+'px '+font; ctx.fillStyle='#1e1e1e'; ctx.textBaseline='alphabetic';
+  for(var i=0;i<text.length;i++){ var ch=text[i], adv=ctx.measureText(ch).width, g=F.glyphs[ch];
+    if(ch===' '||!g){x+=adv;continue;}
+    var gt=Math.max(0,Math.min(1,t*n-done)); done++;
+    if(gt>=1){ctx.fillText(ch,x,base);} else if(gt>0){
+      sx.setTransform(1,0,0,1,0,0); sx.clearRect(0,0,sc.width,sc.height); sx.setTransform(dpr,0,0,dpr,0,0);
+      sx.globalCompositeOperation='source-over'; sx.lineCap='round';sx.lineJoin='round';sx.strokeStyle='#000';sx.lineWidth=F.width*size/1000*2.4;
+      drawGlyph(sx,g,size*0.5,base,size,gt);
+      sx.globalCompositeOperation='source-in'; sx.font=ctx.font; sx.fillStyle='#1e1e1e'; sx.fillText(ch,size*0.5,base);
+      ctx.drawImage(sc,0,0,sc.width,sc.height,x-size*0.5,0,sc.width/dpr,sc.height/dpr);
+    }
+    x+=adv; }
+}
+function make(font,size,text,t){
+  var key=font==='Cascadia'?'CascadiaCode':'Excalifont', F=DATA[key], dpr=2;
+  var lab=document.createElement('div');lab.className='lab';lab.textContent=font+' '+size+'px: real font, then recovered strokes'+(t<1?' at '+Math.round(t*100)+'%':'');document.body.appendChild(lab);
+  var real=document.createElement('div');real.className='row';real.style.font=size+'px '+font;real.style.whiteSpace='pre';real.textContent=text;document.body.appendChild(real);
+  var c=document.createElement('canvas'), h=Math.ceil(size*1.5), w=1250; c.width=w*dpr;c.height=h*dpr;c.style.width=w+'px';c.style.height=h+'px';document.body.appendChild(c);
+  var ctx=c.getContext('2d');ctx.scale(dpr,dpr);ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle='#1e1e1e';ctx.lineWidth=F.width*size/1000;
+  var x=0, base=F.ascent*size/1000+2, n=text.replace(/ /g,'').length, done=0;
+  for(var i=0;i<text.length;i++){var g=F.glyphs[text[i]]; if(!g){x+=(text[i]===' '?(font==='Cascadia'?0.586:0.3):0.5)*size;continue;}
+    var gt=Math.max(0,Math.min(1,t*n-done)); done++; if(gt>0)drawGlyph(ctx,g,x,base,size,gt); x+=g.adv*size/1000;}
+}
+document.fonts.load('20px Excalifont').then(function(){return document.fonts.load('20px Cascadia');}).then(function(){
+  samples.forEach(function(s){make(s[0],s[1],s[2],1);});
+  
+  make('Excalifont',44,'Revenue review',0.62); make('Excalifont',22,'Synthetic orders for 2026, generated in the orders cell',0.5);
+  make('Cascadia',22,"SELECT date_trunc('month', ts) AS month",0.55);
+  [0.999,0.55].forEach(function(t){ makeMasked('Cascadia',22,"CREATE OR REPLACE TABLE orders AS {[i % 3] + 0.25} #@&",t); makeMasked('Excalifont',44,'Revenue review $4,490',t); });
+  makeMasked('Cascadia',13.5,"SELECT date_trunc('month', ts) AS month, sum(amount) AS revenue FROM filtered",0.7);
+  window.__ready=true;});
+</script>
