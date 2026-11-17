@@ -37,3 +37,26 @@ jobs:
       exclude_archs: "wasm_mvp;wasm_eh;wasm_threads"
       opt_in_archs: "linux_amd64_musl;linux_arm64_musl;osx_amd64;windows_arm64"
       reduced_ci_mode: disabled
+
+  # The size of each platform's extension, raw and as distributed (gzip), in the run's summary.
+  # A loadable extension links all of DuckDB statically, so most of it is DuckDB (DESIGN §16).
+  extension-sizes:
+    name: Extension sizes
+    needs: duckdb-stable-build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: notebook-*-extension-*
+          path: artifacts
+      - name: Report sizes
+        run: |
+          {
+            echo "| Platform | Extension (bytes) | gzip -9 (bytes) |"
+            echo "|---|--:|--:|"
+            find artifacts -name 'notebook.duckdb_extension*' -type f | sort | while read -r file; do
+              platform=$(basename "$(dirname "$file")" | sed 's/^notebook-[^-]*-extension-//')
+              echo "| $platform | $(stat -c %s "$file") | $(gzip -9c "$file" | wc -c) |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
