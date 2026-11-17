@@ -22,7 +22,7 @@ jobs:
   # DuckDB's shared extension pipeline: builds the extension and runs test/sql.
   # Only linux_amd64 for now, to keep CI quick while the extension is young. Remove
   # exclude_archs to build every platform, which the community repository requires.
-  # The three wasm targets are built (docs/DESIGN.md section 17): wasm_eh and wasm_threads are
+  # The three wasm targets are built (docs/DESIGN.md section 18): wasm_eh and wasm_threads are
   # what DuckDB-WASM 2.0 loads (its base and threads bundles); wasm_mvp has no 2.0 bundle to load
   # into but is built because the community repository builds it.
   duckdb-stable-build:

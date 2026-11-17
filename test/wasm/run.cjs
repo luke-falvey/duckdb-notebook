@@ -123,6 +123,16 @@ async function testArch(browser, arch, pageScript) {
     run.rows.every((r) => r.status === 'ok' || r.status === 'skipped'), run);
   check('notebook_run: tables it creates remain', !(await sql('SELECT count(*) AS n FROM orders')).error);
 
+  // The result cache writes files beside the notebook through DuckDB's file system.
+  const cached = await sql("SELECT count(*) AS n FROM notebook_run('revenue.sql', cache := true) WHERE status = 'ok'");
+  check('notebook_run(cache := true)', cached.rows && cached.rows[0].n > 0, cached);
+  const entries = await sql("SELECT count(*) AS n, count(*) FILTER (status = 'fresh') AS fresh FROM notebook_cache('revenue.sql')");
+  check('notebook_cache lists fresh entries', entries.rows && entries.rows[0].n > 0 && entries.rows[0].fresh === entries.rows[0].n, entries);
+  const cleared = await sql("SELECT * FROM notebook_cache_clear('revenue.sql')");
+  check('notebook_cache_clear', !cleared.error, cleared);
+  const after = await sql("SELECT count(*) AS n FROM notebook_cache('revenue.sql')");
+  check('notebook_cache is empty after clearing', after.rows && after.rows[0].n === 0, after);
+
   const md = await sql("SELECT bytes FROM notebook_export('revenue.sql', file := 'revenue.md', format := 'md')");
   check('notebook_export md', md.rows && md.rows[0].bytes > 0, md);
   if (md.rows) {

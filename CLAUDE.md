@@ -17,6 +17,7 @@ taught us and where it departs from the design.
 | `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
 | `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
 | `notebook_start`, `notebook_stop` | The HTTP server and browser UI (not in WASM builds) | `src/functions/server.cpp` |
+| `notebook_cache`, `notebook_cache_clear` | The result cache: what is kept, fresh or stale; clearing it | `src/functions/result_cache.cpp` |
 
 Every path argument also accepts `db:<name>[@version]` for a stored notebook.
 
@@ -33,7 +34,12 @@ Every piece of the page is written by a pen as it appears (`frontend/render-ink.
 `docs/HANDWRITING.md`). The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
 into `frontend/ink-strokes.js`.
 
-Not built: the result cache (FORMAT §8), a CodeMirror editor, charting libraries (see DESIGN §6).
+The result cache (FORMAT §8, DESIGN §17) keeps each cell's last `/api/run` result beside the notebook
+(`.duckdb-notebook/`) or in `_notebook.cache`. Keys and the fresh/stale decision are in
+`src/core/cache.cpp`; the store and the session's copy in `src/functions/result_cache.cpp`. The editor
+reads it on open and writes it after every run; `notebook_run` writes it only with `cache := true`.
+
+Not built: a CodeMirror editor, charting libraries (see DESIGN §6).
 
 ## Layout
 
@@ -128,7 +134,7 @@ packages, `dpkg -x` them into a directory and point `LD_LIBRARY_PATH` at its `us
 
 ### WebAssembly (DuckDB-WASM)
 
-The extension also builds for DuckDB-WASM (`wasm_eh`, `wasm_threads`; DESIGN §17). Install the
+The extension also builds for DuckDB-WASM (`wasm_eh`, `wasm_threads`; DESIGN §18). Install the
 Emscripten version DuckDB's extension pipeline uses, 6.0.9, once:
 
 ```bash
@@ -241,6 +247,10 @@ create, because all test files share one database.
   `duckdb/AGENTS.md` and copy from `duckdb/src/function/table/system/` when unsure.
 - sqllogictest expected results cannot contain blank lines or multi-line values. Flatten them in the
   query, as `test/sql/notebook_sql.test` does.
+- The result cache must never fail anything: every store operation catches and gives up quietly.
+  Opening a notebook must run no SQL, so cached variables are restored by casting text to their
+  recorded type, not by `SET VARIABLE`. A change to what a cache key covers or to the entry layout
+  raises `CACHE_FORMAT` in `src/core/cache.cpp`.
 - `to` is a reserved word: a table function cannot take `to :=`. Output paths are `file :=`.
 - `ExtensionCallback::OnConnectionClosed` runs with DuckDB's connection-manager lock held. Do not
   create or destroy connections from it.
@@ -248,7 +258,7 @@ create, because all test files share one database.
   (`VariableSqlType`), or a brush on a timestamp axis compares text with timestamps.
 - The html-wasm export runs on DuckDB-WASM 1.5: `$name` is rewritten to `getvariable('name')`, data
   is written with `STORAGE_VERSION 'v1.5.0'`, and selection variables start as typed NULLs.
-  The extension itself targets DuckDB-WASM 2.0 (npm `next`, `1.33.1-dev110.0` and later); see DESIGN §17
+  The extension itself targets DuckDB-WASM 2.0 (npm `next`, `1.33.1-dev110.0` and later); see DESIGN §18
   for which of these workarounds 2.0 makes unnecessary.
 - The WebAssembly build has no server, no PDF export and no process spawning: `NOTEBOOK_HOST_FEATURES`
   is off under Emscripten, `server_unavailable.cpp` replaces `server.cpp`, and `export.cpp` has one
