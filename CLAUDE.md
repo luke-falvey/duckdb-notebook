@@ -114,7 +114,7 @@ DuckDB is the Python package, which also loads extensions with `RTLD_LOCAL` as m
 `pip install duckdb==2.0.0`, connect with `allow_unsigned_extensions` and
 `allow_extensions_metadata_mismatch` set, and `LOAD` the file.
 
-The loadable extension is about 40 MB on linux_amd64 (15 MB gzipped), and about 97% of that is DuckDB
+The loadable extension is about 40 MB on linux_amd64 (15 MB gzipped), and about 95% of that is DuckDB
 itself, linked statically as DuckDB 2.0 distributes every C++ extension. It is stripped at link time
 (`CMakeLists.txt`). Do not expect a flag to make it much smaller: `docs/DESIGN.md` ("Building for every
 platform") has the breakdown and what was tried. CI's "Extension sizes" job reports every platform.

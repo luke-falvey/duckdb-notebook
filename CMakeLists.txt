@@ -67,10 +67,17 @@ build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
 # Size (docs/DESIGN.md, "Building for every platform"). A loadable extension statically links
-# all of DuckDB (about 97% of its bytes), so what is left to trim is the symbol table: strip it at
-# link time, before DuckDB's metadata footer is appended. The entry point is in the dynamic symbol
-# table, which stripping keeps. MSVC keeps symbols in a separate PDB: nothing to strip. Emscripten
-# is left alone (its -s means something else).
+# all of DuckDB (about 95% of its bytes; that is how DuckDB distributes C++ extensions), so what we
+# control is our own code and the symbol table.
+# - Our code is optimised for size: it parses notebook files, compiles chart specs and serves
+#   requests, none of it hot (queries run in DuckDB). About 0.6 MB.
+# - The symbol table is stripped at link time, before DuckDB's metadata footer is appended. The
+#   entry point is in the dynamic symbol table, which stripping keeps. About 8.6 MB. MSVC keeps
+#   symbols in a separate PDB; Emscripten is left alone (its -s means something else).
+if(NOT MSVC)
+  target_compile_options(${EXTENSION_NAME} PRIVATE -Os)
+  target_compile_options(${LOADABLE_EXTENSION_NAME} PRIVATE -Os)
+endif()
 if(APPLE)
   target_link_options(${LOADABLE_EXTENSION_NAME} PRIVATE -Wl,-x)
 elseif(NOT MSVC AND NOT EMSCRIPTEN)
