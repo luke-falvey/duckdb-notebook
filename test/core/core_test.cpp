@@ -499,6 +499,11 @@ static void TestChartReferences() {
 	CHECK(fails("rules:\n  - {label: x}\n", "needs x: or y:"));
 	CHECK(fails("rules:\n  - {x: 2026-01-01, y: 3}\n", "needs x: or y:"));
 	CHECK(fails("rules:\n  - {y: lots}\n", "must be a number or one of avg"));
+	// B28: a number is written in decimal; inf, nan and 0x10 are not numbers (inf would vanish as null).
+	CHECK(fails("rules:\n  - {y: inf}\n", "must be a number or one of avg"));
+	CHECK(fails("rules:\n  - {y: nan}\n", "must be a number or one of avg"));
+	CHECK(fails("rules:\n  - {y: 0x10}\n", "must be a number or one of avg"));
+	CHECK(CompileChart(base + "rules:\n  - {y: -1.5e3}\n", "orders", context).error.empty());
 	CHECK(fails("rules:\n  - {y: avg, lable: Average}\n", "unknown key 'lable'"));
 	CHECK(fails("rules:\n  - {x: avg}\n", "not defined for dates"));
 	CHECK(fails("rules:\n  - {y: {field: nope, agg: max}}\n", "no column named 'nope'"));
@@ -549,6 +554,8 @@ static void TestChartNotes() {
 	CHECK(fails("notes: {x: 1}\n", "notes: must be a list"));
 	CHECK(fails("notes:\n  - hello\n", "each item is a mapping"));
 	CHECK(fails("notes:\n  - {text: hello}\n", "needs x: or y:"));
+	// B28: a note's colour is one value, as a rule's is.
+	CHECK(fails("notes:\n  - {text: hi, y: 3, color: [red, blue]}\n", "color must be text"));
 	CHECK(fails("notes:\n  - {x: 2026-06-01}\n", "needs text:"));
 	CHECK(fails("notes:\n  - {x: 2026-06-01, y: high, text: a}\n", "y must be a number, not 'high'"));
 	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, side: north}\n", "side must be above, below, left or right"));

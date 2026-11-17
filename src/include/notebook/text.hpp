@@ -41,6 +41,40 @@ inline bool Contains(const std::vector<std::string> &values, const std::string &
 	return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+//! A decimal number as people write one: an optional sign, digits with an optional fraction, and an
+//! optional exponent (`-1.5e3`). Not `inf`, `nan` or hexadecimal, which strtod would also take.
+inline bool IsDecimalNumber(const std::string &s) {
+	size_t i = 0, digits = 0;
+	if (i < s.size() && (s[i] == '+' || s[i] == '-')) {
+		i++;
+	}
+	for (; i < s.size() && std::isdigit(static_cast<unsigned char>(s[i])); i++) {
+		digits++;
+	}
+	if (i < s.size() && s[i] == '.') {
+		for (i++; i < s.size() && std::isdigit(static_cast<unsigned char>(s[i])); i++) {
+			digits++;
+		}
+	}
+	if (digits == 0) {
+		return false;
+	}
+	if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+		i++;
+		if (i < s.size() && (s[i] == '+' || s[i] == '-')) {
+			i++;
+		}
+		size_t exponent = 0;
+		for (; i < s.size() && std::isdigit(static_cast<unsigned char>(s[i])); i++) {
+			exponent++;
+		}
+		if (exponent == 0) {
+			return false;
+		}
+	}
+	return i == s.size();
+}
+
 //! `text` with every `from` replaced by `to`.
 inline std::string ReplaceAll(std::string text, const std::string &from, const std::string &to) {
 	size_t pos = 0;
