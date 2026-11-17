@@ -38,6 +38,8 @@ y: revenue
   Change one and everything that depends on it updates.
 - **Charts are declarative.** A query shows a table until you give it charts: short YAML specs after
   the query, shown as tabs. Each compiles to an aggregate query, so charts stay fast on large tables.
+  A chart can carry reference lines and bands (an average, a target range), computed by DuckDB, and
+  handwritten notes that point at the data.
 - **Notebooks can live in the database.** The same text is stored with version history in a table.
 - **Share without DuckDB.** Export to a single self-contained HTML file, or to PDF.
 - **Looks like a sketchbook.** Paper, handwriting and hand-drawn charts, after Excalidraw, in the

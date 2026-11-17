@@ -8,6 +8,7 @@
 #include "notebook/script.hpp"
 #include "notebook/sql_lexer.hpp"
 
+#include <cstdio>
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -361,6 +362,138 @@ static void TestChartCompiler() {
 	CHECK(TypeClass("TIMESTAMP WITH TIME ZONE") == "temporal" && TypeClass("DECIMAL(9,2)") == "quantitative");
 }
 
+static void TestChartReferences() {
+	ChartContext context;
+	context.columns = {{"ts", "TIMESTAMP"}, {"region", "VARCHAR"}, {"amount", "DECIMAL(18,2)"}, {"n", "BIGINT"}};
+	context.row_count = 100;
+	std::string base = "mark: line\nx: {field: ts, timeunit: month}\ny: {field: amount, agg: sum}\n";
+
+	// A fixed value needs no query; an aggregate is computed in DuckDB over the chart's marks.
+	auto fixed = CompileChart(base + "rules:\n  - {y: 1200, label: Target}\n  - {x: 2026-06-01, label: Launch}\n",
+	                          "orders", context);
+	CHECK(fixed.error.empty() && fixed.queries.size() == 1);
+	auto &rules = fixed.render.Get("rules")->Items();
+	CHECK(rules.size() == 2 && rules[0].Get("axis")->Str() == "y" && rules[0].Get("value")->Num() == 1200);
+	CHECK(rules[0].Get("label")->Str() == "Target" && rules[1].Get("value")->Str() == "2026-06-01");
+	CHECK(fixed.render.Get("reference_data") == nullptr);
+
+	auto avg =
+	    CompileChart(base + "rules:\n  - {y: avg, label: Average, color: red}\n  - {y: p90}\n", "orders", context);
+	CHECK(avg.error.empty() && avg.queries.size() == 2);
+	CHECK(avg.render.Get("reference_data")->Num() == 1);
+	CHECK(avg.render.Get("rules")->Items()[0].Get("column")->Str() == "r0");
+	CHECK(avg.render.Get("rules")->Items()[0].Get("agg")->Str() == "avg");
+	CHECK(avg.render.Get("rules")->Items()[0].Get("color")->Str() == "red");
+	// The average of the monthly sums, not of the rows.
+	CHECK(avg.queries[1].find("__marks0 AS (WITH __src AS") != std::string::npos);
+	CHECK(avg.queries[1].find("sum(\"amount\") AS \"y\"") != std::string::npos);
+	CHECK(avg.queries[1].find("(SELECT avg(\"y\") FROM __marks0) AS r0") != std::string::npos);
+	CHECK(avg.queries[1].find("(SELECT quantile_cont(\"y\", 0.90) FROM __marks0) AS r1") != std::string::npos);
+
+	// Bands take two ends, each a value or an aggregate; a column of the source can be aggregated too.
+	auto bands = CompileChart(base + "bands:\n  - {y: [p25, p75], label: Middle half}\n  - {y: [0, {field: n, agg: "
+	                                 "max}]}\n  - {x: [2026-03-01, 2026-04-01]}\n",
+	                          "orders", context);
+	CHECK(bands.error.empty() && bands.queries.size() == 2);
+	auto &band = bands.render.Get("bands")->Items();
+	CHECK(band.size() == 3 && band[0].Get("from")->Get("column")->Str() == "r0");
+	CHECK(band[0].Get("to")->Get("column")->Str() == "r1" && band[0].Get("label")->Str() == "Middle half");
+	CHECK(band[1].Get("from")->Get("value")->Num() == 0 && band[1].Get("to")->Get("column")->Str() == "r2");
+	CHECK(bands.queries[1].find("(SELECT max(\"n\") FROM (SELECT * FROM \"orders\")) AS r2") != std::string::npos);
+	CHECK(band[2].Get("axis")->Str() == "x" && band[2].Get("to")->Get("value")->Str() == "2026-04-01");
+
+	// A downsampled line is averaged before it is downsampled.
+	context.row_count = 1000000;
+	auto big = CompileChart("mark: line\nx: ts\ny: n\nrules:\n  - {y: median}\n", "orders", context);
+	CHECK(big.error.empty() && big.render.Get("layers")->Items()[0].Get("m4") != nullptr);
+	CHECK(big.queries[1].find("__px") == std::string::npos &&
+	      big.queries[1].find("median(\"y\")") != std::string::npos);
+	context.row_count = 100;
+
+	// A category axis takes a category; "max" in quotes is a value, not an aggregate.
+	auto cat =
+	    CompileChart("mark: bar\nx: region\ny: {field: amount, agg: sum}\nrules:\n  - {x: EU}\n  - {x: \"max\"}\n",
+	                 "orders", context);
+	CHECK(cat.error.empty() && cat.queries.size() == 1);
+	CHECK(cat.render.Get("rules")->Items()[1].Get("value")->Str() == "max");
+
+	auto fails = [&](const std::string &extra, const std::string &message) {
+		auto plan = CompileChart(base + extra, "orders", context);
+		if (plan.error.find(message) == std::string::npos) {
+			printf("    expected '%s', got '%s'\n", message.c_str(), plan.error.c_str());
+		}
+		return plan.error.find(message) != std::string::npos && plan.queries.empty();
+	};
+	CHECK(fails("rules: {y: avg}\n", "rules: must be a list"));
+	CHECK(fails("rules:\n  - avg\n", "each item is a mapping"));
+	CHECK(fails("rules:\n  - {label: x}\n", "needs x: or y:"));
+	CHECK(fails("rules:\n  - {x: 2026-01-01, y: 3}\n", "needs x: or y:"));
+	CHECK(fails("rules:\n  - {y: lots}\n", "must be a number or one of avg"));
+	CHECK(fails("rules:\n  - {y: avg, lable: Average}\n", "unknown key 'lable'"));
+	CHECK(fails("rules:\n  - {x: avg}\n", "not defined for dates"));
+	CHECK(fails("rules:\n  - {y: {field: nope, agg: max}}\n", "no column named 'nope'"));
+	CHECK(fails("rules:\n  - {y: {field: n}}\n", "needs field: and agg:"));
+	CHECK(fails("bands:\n  - {y: 3}\n", "y must be [from, to]"));
+	CHECK(fails("bands:\n  - {y: [1, 2, 3]}\n", "y must be [from, to]"));
+	CHECK(CompileChart("mark: bar\nx: region\ny: {field: amount, agg: sum}\nrules:\n  - {x: avg}\n", "orders", context)
+	          .error.find("needs a numeric or date x axis") != std::string::npos);
+	CHECK(CompileChart("mark: arc\ntheta: {field: amount, agg: sum}\ncolor: region\nrules:\n  - {y: 3}\n", "orders",
+	                   context)
+	          .error.find("no axes") != std::string::npos);
+	CHECK(CompileChart("mark: boxplot\nx: region\ny: amount\nrules:\n  - {y: avg}\n", "orders", context)
+	          .error.find("not available on a boxplot") != std::string::npos);
+	CHECK(CompileChart("mark: boxplot\nx: region\ny: amount\nrules:\n  - {y: 10}\n", "orders", context).error.empty());
+}
+
+static void TestChartNotes() {
+	ChartContext context;
+	context.columns = {{"ts", "TIMESTAMP"}, {"region", "VARCHAR"}, {"amount", "DECIMAL(18,2)"}, {"n", "BIGINT"}};
+	context.row_count = 100;
+	std::string base = "mark: line\nx: {field: ts, timeunit: month}\ny: {field: amount, agg: sum}\n";
+	auto plan = CompileChart(base + "notes:\n  - {x: 2026-06-01, y: 1200, text: \"Launch week\"}\n"
+	                                "  - {x: 2026-08-01, text: dip, circle: true, side: below, dx: 10, dy: -4}\n"
+	                                "  - {x: [2026-03-01, 2026-05-01], text: Promo, color: red}\n",
+	                         "orders", context);
+	// Notes are positions for the renderer: no query, values typed by their axis.
+	CHECK(plan.error.empty() && plan.queries.size() == 1);
+	auto &notes = plan.render.Get("notes")->Items();
+	CHECK(notes.size() == 3 && notes[0].Get("x")->Str() == "2026-06-01" && notes[0].Get("y")->Num() == 1200);
+	CHECK(notes[0].Get("text")->Str() == "Launch week" && notes[0].Get("circle") == nullptr);
+	CHECK(notes[1].Get("y") == nullptr && notes[1].Get("circle")->Truthy() && notes[1].Get("side")->Str() == "below");
+	CHECK(notes[1].Get("dx")->Num() == 10 && notes[1].Get("dy")->Num() == -4);
+	CHECK(notes[2].Get("x")->Items().size() == 2 && notes[2].Get("x")->Items()[1].Str() == "2026-05-01");
+	CHECK(notes[2].Get("color")->Str() == "red");
+
+	// A category position, on either axis.
+	auto bars = CompileChart("mark: bar\nx: {field: amount, agg: sum}\ny: region\nnotes:\n  - {y: EU, text: ours}\n",
+	                         "orders", context);
+	CHECK(bars.error.empty() && bars.render.Get("notes")->Items()[0].Get("y")->Str() == "EU");
+
+	auto fails = [&](const std::string &extra, const std::string &message) {
+		auto bad = CompileChart(base + extra, "orders", context);
+		if (bad.error.find(message) == std::string::npos) {
+			printf("    expected '%s', got '%s'\n", message.c_str(), bad.error.c_str());
+		}
+		return bad.error.find(message) != std::string::npos && bad.queries.empty();
+	};
+	CHECK(fails("notes: {x: 1}\n", "notes: must be a list"));
+	CHECK(fails("notes:\n  - hello\n", "each item is a mapping"));
+	CHECK(fails("notes:\n  - {text: hello}\n", "needs x: or y:"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01}\n", "needs text:"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, y: high, text: a}\n", "y must be a number, not 'high'"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, side: north}\n", "side must be above, below, left or right"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, dx: far}\n", "dx must be a number"));
+	CHECK(fails("notes:\n  - {x: 2026-06-01, text: a, label: b}\n", "unknown key 'label'"));
+	CHECK(fails("notes:\n  - {x: [2026-06-01, 2026-07-01], y: [1, 2]}\n", "only one of x and y"));
+	CHECK(fails("notes:\n  - {x: [2026-06-01], text: a}\n", "must be [from, to]"));
+	CHECK(fails("notes:\n  - {x: [2026-06-01, 2026-07-01], circle: true}\n", "circle needs a point"));
+	CHECK(CompileChart("mark: arc\ntheta: {field: amount, agg: sum}\ncolor: region\nnotes:\n  - {x: 1, text: a}\n",
+	                   "orders", context)
+	          .error.find("no axes") != std::string::npos);
+	CHECK(CompileChart("mark: histogram\nx: amount\nnotes:\n  - {x: 40, text: most orders}\n", "orders", context)
+	          .error.empty());
+}
+
 static void TestCellOptions() {
 	auto nb = ParseNotebook("-- %% a hide=code rows=25\nSELECT 1;\n-- %% b hide=everything\nSELECT 2;\n"
 	                        "-- %% c rows=0\nSELECT 3;\n-- %% d rows=lots\nSELECT 4;\n-- %% e hide=all\nSELECT 5;\n");
@@ -451,6 +584,8 @@ int main() {
 	TestJson();
 	TestLiterals();
 	TestChartCompiler();
+	TestChartReferences();
+	TestChartNotes();
 	TestCellOptions();
 	TestQueryCharts();
 	TestTimingSetting();
