@@ -401,6 +401,15 @@ In the editor, opening `revenue.sql` settles in 2.2 s and a Run all in 1.7 s.
 - The few pixels by which a moving glyph's mask can reveal a moving neighbour (above).
 - Taking a very large chart apart still costs one long frame when it scrolls into view.
 
+**Presenting scales the page, and the writer follows.** A presented screen (DESIGN §18) is the reading
+layout under one CSS transform. A piece's canvases sit inside that transform, so `layers()` measures
+the scale of their host (its on-screen width over its layout width) and positions, sizes and draws in
+the host's own px, with a backing store denser by the same factor. Characters measured from the
+browser's layout are divided by the scale; SVG text already carries it in its screen matrix, which is
+divided too. A presentation's pieces have their own keys, so each screen is written when it first
+arrives and never again; moving to it calls `Ink.fresh` so the key press does not make it a quick
+update. The glyph-alignment test is repeated on a scaled screen.
+
 ## Watch mode
 
 ![Watch mode: the opening of examples/revenue.sql](handwriting/watch-open.gif)
@@ -464,11 +473,12 @@ what a person drawing it would: draws a representative part properly, then fills
 `getPointAtLength`, a glyph's stroke data, an element's box for fades). When it leaves the band from 15%
 to 66% of the scrolling element's height, the page eases towards putting it at 36%. The reader takes
 over by scrolling (wheel, touch, scroll keys, a press on the scrollbar); following resumes when they
-have left the pen in view for 1.5 s, or press any key, or press ↧ in the controls. Text measured after
+have left the pen in view for 1.5 s, or press any key, or press "follow" in the controls. Text measured after
 the page has scrolled is placed from the canvas's position at that moment.
 
 **Controls.** A small mark in the bottom-left corner, in the presenting mode's style, only while the pen
-has work, removed when it has none: ✎ ‖ − 1× + ⇥ ⇥⇥ ×. Keys: space or p pause and go on, + and −
+has work, removed when it has none: "✎ pause − 1× + skip finish ×" in faint handwriting ("go on" while
+paused, and "follow" while the reader has scrolled away). Keys: space or p pause and go on, + and −
 change speed, n finishes the piece being written, e writes everything now, Escape stops watching (the
 page completes and the mode goes back to gentle). While presenting, Space and Escape belong to the
 presentation; p and the other keys still work. Keys typed into a control are left alone, and Escape
