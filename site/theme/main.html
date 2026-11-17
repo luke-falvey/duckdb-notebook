@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="{{ config.theme.locale|default('en') }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{% if page and page.meta and page.meta.description %}<meta name="description" content="{{ page.meta.description }}">
+{% elif config.site_description %}<meta name="description" content="{{ config.site_description }}">{% endif %}
+{% if page and page.canonical_url %}<link rel="canonical" href="{{ page.canonical_url }}">{% endif %}
+<title>{% if page and page.title and not page.is_homepage %}{{ page.title|striptags }} · {% endif %}{{ config.site_name }}</title>
+<link rel="icon" href="{{ 'assets/favicon.svg'|url }}" type="image/svg+xml">
+<link rel="preload" href="{{ 'assets/fonts/Excalifont.woff2'|url }}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ 'assets/site.css'|url }}">
+<script>
+  // Before the first paint, so a dark page never flashes light.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('docs.theme'); } catch (e) {}
+    if (t) document.documentElement.setAttribute('data-theme', t);
+  })();
+  var base_url = {{ base_url|tojson }};
+</script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+  <a class="brand" href="{{ nav.homepage.url|url }}"><span class="duck" aria-hidden="true">▦</span> {{ config.site_name }}</a>
+  <div class="search" role="search">
+    <label class="visually-hidden" for="mkdocs-search-query">Search the docs</label>
+    <input id="mkdocs-search-query" type="search" placeholder="Search" autocomplete="off">
+    <div id="mkdocs-search-results" class="search-results" data-no-results-text="Nothing found" hidden></div>
+  </div>
+  <button class="theme-toggle" id="theme-toggle" type="button" title="Light or dark" aria-label="Switch between light and dark"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M10 2.2a7.8 7.8 0 1 0 .1 15.6A7.8 7.8 0 0 0 10 2.2Z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M10 2.6v14.8a7.4 7.4 0 0 1 0-14.8Z" fill="currentColor"/></svg></button>
+  <a class="repo" href="{{ config.repo_url }}" title="Source on GitHub">GitHub</a>
+</header>
+
+<div class="layout">
+  <nav class="sidebar" aria-label="Site">
+    <details class="nav-toggle" id="nav-details">
+      <summary>Contents</summary>
+      <ul class="nav">
+      {%- for item in nav %}
+        {%- if item.is_section %}
+        <li class="section"><span class="section-title">{{ item.title }}</span>
+          <ul>
+          {%- for child in item.children %}
+            <li><a href="{{ child.url|url }}"{% if child.active %} class="active" aria-current="page"{% endif %}>{{ child.title }}</a></li>
+          {%- endfor %}
+          </ul>
+        </li>
+        {%- else %}
+        <li><a href="{{ item.url|url }}"{% if item.active %} class="active" aria-current="page"{% endif %}>{{ item.title }}</a></li>
+        {%- endif %}
+      {%- endfor %}
+      </ul>
+    </details>
+  </nav>
+
+  <main id="content" class="content">
+    <article class="page">
+      {% block content %}{{ page.content }}{% endblock %}
+    </article>
+    {% if page %}
+    <footer class="page-foot">
+      <div class="prev-next">
+        {% if page.previous_page %}<a class="prev" href="{{ page.previous_page.url|url }}">← {{ page.previous_page.title }}</a>{% else %}<span></span>{% endif %}
+        {% if page.next_page %}<a class="next" href="{{ page.next_page.url|url }}">{{ page.next_page.title }} →</a>{% endif %}
+      </div>
+      <p class="small">
+        {% if page.edit_url and page.file.src_uri != 'reference/format.md' %}<a href="{{ page.edit_url }}">Edit this page</a> · {% endif %}
+        Set in Excalifont and Cascadia Code, under the
+        <a href="{{ 'assets/fonts/LICENSE.txt'|url }}">SIL Open Font License</a>.
+      </p>
+    </footer>
+    {% endif %}
+  </main>
+
+  {% if page and page.toc and page.toc.items and (page.toc.items|length > 1 or page.toc.items[0].children) and not page.is_homepage %}
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <ul>
+    {%- for h in page.toc.items %}
+      {%- for h2 in (h.children if h.level == 1 else [h]) %}
+      <li><a href="{{ h2.url }}">{{ h2.title }}</a></li>
+      {%- endfor %}
+    {%- endfor %}
+    </ul>
+  </aside>
+  {% endif %}
+</div>
+
+<script src="{{ 'assets/site.js'|url }}"></script>
+{%- for script in config.extra_javascript %}
+{{ script|script_tag }}
+{%- endfor %}
+</body>
+</html>

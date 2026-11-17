@@ -1,0 +1,3 @@
+# duckdb-notebook
+
+Coming soon.
