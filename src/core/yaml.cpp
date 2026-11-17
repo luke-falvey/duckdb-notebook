@@ -1,4 +1,5 @@
 #include "notebook/yaml.hpp"
+#include "notebook/text.hpp"
 
 #include <cctype>
 #include <cstdlib>
@@ -12,17 +13,6 @@ struct Line {
 	std::string text;
 	int number;
 };
-
-std::string Trim(const std::string &s) {
-	size_t b = 0, e = s.size();
-	while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) {
-		b++;
-	}
-	while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) {
-		e--;
-	}
-	return s.substr(b, e - b);
-}
 
 //! Removes a `#` comment that is outside quotes and starts the line or follows a space.
 std::string StripComment(const std::string &s) {

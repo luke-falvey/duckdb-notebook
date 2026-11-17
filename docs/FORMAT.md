@@ -313,16 +313,16 @@ y: {field: revenue, agg: sum, format: "$,.0f", title: Revenue}
 color: category
 ```
 
-**`mark`**: `line`, `area`, `bar`, `point`, `rect`, `rule`, `tick`, `text`, `arc`, `boxplot`,
-`histogram`, `density`, `hexbin`.
+**`mark`**: `line`, `area`, `bar`, `point` (or `circle`, `square`), `rect`, `rule`, `tick`, `text`,
+`arc`, `boxplot`, `histogram`, `density`, `hexbin`.
 
-**Channels**: `x`, `y`, `x2`, `y2`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`,
+**Channels**: `x`, `y`, `x2`, `y2`, `theta`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`,
 and `facet` (`{row: …, col: …}`) for small multiples. A channel is a column name or a mapping:
 
 | Key | Meaning |
 |---|---|
 | `field` | Column in `from` |
-| `agg` | `sum`, `avg`, `min`, `max`, `count`, `count_distinct`, `median`, `p05`…`p99` |
+| `agg` (or `aggregate`) | `sum`, `avg` (or `mean`), `min`, `max`, `count`, `count_distinct` (or `distinct`), `median`, `p05`…`p99` |
 | `bin` | `true` or `{step: …}` / `{maxbins: …}` |
 | `timeunit` | Truncates: `year`, `quarter`, `month`, `week`, `date`, `hour`, `minute`, `second`. Extracts a cyclic part: `monthofyear`, `dayofmonth`, `dayofweek` (or `day`, 0 = Sunday), `hours` (or `hourofday`), `minutes` |
 | `sort` | `asc`, `desc`, or a channel with optional `-` (`-x`) |
@@ -469,7 +469,6 @@ sparkline: {x: month, y: revenue}
 ```yaml
 type: map
 geometry: geom
-layer: choropleth
 color: {field: population, scheme: viridis}
 ```
 
@@ -519,7 +518,7 @@ the notebook file.
 
 ## 7. Running without the notebook
 
-Three levels, from least to most capable:
+Four ways, from least to most capable:
 
 1. **The file as-is in any DuckDB client.** It always parses. It runs to completion only if cells do
    not refer to each other by cell name, because the view wrapper is added by the runner. Notebooks
@@ -585,8 +584,8 @@ edited. This is why naming cells you care about matters (§2).
 - the keys of the cells it reads, so a change anywhere upstream reaches every cell below it;
 - the type and value of every variable its SQL reads (unset, `NULL` and a value are all different).
 
-What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width` and
-`height`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
+What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width`,
+`height`, `label` and `placeholder`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
 that filters it changes that cell's key, not the keys of the cells that read it.
 
 **Fresh or stale.** When a notebook is opened, each cell's key is computed from the text as it is now

@@ -63,6 +63,8 @@ struct Cell {
 
 	//! Value of an option, or `fallback` if absent.
 	std::string Option(const std::string &key, const std::string &fallback = std::string()) const;
+	//! An input's `from=<relation>.<column>`, split at the last dot. False when there is no dot.
+	bool InputFrom(std::string &relation, std::string &column) const;
 };
 
 struct Notebook {

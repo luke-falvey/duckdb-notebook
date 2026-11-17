@@ -85,4 +85,19 @@ void ThrowIfInvalid(const notebook::Notebook &notebook, const string &path) {
 	}
 }
 
+unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunctionInitInput &input) {
+	return make_uniq<OnceState>();
+}
+
+string NamedString(TableFunctionBindInput &input, const char *key) {
+	auto found = input.named_parameters.find(key);
+	return found == input.named_parameters.end() || found->second.IsNull() ? string()
+	                                                                       : found->second.GetValue<string>();
+}
+
+bool NamedBool(TableFunctionBindInput &input, const char *key) {
+	auto found = input.named_parameters.find(key);
+	return found != input.named_parameters.end() && !found->second.IsNull() && found->second.GetValue<bool>();
+}
+
 } // namespace duckdb
