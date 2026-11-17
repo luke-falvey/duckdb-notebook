@@ -15,6 +15,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	RegisterNotebookStorage(loader);
 	RegisterNotebookExport(loader);
 	RegisterNotebookServer(loader);
+	RegisterNotebookPeek(loader);
 	RegisterNotebookCache(loader);
 }
 

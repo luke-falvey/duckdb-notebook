@@ -326,6 +326,25 @@ button.nb-present-start { font-size: 15px; margin-left: 14px; }
 .nb-hover-band { pointer-events: none; fill: var(--nb-mark); opacity: .35; }
 @media print { .nb-tip { display: none !important; } }
 
+/* Peek under the pen (app-peek.js): the first rows of the CTE or sub-query under the caret, on a paper
+   note fixed beside the code. Its box is drawn by Sketch.outline; it takes no part in the layout. */
+.nb-peek { position: fixed; z-index: 15; left: 0; top: 0; pointer-events: none; padding: 7px 12px 8px; font-size: 14px; line-height: 1.3;
+  color: var(--nb-fg); filter: drop-shadow(2px 3px 0 rgba(30, 30, 30, .1)); }
+.nb-peek-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+.nb-peek-name { font: 12.5px/1.3 var(--nb-mono); color: #c2255c; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nb-peek-kind, .nb-peek-foot { color: var(--nb-faint); font-size: 12.5px; }
+.nb-peek-foot { margin-top: 3px; white-space: nowrap; }
+table.nb-peek-grid { border-collapse: collapse; font-size: 14px; }
+table.nb-peek-grid th, table.nb-peek-grid td { padding: 0 12px 0 0; text-align: left; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-weight: normal; }
+table.nb-peek-grid th { color: var(--nb-muted); border-bottom: 1px solid var(--nb-border); }
+table.nb-peek-grid th:last-child, table.nb-peek-grid td:last-child { padding-right: 0; }
+table.nb-peek-grid td.nb-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The part a note describes, marked in the code behind the text. */
+.nb-peek-marks { position: absolute; inset: 0; pointer-events: none; }
+.nb-peek-marks i { position: absolute; background: linear-gradient(transparent 58%, var(--nb-mark) 58%, var(--nb-mark) 94%, transparent 94%); opacity: .7; }
+body.presenting .nb-peek, body.presenting .nb-peek-marks { display: none !important; }
+@media print { .nb-peek, .nb-peek-marks { display: none !important; } }
+
 /* Handwriting (render-ink.js). While a piece is being written its glyphs are transparent and a canvas
    over it writes them; controls keep their own text, as they fade in whole. Nothing here applies once
    the piece is finished: Ink removes the class and the canvases. */

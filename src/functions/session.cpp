@@ -4,6 +4,7 @@
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/connection.hpp"
 #include "notebook/chart.hpp"
+#include "notebook/functions.hpp"
 #include "notebook/script.hpp"
 #include "notebook/sql_lexer.hpp"
 #include "notebook/yaml.hpp"
@@ -249,6 +250,60 @@ Json Runner::Page(const string &sql, idx_t limit, string &error) {
 	}
 	int64_t total;
 	return ResultToJson(*result, limit, total);
+}
+
+Json Runner::Peek(const string &sql, idx_t cursor, idx_t rows, idx_t timeout_ms) {
+	auto nothing = [](const string &reason) {
+		return Json::Object().Set("reason", Json::String(reason));
+	};
+	auto &context = *connection->context;
+	PeekTarget target;
+	// Finding the part reads the catalog (are the functions it calls safe?), which needs a transaction.
+	context.RunFunctionInTransaction([&]() { target = FindPeekTarget(context, sql, cursor); });
+	if (target.sql.empty()) {
+		return nothing(target.reason);
+	}
+	auto run = [&](const string &statement) {
+		auto result = connection->Query(statement);
+		return !result->HasError();
+	};
+	// Three guards on top of FindPeekTarget's: a time limit, a transaction that cannot write, and
+	// a rollback whatever happens. The limit is this connection's own setting and goes with it.
+	if (!run("SET SESSION max_execution_time = " + std::to_string(MaxValue<idx_t>(timeout_ms, 1))) ||
+	    !run("BEGIN TRANSACTION READ ONLY")) {
+		return nothing("a read-only transaction could not be started");
+	}
+	string error;
+	auto page = Page(target.sql + " LIMIT " + std::to_string(rows + 1), rows, error);
+	Json total;
+	if (error.empty()) {
+		auto fetched = static_cast<idx_t>(page.Get("total")->Num());
+		if (fetched <= rows) {
+			total = Json::Number(static_cast<double>(fetched));
+		} else {
+			// More rows than shown: count them if that is quick, and say nothing if it is not.
+			run("SET SESSION max_execution_time = " + std::to_string(MaxValue<idx_t>(timeout_ms / 3, 1)));
+			auto counted = connection->Query("SELECT count(*) FROM (" + target.sql + ")");
+			if (!counted->HasError()) {
+				if (auto chunk = counted->Fetch()) {
+					total = Json::Number(static_cast<double>(chunk->GetValue(0, 0).GetValue<int64_t>()));
+				}
+			}
+		}
+	}
+	run("ROLLBACK");
+	if (!error.empty()) {
+		return nothing(error);
+	}
+	return Json::Object()
+	    .Set("kind", Json::String(target.kind))
+	    .Set("name", Json::String(target.name))
+	    .Set("start", Json::Number(static_cast<double>(target.start)))
+	    .Set("end", Json::Number(static_cast<double>(target.end)))
+	    .Set("columns", *page.Get("columns"))
+	    .Set("rows", *page.Get("rows"))
+	    .Set("more", *page.Get("truncated"))
+	    .Set("total", total);
 }
 
 Json Runner::Chart(const notebook::Notebook &notebook, const notebook::Cell &cell, const string &spec) {

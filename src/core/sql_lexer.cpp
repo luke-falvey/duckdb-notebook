@@ -277,6 +277,34 @@ bool IsQueryStatement(const std::string &statement) {
 	return false;
 }
 
+std::vector<ParenPair> ParenPairs(const std::string &sql) {
+	std::vector<ParenPair> pairs;
+	std::vector<size_t> open;
+	SqlScanner scan(sql);
+	while (!scan.Done()) {
+		auto state = scan.CurrentState();
+		size_t at = scan.Position();
+		scan.Advance();
+		if (state != SqlScanner::State::CODE) {
+			continue;
+		}
+		if (sql[at] == '(') {
+			open.push_back(pairs.size());
+			pairs.push_back({at, std::string::npos});
+		} else if (sql[at] == ')' && !open.empty()) {
+			pairs[open.back()].close = at;
+			open.pop_back();
+		}
+	}
+	std::vector<ParenPair> balanced;
+	for (auto &pair : pairs) {
+		if (pair.close != std::string::npos) {
+			balanced.push_back(pair);
+		}
+	}
+	return balanced;
+}
+
 std::vector<std::string> ReferencedVariables(const std::string &sql) {
 	std::vector<std::string> names;
 	auto add = [&](const std::string &name) {

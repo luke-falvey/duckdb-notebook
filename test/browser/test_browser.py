@@ -1573,6 +1573,284 @@ def test_chart_marks(browser, work):
     page.close()
 
 
+def test_peek(browser, work):
+    # Peek under the pen: with the caret in a CTE or sub-query of a query cell, its first rows show in a
+    # note beside the code. Nothing is asked before the notebook has run, and nothing else changes.
+    notebook = os.path.join(work, "peek.sql")
+    shutil.copy(os.path.join(ROOT, "test", "notebooks", "peek.sql"), notebook)
+    shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+    shell.stdin.write("CREATE SEQUENCE nb_peek_seq; CREATE MACRO nb_peek_sneaky() AS nextval('nb_peek_seq');\n")
+    shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+    shell.stdin.flush()
+    url = shell.stdout.readline().strip()
+
+    def caret(page, cell, needle, skip=0):
+        """Puts the caret just before `needle` (plus `skip`) in a cell's SQL, with a real key press."""
+        area = page.locator(f".nb-cell[data-idx='{cell}'] textarea.nb-code-over").first
+        area.scroll_into_view_if_needed()
+        area.click()
+        area.evaluate("(e, a) => { const i = e.value.indexOf(a[0]) + a[1] - 1; e.setSelectionRange(i, i); }", [needle, skip])
+        page.keyboard.press("ArrowRight")
+        return area
+
+    def note_text(page):
+        return page.locator(".nb-peek").inner_text().replace("\t", " ").split("\n")
+
+    def peek(page, statement, needle):
+        return page.evaluate("([s, n]) => App.api('POST', '/api/peek', {sql: s, cursor: s.indexOf(n), rows: 5})", [statement, needle])
+
+    def gone(page):
+        page.wait_for_selector(".nb-peek", state="detached", timeout=5000)
+
+    try:
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors = watch(page)
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.wait_for_function("document.fonts.status === 'loaded'")
+
+        # Trust: opening a notebook does not run it, so there is nothing to peek at yet.
+        caret(page, 3, "amount >= $floor")
+        page.wait_for_timeout(900)
+        refused = peek(page, "SELECT * FROM (SELECT 1 AS a) q", "SELECT 1")
+        check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
+              f"nothing is peeked at in a notebook that has not been run ({refused})")
+
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        settle(page)
+        # Positions relative to the first cell: clicking into a cell may scroll the page, which is not a layout change.
+        boxes = "() => { const all = [...document.querySelectorAll('.nb-cell')], top = all[0].getBoundingClientRect().y; return all.map(c => { const r = c.getBoundingClientRect(); return [r.x, r.y - top, r.width, r.height].map(Math.round).join(','); }).join(';'); }"
+        layout_before = page.evaluate(boxes)
+
+        # A CTE: its name, a few rows and columns, and how many rows there are.
+        area = caret(page, 3, "amount >= $floor")
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        lines = note_text(page)
+        check(lines[0] == "big" and lines[1] == "cte" and lines[2] == "id region day amount" and lines[3] == "2 east 2026-01-03 84"
+              and len(lines) == 9 and lines[8] == "first 5 of 320 rows",
+              f"with the caret in a CTE, a note shows its name, its first rows and its row count ({lines})")
+        marks = page.locator(".nb-cell[data-idx='3'] .nb-peek-marks i").count()
+        check(marks == 3, f"the part the note describes is marked in the code, line by line ({marks} lines)")
+        # The note is fixed to the window and beside the code: no line of code is under it, nothing moved.
+        overlap = page.evaluate("""() => {
+          const n = document.querySelector('.nb-peek').getBoundingClientRect();
+          const pre = document.querySelector(".nb-cell[data-idx='3'] .nb-code-hl"), range = document.createRange();
+          range.selectNodeContents(pre);
+          return [...range.getClientRects()].filter(r => r.width > 0 && r.right > n.left && r.left < n.right && r.bottom > n.top && r.top < n.bottom).length;
+        }""")
+        inside = page.evaluate("() => { const n = document.querySelector('.nb-peek').getBoundingClientRect(); return n.left >= 0 && n.top >= 0 && n.right <= innerWidth && n.bottom <= innerHeight; }")
+        layout_after = page.evaluate(boxes)
+        check(overlap == 0 and inside and page.evaluate("getComputedStyle(document.querySelector('.nb-peek')).position") == "fixed"
+              and layout_after == layout_before and page.evaluate("document.querySelector('.nb-peek').parentNode === document.body"),
+              f"the note covers no code, fits the window and takes no part in the layout ({overlap} lines under it, inside {inside}, "
+              f"layout {'kept' if layout_after == layout_before else layout_before + ' -> ' + layout_after})")
+        check(page.locator(".nb-cell[data-idx='3'] .nb-badge.fresh").count() == 1
+              and page.locator(".nb-cell[data-idx='3'] table.nb-grid tbody tr").count() == 4,
+              "the cell's own result and state are untouched by a peek")
+
+        # A sub-query in FROM is named by its alias; one in an expression has no name.
+        caret(page, 3, "sum(total)")
+        page.wait_for_function("(document.querySelector('.nb-peek-name') || {}).textContent === 's'", timeout=5000)
+        lines = note_text(page)
+        check(lines == ["s", "sub-query", "everything", "41,440", "1 row"], f"a sub-query in FROM shows under its alias ({lines})")
+        caret(page, 4, "share > 0.2")
+        page.wait_for_function("(document.querySelector('.nb-peek-name') || {}).textContent === 'sub-query'", timeout=5000)
+        lines = note_text(page)
+        check(lines[:2] == ["sub-query", "region"] and sorted(lines[2:6]) == ["east", "north", "south", "west"] and lines[6] == "4 rows",
+              f"a sub-query in an expression is peeked at too, reading the cells above ({lines})")
+
+        # The main query is not a part: the note goes away when the caret moves on.
+        caret(page, 3, "ORDER BY t.region")
+        gone(page)
+        check(page.locator(".nb-peek-marks").count() == 0, "moving the caret into the main query takes the note and its marks away")
+
+        # Typing: the peek follows the text as typed (and the session's variables), the result does not.
+        area = caret(page, 3, "$floor", len("$floor"))
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        area.type(" + 100", delay=15)
+        page.wait_for_function("(document.querySelector('.nb-peek-foot') || {}).textContent === 'first 5 of 120 rows'", timeout=5000)
+        check(note_text(page)[3] == "4 north 2026-01-05 158" and page.locator(".nb-cell[data-idx='3'] table.nb-grid tbody tr td").nth(2).inner_text() == "80",
+              "typing in a CTE updates its peek, not the cell's result")
+        # SQL that does not parse shows nothing; mended, the note returns.
+        area.type(" (", delay=15)
+        gone(page)
+        page.keyboard.press("Backspace")
+        page.keyboard.press("Backspace")
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        check(note_text(page)[0] == "big", "nothing shows while the SQL does not parse; the note returns when it does")
+
+        # Escape puts the note away until the caret moves to another part.
+        page.keyboard.press("Escape")
+        gone(page)
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_timeout(900)
+        still_gone = page.locator(".nb-peek").count() == 0
+        caret(page, 3, "count(*)")
+        page.wait_for_function("(document.querySelector('.nb-peek-name') || {}).textContent === 'totals'", timeout=5000)
+        check(still_gone, "Escape dismisses the note for that part; another part shows its own")
+        # Leaving the cell takes it away.
+        page.locator("#title").click()
+        gone(page)
+        check(True, "the note goes when the caret leaves the cell")
+
+        # Safety, through the API the editor uses: statements that change data, parts with side
+        # effects, anything that would write, and anything slow.
+        refusals = [
+            peek(page, "INSERT INTO nb_peek_sales SELECT * FROM (SELECT 1000, 'north', DATE '2026-01-01', 1) q", "SELECT 1000"),
+            peek(page, "WITH gone AS (DELETE FROM nb_peek_sales RETURNING id) SELECT * FROM (SELECT 1 AS a) q", "SELECT 1"),
+            peek(page, "SELECT * FROM (SELECT nextval('nb_peek_seq') AS n) q", "nextval"),
+            peek(page, "SELECT * FROM (SELECT nb_peek_sneaky() AS n) q", "nb_peek_sneaky"),
+        ]
+        reasons = [r.get("reason", "") for r in refusals]
+        check("not a query" in reasons[0] and "changes data" in reasons[1] and "side effects" in reasons[2] and "read-only" in reasons[3]
+              and not any("rows" in r for r in refusals),
+              f"statements that change data, side effects and writes are never peeked at ({reasons})")
+        slow = page.evaluate("""async () => { const t = performance.now();
+          const s = 'SELECT * FROM (SELECT count(*) AS n FROM range(100000000000) a, range(1000) b WHERE a.range % 7 = b.range) q';
+          const r = await App.api('POST', '/api/peek', {sql: s, cursor: s.indexOf('count'), rows: 5}); return [performance.now() - t, r.reason || '']; }""")
+        check(slow[0] < 4000 and "execution time" in slow[1], f"a peek that takes too long is given up ({round(slow[0])} ms: {slow[1][:60]})")
+        check(page.evaluate("App.api('GET', '/api/page?cell=3&offset=0&limit=5').then(r => r.rows.length)") == 4,
+              "the session's views and variables are as they were after peeking")
+        shell.stdin.write("SELECT 'left: ' || count(*) FROM nb_peek_sales; SELECT 'seq: ' || nextval('nb_peek_seq');\n")
+        shell.stdin.flush()
+        left = [shell.stdout.readline().strip(), shell.stdout.readline().strip()]
+        check(left == ["left: 400", "seq: 1"], f"nothing was inserted, deleted or advanced by peeking ({left})")
+
+        # The gear's switch turns it off, remembered in this browser.
+        page.click("#gear")
+        page.uncheck("#peek")
+        page.keyboard.press("Escape")
+        caret(page, 3, "count(*)")
+        page.wait_for_timeout(900)
+        check(page.locator(".nb-peek").count() == 0 and page.evaluate("localStorage.getItem('nb.peek')") == "off",
+              "the gear menu's peek switch turns it off")
+        page.reload()
+        page.wait_for_selector(".nb-cell")
+        check(not page.locator("#peek").is_checked(), "the switch is remembered after a reload")
+        page.click("#gear")
+        page.check("#peek")
+        page.keyboard.press("Escape")
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        caret(page, 3, "count(*)")
+        page.wait_for_selector(".nb-peek", timeout=5000)
+        check(note_text(page)[0] == "totals", "switched on again, it peeks again")
+        reference_note = html_of(page, ".nb-peek")
+        # Presenting shows the notebook a screen at a time: no note there, and none after leaving it until asked.
+        page.evaluate("Present.enter(0)")
+        page.wait_for_function("document.body.classList.contains('presenting')", timeout=5000)
+        page.wait_for_timeout(700)
+        presenting_notes = page.locator(".nb-peek:visible").count()
+        page.evaluate("Present.leave()")
+        check(presenting_notes == 0, "no peek note shows while presenting")
+
+        # A narrow window has no room beside the code for a wide note: it goes under it, still over no code.
+        narrow = browser.new_page(viewport={"width": 600, "height": 800})
+        narrow.goto(still(url))
+        narrow.wait_for_selector(".nb-cell")
+        narrow.click("#run-all")
+        narrow.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        caret(narrow, 3, "amount >= $floor")
+        narrow.wait_for_selector(".nb-peek", timeout=5000)
+        fits = narrow.evaluate("""() => {
+          const n = document.querySelector('.nb-peek').getBoundingClientRect();
+          const pre = document.querySelector(".nb-cell[data-idx='3'] .nb-code-hl"), range = document.createRange();
+          range.selectNodeContents(pre);
+          const under = [...range.getClientRects()].filter(r => r.width > 0 && r.right > n.left && r.left < n.right && r.bottom > n.top && r.top < n.bottom).length;
+          return [under, n.left >= 0 && n.right <= innerWidth, document.documentElement.scrollWidth <= innerWidth];
+        }""")
+        check(fits == [0, True, True], f"in a narrow window the note still covers no code and stays on the page ({fits})")
+        narrow.close()
+
+        # Written by the pen, it leaves no trace: the finished note is the note drawn with ink off.
+        inked = browser.new_page(viewport={"width": 1300, "height": 900})
+        inked_errors = watch(inked)
+        inked.goto(url)
+        inked.wait_for_selector(".nb-cell")
+        inked.click("#run-all")
+        inked.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        inked.wait_for_function("Ink.jobs().every(j => j.state === 'parked')", timeout=20000)
+        caret(inked, 3, "count(*)")
+        inked.wait_for_selector(".nb-peek", timeout=5000)
+        started = inked.evaluate("performance.now()")
+        inked.wait_for_function("!Ink.jobs().some(j => j.key === 'peek') && !document.querySelector('.nb-peek canvas.ink-layer, .nb-peek .ink-hide')", timeout=10000)
+        took = inked.evaluate("performance.now()") - started
+        state = inked.evaluate("() => ({ canvases: document.querySelectorAll('.nb-peek canvas.ink-layer').length, hidden: document.querySelectorAll('.nb-peek .ink-hide, .nb-peek.ink-hide').length, wrote: Ink.plans ? Ink.plans.some(p => p.key === 'peek') : null })")
+        check(state["canvases"] == 0 and state["hidden"] == 0 and html_of(inked, ".nb-peek") == reference_note and took < 1500,
+              f"the pen writes the note in {round(took)} ms and leaves it exactly as drawn without the animation ({state})")
+        check(not inked_errors, f"no browser errors while the note is written {inked_errors[:3]}")
+        inked.close()
+
+        # Trust again: text that arrives from the file on disk has not been run by the reader.
+        with open(notebook, "a") as f:
+            f.write("\n-- %% added\nSELECT * FROM (SELECT 42 AS answer) q;\n")
+        page.wait_for_function("document.querySelectorAll('.nb-cell').length === 6", timeout=15000)
+        caret(page, 5, "42")
+        page.wait_for_timeout(900)
+        refused = peek(page, "SELECT * FROM (SELECT 1 AS a) q", "SELECT 1")
+        check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
+              "a notebook reloaded from disk is not peeked at until it is run again")
+        check(not errors, f"no browser errors while peeking {errors[:3]}")
+    finally:
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+
+
+def test_peek_cached(browser, work):
+    # The result cache shows a notebook's last results when it is opened again. That is not a run: until
+    # the reader runs something in this server, nothing is peeked at (DESIGN section 3).
+    notebook = os.path.join(work, "peek_cached.sql")
+    shutil.copy(os.path.join(ROOT, "test", "notebooks", "peek.sql"), notebook)
+    db = os.path.join(work, "peek_cached.duckdb")
+
+    def start():
+        shell = subprocess.Popen([DUCKDB, "-init", "/dev/null", "-noheader", "-list", db], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=work, bufsize=1)
+        shell.stdin.write(f"SELECT url FROM notebook_start('{notebook}', open := false);\n")
+        shell.stdin.flush()
+        return shell, shell.stdout.readline().strip()
+
+    def stop(shell):
+        shell.stdin.write("SELECT stopped FROM notebook_stop();\n.quit\n")
+        shell.stdin.flush()
+        shell.communicate(timeout=30)
+
+    probe = "() => App.api('POST', '/api/peek', {sql: 'SELECT * FROM (SELECT 1 AS a) q', cursor: 20, rows: 5})"
+    shell, url = start()
+    try:
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        page.click("#run-all")
+        page.wait_for_function("document.getElementById('status').textContent.startsWith('Ran')", timeout=30000)
+        check(page.evaluate(probe).get("kind") == "subquery", "after a run, peeks are answered")
+        page.close()
+    finally:
+        stop(shell)
+    shell, url = start()
+    try:
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors = watch(page)
+        page.goto(still(url))
+        page.wait_for_function("document.querySelectorAll(\".nb-cell[data-idx='3'] table.nb-grid tbody tr\").length === 4", timeout=10000)
+        area = page.locator(".nb-cell[data-idx='3'] textarea.nb-code-over")
+        area.click()
+        area.evaluate("e => { const i = e.value.indexOf('count(*)') - 1; e.setSelectionRange(i, i); }")
+        page.keyboard.press("ArrowRight")
+        page.wait_for_timeout(900)
+        refused = page.evaluate(probe)
+        check(page.locator(".nb-peek").count() == 0 and refused.get("reason") == "nothing has been run yet",
+              f"a notebook reopened with its cached results is not peeked at until it is run ({refused})")
+        check(not errors, f"no browser errors reopening a cached notebook {errors[:3]}")
+        page.close()
+    finally:
+        stop(shell)
+
+
 def main():
     work = tempfile.mkdtemp(prefix="notebook_browser_test_")
     with sync_playwright() as p:
@@ -1592,6 +1870,8 @@ def main():
             test_ink_watch(browser, work)
             test_present(browser, work)
             test_present_editor(browser, work)
+            test_peek(browser, work)
+            test_peek_cached(browser, work)
         finally:
             browser.close()
     shutil.rmtree(work, ignore_errors=True)
