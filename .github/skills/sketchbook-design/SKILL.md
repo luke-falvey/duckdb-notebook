@@ -78,7 +78,8 @@ query hide=code rows=10                          (detail table)
 - **Continuous colour**: `scheme: blues` (default), `greens`, `reds`, `oranges`, `purples`, `greys`,
   `viridis`, `magma`. Sequential data only; do not use them for categories.
 - **Pies** only for 2 to 5 parts of one whole; otherwise ranked bars.
-- **Reference lines** via `layers` (a `rule` at `agg: avg`) say more than another series.
+- **Reference lines** (`rules: [{y: avg, label: Average}]`) and target `bands` say more than another series.
+- **A note** (`notes: [{x: 2026-02-01, text: "a short month"}]`) tells the reader where to look. One or two per chart, a few words each.
 
 ## Tables
 

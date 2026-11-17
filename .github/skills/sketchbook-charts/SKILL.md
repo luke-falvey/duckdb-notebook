@@ -78,8 +78,9 @@ A chart cell's body must be exactly one block comment: no `--` lines.
 | Days of the year | `type: calendar` |
 | Places | `type: map` with `lat`/`lon` (or `geometry` with the spatial extension); no basemap offline |
 | A styled table | `type: table` with `columns`, `format`, `bar`, `heat`, `limit` |
+| Point at something | `notes: [{x: 2026-02-01, text: "a short month", circle: true}]` (below) |
 | Same chart per group | add `facet: {col: region}` (or `row`) |
-| A reference line or band | `layers:` with a `rule` (`agg: avg`) over an `area` or `line` |
+| A reference line or band | `rules: [{y: avg, label: Average}]`, `bands: [{y: [100, 200], label: Target}]` (below) |
 
 ## Channels in one look
 
@@ -91,7 +92,25 @@ minutes`), `sort` (`asc`, `desc`, `-x`), `type` (`quantitative temporal ordinal 
 Channels without `agg` become GROUP BY keys when another channel aggregates.
 
 Spec keys: `title`, `limit` (rows a query may return, default 10,000), `sample: <n>`, `facet`,
-`layers`, `select`, `filter`.
+`layers`, `select`, `filter`, `rules`, `bands`, `notes`.
+
+## Reference lines and bands
+
+```yaml
+rules:
+  - {y: avg, label: "average {value}"}     # avg median min max p05..p99 of what the chart draws on y
+  - {y: 150000, label: Target}             # a fixed value
+  - {x: 2026-06-01, label: Launch}         # on either axis; a category works too
+bands:
+  - {y: [100000, 150000], label: Target range}
+  - {y: [p25, p75]}                        # each end is a value or an aggregate
+```
+
+- They are drawn behind the marks in muted ink; `color:` overrides it. Keep labels to a word or two.
+- An aggregate is over the drawn values (the monthly sums, not the rows) and is computed in DuckDB.
+  For an aggregate of another column use `{y: {field: budget, agg: max}}`.
+- The axis grows to include them, so a target above every bar is still visible.
+- Use one or two. A reference line says "compared with what"; five say nothing.
 
 **Formats** (d3 subset the renderer understands): `[$][,][.N][~][f|d|s|e|%]`, for example `"$,.0f"`,
 `",d"`, `".1%"` (multiplies by 100), `".2s"` (12.3k), `"~f"` (trim zeros). Quote them in YAML.
@@ -101,6 +120,23 @@ Spec keys: `title`, `limit` (rows a query may return, default 10,000), `sample: 
 violet, cyan, yellow, indigo, ...), filled with matching pastels. To give categories fixed colours
 (statuses, traffic lights), set the order and colours on the channel:
 `color: {field: status, scale: {domain: [PASS, WARNING, ERROR], range: ["#2f9e44", "#f08c00", "#e03131"]}}`.
+
+## Notes
+
+```yaml
+notes:
+  - {x: 2026-02-01, text: "February is a short month", circle: true}   # points at the mark at that x
+  - {x: 2026-06-01, y: 182000, text: Launch week}                      # an exact position
+  - {x: [2026-05-01, 2026-08-01], text: steady summer}                 # a bracket over a range
+  - {y: Hardware, text: new supplier}                                  # a category, on either axis
+```
+
+- Positions are data values, so a note follows its point through resizing and re-querying. A note
+  tied to a value that inputs can change (the "best" category) can end up pointing at the wrong
+  thing: annotate what stays true, such as a date.
+- The text goes where there is room. If it lands badly, set `side: above | below | left | right`,
+  or nudge it with `dx` / `dy` (pixels).
+- Keep to a few words; text wraps at about 18 characters. One to three notes per chart.
 
 ## Selections and cross-filtering
 

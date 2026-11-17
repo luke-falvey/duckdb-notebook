@@ -429,7 +429,7 @@ The page decompresses with the browser's built-in `DecompressionStream` and draw
 opened. It works from a `file://` path, as an email attachment or on any static host; nothing needs a
 server. The fonts travel inside the page as data URIs, so it looks the same offline. Measured: the
 viewer and renderers are about 35 KB gzip-compressed and the two fonts 90 KB; the revenue example
-exports to 252 KB and the 27-chart gallery to 425 KB.
+exports to 252 KB and the 29-chart gallery to 425 KB.
 
 `hide := 'code'`, `'output'` or `'all'` leaves that part of every cell out of any export, on top of
 each cell's own `hide=`; prose and inputs always stay. The gear menu offers the same as two
@@ -765,3 +765,50 @@ what was built). It is a renderer concern like the look itself: nothing in the f
   everything; content below the fold waits until it is scrolled to.
 - **Off when it should be.** Reduced motion, print, PDF export, the gear menu's setting and `ink=off`
   all give the plain page. The existing browser tests run with `ink=off`.
+
+## 16. Charts that say "compared with what"
+
+Two additions to grammar charts, kept inside the sketchbook: nothing here added a toolbar, a panel or
+a library.
+
+### Rules and bands
+
+A reference line used to be a second layer with a `rule` mark. `rules:` and `bands:` make it one line
+of the spec (FORMAT §5.1).
+
+- **An aggregate is of what the chart draws.** `y: avg` on a chart of monthly sums means the average
+  month, not the average row. The compiler keeps each layer's query before downsampling and takes the
+  aggregate over it, as scalar subqueries in one extra query that returns one row. A line drawn with M4
+  or points binned to pixels are still averaged over the rows.
+- **Still the extension's query, the browser's drawing.** The browser gets a value per rule and never
+  aggregates. An export, a PDF and DuckDB-WASM therefore needed no new code: the reference query is one
+  more dataset.
+- **Behind the data, labels in front.** Lines and hatched bands are drawn after the axes and before the
+  marks, in muted ink. Their labels are short handwriting that hatching would hide, so they are written
+  after the marks with a halo of paper.
+- **They are part of the picture.** The axis grows to include a rule or band outside the data: a target
+  nobody reached is the point of drawing it.
+
+### Notes
+
+`notes:` lets an author point at something: a few handwritten words, a curved arrow, optionally a ring
+or a bracket (FORMAT §5.1).
+
+- **Data coordinates, pixel placement.** A note names a position in the values of the axes, which is
+  what survives a resize, a different page width in a PDF, and a query that returns other rows. Where
+  the text goes is decided at draw time, in pixels, by the renderer: the compiler only checks the note
+  and types its values by the axis.
+- **Finding room is cheap because hover already knew the geometry.** The marks leave their points and
+  bars behind for hover values. The same lists, plus points along each line, the rules and their
+  labels, and the notes already placed, are what a note must keep clear of. Eight directions at three
+  distances are scored by how much they cover and the cheapest wins; outside the plot costs most. It
+  is not a layout engine, and `side`, `dx` and `dy` are the escape hatch.
+- **Half a position is the common case.** "The bar for Hardware" or "February" names one axis; the note
+  then points at the mark there (the top of the bar, the highest line). This is positioning, done in
+  the browser from the rows the chart already has, not aggregation.
+- **Text width is estimated, not measured.** Measuring needs the font to have loaded, and a detached
+  SVG cannot be measured at all; an estimate per character places a note the same way in the editor,
+  an export and a PDF.
+- **The pen needed nothing.** Notes are `Sketch` shapes and SVG text appended after the marks, so they
+  are written after the marks with no animation code. A note in a query cell whose answer depends on
+  an input can point at the wrong thing; that is the author's to judge, and the skill says so.
