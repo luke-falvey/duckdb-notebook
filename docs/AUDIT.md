@@ -290,7 +290,7 @@ accepted invalid notebook; **low** = an edge case, a wrong message, or an ignore
 | B6 | low | `SET VARIABLE "lim"` (quoted): graph sees a setter, `ParameterError` does not | `sql_lexer.cpp:354`, `script.cpp:169-219` |
 | B7 | medium | `chart from=main.monthly` gets no edge; FORMAT says `main.` is ignored | `graph.cpp:120,132` vs `references.cpp:30-44` |
 | B8 | low | Sparkline field error has an empty chart type | `chart.cpp:623,664` |
-| B9 | medium | `/api/catalog` runs a query while a result is live on the same connection | `server.cpp:467-479` |
+| B9 | medium | `/api/catalog` runs a query while a result is live on the same connection | `server.cpp:467-479` Not a bug, checked in the bug-fix PR: `Connection::Query` materialises its result, so the second query cannot disturb the first (a catalog of 2,100 views lists them all). No change. |
 | B10 | low | Export: unknown `format` rejected only after the notebook has run; `data_format`/`interactive` unchecked; `params :=` names unchecked (run checks them); server `hide` unchecked | `export.cpp`, `server.cpp:547` |
 | B11 | low | Markdown export does not apply a prose cell's own `hide=output`; the viewer does | `export.cpp:496-508` |
 | B12 | low | Catalog columns are `draggable` with no `dragstart`; tooltip says click, code uses double-click | `app-extra.js:28-33` |
