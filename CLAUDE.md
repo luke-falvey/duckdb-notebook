@@ -29,6 +29,10 @@ the exports and the server. The chart compiler is `src/core/chart.cpp`; the brow
 with `frontend/render-*.js`, all of it hand-drawn through the primitives in
 `frontend/render-sketch.js` (the "sketchbook" look, DESIGN §6 Themes).
 
+Every piece of the page is written by a pen as it appears (`frontend/render-ink.js`, DESIGN §15,
+`docs/HANDWRITING.md`). The pen strokes for the fonts are generated offline by `tools/font_strokes.py`
+into `frontend/ink-strokes.js`.
+
 Not built: the result cache (FORMAT §8), a CodeMirror editor, charting libraries (see DESIGN §6).
 
 ## Layout
@@ -37,6 +41,7 @@ Not built: the result cache (FORMAT §8), a CodeMirror editor, charting librarie
 src/core/          Plain C++17, no DuckDB headers. Lexer, format parser, script generation, graph,
                    YAML and JSON, chart compiler.
 src/functions/     The SQL surface (one file per function), the runner, the server. DuckDB C++ API.
+tools/            Development tools whose output is checked in (pen strokes for the handwriting). Not run by CI.
 frontend/          The browser UI, export viewer, chart renderers and fonts: plain JS, CSS and woff2, no build
                    step. CMake compiles every file here into the extension (GetAsset).
 wasm/              The DuckDB-WASM runtime for html-wasm exports, built separately with Node.
@@ -144,6 +149,13 @@ SIL OFL; their licence is in `third_party/fonts/LICENSE.md`.
 Shared rendering lives in `frontend/render-*.js` and is used by both
 the editor (`app.js`, `app-extra.js`) and exports (`viewer.js`). Results travel as JSON.
 
+**Every new piece of the page is handed to the pen.** After building a piece, the editor and the viewer
+call `Ink.present(element, key, signature)`; see `write()` in `app.js` and `viewer.js`. Give it a key
+that names the piece stably across renders and a signature of what it shows (omit it to hash the
+element's markup). Draw shapes with `Sketch` and text as ordinary text, and they are animated for free.
+Never animate a component yourself, never store animation state on DOM nodes, and never leave anything
+behind: a written piece must be identical to the same piece drawn with `ink=off` (tested).
+
 **Never keep a `Connection` alive past a query.** A stored `Connection` owns the database instance.
 If the extension holds one, the database is not closed when the user closes it: the file stays locked
 and is not checkpointed. This was measured, not assumed (see DESIGN §11). Create connections where
@@ -169,6 +181,11 @@ behaviour involves DuckDB (execution, file access, result shape). SQL tests must
 create, because all test files share one database.
 
 ## Things that are easy to get wrong
+
+- Browser tests check the finished page and load every page with `ink=off` (`still()` in
+  `test/browser/test_browser.py`). To test the animation itself, stop its clock (`window.__INK_PAUSE`
+  in an init script, then `Ink.advance(ms)`); `test_ink` shows how. After changing the fonts, run
+  `tools/font_strokes.py` (`tools/README.md`).
 
 - Agents: never start detached background shells (servers, previews, watchers). Use attached async
   shells and stop everything you started before finishing a turn; stop servers by PID. Leftover

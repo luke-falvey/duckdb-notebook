@@ -1,7 +1,8 @@
 # Handwriting: every part of a notebook is written onto the page
 
-Status: plan. Nothing here is built. The stroke-recovery experiment it rests on is in
-[`spikes/handwriting-strokes`](../spikes/handwriting-strokes/README.md).
+Status: built. The plan below is kept as written; [What was built](#what-was-built) at the end records
+where the implementation departs from it and why, with the measurements. The stroke-recovery
+experiment it rests on is in [`spikes/handwriting-strokes`](../spikes/handwriting-strokes/README.md).
 
 ## Goal
 
@@ -313,3 +314,88 @@ Findings from the survey that shaped this plan:
 Not verified in the survey, and worth a quick check when it matters: whether dash patterns restart
 per subpath in every browser exactly as assumed, Playwright's handling of running animations in
 screenshots, and behaviour outside Chromium.
+
+## What was built
+
+Everything in the plan's order of work is in place: `frontend/render-ink.js` (`Ink`),
+`frontend/ink-strokes.js` (generated), `tools/font_strokes.py` with its coverage check, overrides and
+contact sheet (`tools/README.md`), the calls in `app.js` and `viewer.js`, the export flag, the gear
+setting, the print rules and the tests. Where the plan turned out wrong or impractical, this is what was
+done instead.
+
+**Glyphs in motion are composited together, once per frame.** The plan revealed each glyph on a scratch
+canvas and copied it to the piece's canvas. Measured, that cost about 0.2 ms a glyph, almost all of it a
+canvas flush forced by each copy, so 40 glyphs took most of a frame. Now the live layer draws the real
+text of every glyph in motion, then applies `destination-in` once with a mask holding every glyph's pen
+path so far. Painting fell from about 7 ms to under 2 ms a frame. A glyph's fat mask can in principle
+show a few pixels of a neighbour that is also in motion; in practice it is not visible. The last frame
+of a glyph is still exactly its `fillText`, which is what the done layer draws: the glyph alignment test
+finds no differing pixels in either font at five sizes.
+
+**A cell's bracket is drawn from its end.** A cell's outline is a full rounded box clipped to its left
+edge, and the left edge is the end of the path. Drawn forwards, the visible bracket appeared only at the
+end of a long invisible draw. `Ink.bracket(box)` draws it backwards, paces it by the part that shows
+(`visible`), and finishes the piece once that part is drawn.
+
+**A changed piece writes only what is new.** The plan rewrote a piece whenever its signature changed.
+After a run, that meant a paragraph disappearing and being written again only because a `{{ }}` value
+was filled in. Text (and decorated elements) that the previous version of the same key already showed
+appears at once; only new text is written.
+
+**Waiting below the fold is cheap.** Taking a piece apart (splitting paths, hiding strokes) for every
+chart on a long page cost a 200 ms frame at load. A piece below the fold is now hidden whole with
+`opacity: 0` on its root (still paint only) and taken apart when it scrolls into view. Being visible is
+checked on scroll and resize rather than with an `IntersectionObserver`, which does not report an
+element that jumps from below the viewport to above it in one scroll.
+
+**Plain marks.** A run of more than 60 plain marks (points, cells of a heat map) that makes up most of
+its group fades in with the group; otherwise it appears in eight chunks. One atom per mark meant 7,782
+style writes a frame for one calendar chart, and gathering the run into a temporary group cost 150 ms of
+DOM moves.
+
+**Degradation.** Level 0 writes everything; level 1 sweeps table rows after the first three and fades
+hatching; level 2 sweeps every text node (code then reads as typed, token by token). The level is chosen
+per piece from its actual peak concurrency on the timeline, jumping straight to 2 when far over. The cap
+on glyphs is 60, not 40: with batched compositing 60 costs less than 40 did, and 40 pushed ordinary
+paragraphs into sweeps.
+
+**Pace.** Pieces of one cell start close together (each 20% into the previous) and each cell 30% into
+the one above, so a screen fills as a wave. Pen speed is 2.6 px of ink per ms, a piece takes 260 to
+1,200 ms, and a whole batch is scaled to fit the 2.5 s budget.
+
+**Smaller choices.**
+- Keys in the editor follow the cell object, not its position, so moving or inserting a cell rewrites
+  nothing else. Code is keyed to the notebook's generation (opened or reloaded from disk), so typing
+  never writes.
+- `Sketch.outline` calls `Ink.replaced(old, svg)` when it redraws at a new size; any other change inside
+  a running piece (the table's header rule added a frame later) is caught by a `MutationObserver` and the
+  piece is attached again at the same point in time.
+- Cascadia Code's ligatures are left on. A run of operator characters in the code font is one unit,
+  swept rather than written, and drawn with one `fillText` so the canvas shapes the same ligature.
+- A heading's underline (a CSS `::after` background) is wiped in after its text through a
+  `--ink-wipe` custom property and a `clip-path`.
+- Anything that goes wrong inside a frame finishes every piece at once, so an error can never leave a
+  page hidden. Fonts that have not loaded after 3 s release the page.
+- `Ink.pause()`, `Ink.advance(ms)` and `window.__INK_PAUSE` stop and move the clock, for tests.
+- No `[notebook]` setting: the gear menu's setting (remembered per browser) and `ink=off` were enough,
+  and the format stays as it was.
+
+**Measured** in headless Chromium, software rendering, 1300 x 950, from `make browser_test` and by
+watching captured frames:
+
+| | `examples/revenue.sql` export | `examples/charts.sql` export |
+|---|---|---|
+| First screen written | 1.9 s | 2.4 s |
+| Frame interval, median / 95th percentile while writing | 16.7 / 16.7 ms | 16.7 / 16.8 ms |
+| Ink's work per frame, median / 95th percentile | 1.8 / 4.8 ms | 1.7 / 4.8 ms |
+| Worst frame (taking a large chart apart as it scrolls in) | | 60 to 75 ms |
+
+In the editor, opening `revenue.sql` settles in 2.2 s and a Run all in 1.7 s.
+
+**Not done, or not verified.**
+- Only Chromium was available. Safari's `stroke-dashoffset` repaint cost, Firefox's canvas text
+  rendering, and `-webkit-text-fill-color` with `::marker` outside Chromium are unverified.
+- The graph view, the catalog sidebar, the chart picker and the gear menu are tools rather than parts of
+  the notebook, and appear as before.
+- The few pixels by which a moving glyph's mask can reveal a moving neighbour (above).
+- Taking a very large chart apart still costs one long frame when it scrolls into view.

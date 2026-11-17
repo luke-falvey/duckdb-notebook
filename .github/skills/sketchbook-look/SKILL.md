@@ -23,6 +23,8 @@ us") and §14 (charts as tabs). For a single notebook's appearance use **sketchb
 | `frontend/render-typed.js` | Typed charts: KPI, gauge, sankey, chord, treemap, sunburst, icicle, network, funnel, candlestick, gantt, calendar, map, table, pivot, raw specs |
 | `frontend/app.js`, `app-extra.js`, `index.html` | The editor: toolbar and gear menu, cells, query tabs and chart spec editor, stubs for hidden parts, catalog, graph, chart picker |
 | `frontend/viewer.js` | The export viewer (html, precomputed, html-wasm, PDF) |
+| `frontend/render-ink.js` | `Ink`: the handwriting animation over every piece of the page (DESIGN §15, `docs/HANDWRITING.md`) |
+| `frontend/ink-strokes.js`, `tools/font_strokes.py` | Pen strokes for each glyph, generated from the fonts (`tools/README.md`) |
 | `frontend/*.woff2`, `third_party/fonts/LICENSE.md` | Excalifont and Cascadia Code (SIL OFL), served at `/assets/` and inlined into exports by `src/functions/export.cpp` |
 
 Both the editor and the viewer use the shared `render-*.js`, so a change there shows in both. Check
@@ -74,6 +76,27 @@ both anyway.
   in `export.cpp` (`url('/assets/<file>.woff2')` is replaced by a data URI).
 - **Print**: `@media print` rules hide chrome; PDF export prints the reading view. Check a PDF after
   layout changes.
+
+## Handwriting
+
+Every piece of the page is written by a pen as it appears (`render-ink.js`). The finished page is
+exactly the page without it, so the look itself is unchanged; these rules keep it that way:
+
+- **Hand new pieces to the pen.** After building a piece, call `Ink.present(element, key, signature)`
+  (see `write()` in `app.js` and `viewer.js`). The key names the piece across renders (`cell<id>/output`);
+  the signature says what it shows (omitted, Ink hashes the markup). The same key and signature is never
+  written twice, so `render()` storms replay nothing.
+- **Shapes via `Sketch`, text as text.** Stroked SVG paths are drawn along their length, text is written
+  glyph by glyph, controls, solid fills and backgrounds fade in, plain marks fade by group. A component
+  built from these needs no animation code of its own, and must not have any.
+- **Order is document order.** Inside a chart: axes, marks, fills, legend, labels, as the renderers append
+  them. Within a Sketch shape the outline is drawn before its hatching.
+- **No trace.** Nothing Ink does may remain: a written piece is identical, DOM and pixels, to the same
+  piece with `ink=off`. Do not read `canvas.ink-layer`, `.ink-hide` or inline styles that Ink sets.
+- **Look at it moving.** Check a new component part-way through, on a stopped clock (`Ink.pause()`,
+  `Ink.advance(ms)`, as `test_ink` does), in the editor, the reading view, dark mode and an export. The
+  gear menu's "handwriting" setting and `?ink=off` (or `&ink=off`) switch it off.
+- **New fonts** need pen strokes: run `tools/font_strokes.py` and look at `tools/contact-sheet.html`.
 
 ## Cell chrome
 
