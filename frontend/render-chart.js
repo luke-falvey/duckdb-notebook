@@ -461,7 +461,7 @@
   function arcChart(svgEl, layer, color, w, h) {
     var enc = layer.encoding, value = enc.theta || enc.y || enc.size;
     var total = layer.rows.reduce(function (a, r) { return a + Math.max(0, Number(r[value.column]) || 0); }, 0) || 1;
-    var cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 10, inner = layer.mark_innerRadius || 0, angle = -Math.PI / 2;
+    var cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 10, inner = Math.max(0, Math.min(Number(layer.mark_innerRadius) || 0, R - 4)), angle = -Math.PI / 2;
     layer.rows.forEach(function (r) {
       var v = Math.max(0, Number(r[value.column]) || 0), a2 = angle + v / total * Math.PI * 2;
       var large = a2 - angle > Math.PI ? 1 : 0;

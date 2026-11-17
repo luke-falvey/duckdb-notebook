@@ -316,6 +316,10 @@ color: category
 **`mark`**: `line`, `area`, `bar`, `point` (or `circle`, `square`), `rect`, `rule`, `tick`, `text`,
 `arc`, `boxplot`, `histogram`, `density`, `hexbin`.
 
+**Mark options**, beside `mark` in a spec or a layer: `opacity` (a number), `strokeWidth` (lines),
+`point: true` (dots on every point of a line) and `innerRadius` (an `arc` drawn as a donut, in pixels).
+Vega-Lite's `interpolate`, `stack` and `cornerRadius` are not drawn and are an error.
+
 **Channels**: `x`, `y`, `x2`, `y2`, `theta`, `color`, `size`, `opacity`, `shape`, `text`, `tooltip`, `order`,
 and `facet` (`{row: …, col: …}`) for small multiples. A channel is a column name or a mapping:
 

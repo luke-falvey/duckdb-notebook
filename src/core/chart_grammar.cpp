@@ -34,6 +34,13 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 		Fail("unknown mark '" + mark + "'");
 		return Json();
 	}
+	// Vega-Lite mark options with no drawing here: refused, so a spec does not quietly look different.
+	for (auto key : {"interpolate", "stack", "cornerRadius"}) {
+		if (layer_spec.Get(key)) {
+			Fail(std::string(key) + ": is not drawn; the sketchbook renderer has no such mark option");
+			return Json();
+		}
+	}
 	static const char *const CHANNELS[] = {"x",       "y",     "x2",   "y2",    "color", "size",
 	                                       "opacity", "shape", "text", "order", "theta"};
 	std::vector<Channel> channels;
@@ -270,9 +277,11 @@ Json Compiler::GrammarLayer(const Yaml &layer_spec, const Yaml &top) {
 	for (auto &entry : flags.Entries()) {
 		layer.Set(entry.first, entry.second);
 	}
-	for (auto key : {"opacity", "strokeWidth", "interpolate", "point", "stack", "cornerRadius"}) {
+	// Mark options the renderer draws (render-chart.js reads them as mark_<key>). `opacity` as a mapping is a
+	// channel, read above.
+	for (auto key : {"opacity", "strokeWidth", "point", "innerRadius"}) {
 		if (auto option = layer_spec.Get(key)) {
-			if (!layer_spec.Get(key)->IsMap() || std::string(key) != "opacity") {
+			if (!option->IsMap() || std::string(key) != "opacity") {
 				layer.Set(std::string("mark_") + key, option->ToJson());
 			}
 		}

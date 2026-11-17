@@ -432,6 +432,20 @@ static void TestChartErrors() {
 	// KPIs and gauges colour their value by bands of their own: {from, to, color}.
 	plan = CompileChart("type: kpi\nvalue: n\nbands: [{from: 0, to: 5, color: red}]\n", "t", context);
 	CHECK(plan.error.empty());
+	// B13: a donut's innerRadius reaches the renderer; mark options the renderer does not draw are refused
+	// rather than dropped.
+	ChartContext slices;
+	slices.columns = {{"g", "VARCHAR"}, {"n", "BIGINT"}};
+	plan = CompileChart("mark: arc\ntheta: n\ncolor: g\ninnerRadius: 40\n", "t", slices);
+	CHECK(plan.error.empty());
+	auto inner = plan.error.empty() ? plan.render.Get("layers")->Items()[0].Get("mark_innerRadius") : nullptr;
+	CHECK(inner && inner->Num() == 40);
+	plan = CompileChart("mark: line\nx: g\ny: n\ninterpolate: step\n", "t", slices);
+	CHECK(plan.error == "interpolate: is not drawn; the sketchbook renderer has no such mark option");
+	plan = CompileChart("mark: bar\nx: g\ny: n\nstack: false\n", "t", slices);
+	CHECK(plan.error == "stack: is not drawn; the sketchbook renderer has no such mark option");
+	plan = CompileChart("layers:\n  - {mark: bar, x: g, y: n, cornerRadius: 4}\n", "t", slices);
+	CHECK(plan.error == "cornerRadius: is not drawn; the sketchbook renderer has no such mark option");
 	// B30: a map's binned colour is binned once (its step is one CTE, not two).
 	ChartContext columns;
 	columns.columns = {{"g", "GEOMETRY"}, {"n", "BIGINT"}};
