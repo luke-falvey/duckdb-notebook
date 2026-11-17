@@ -99,8 +99,9 @@ async function testArch(browser, arch, pageScript) {
   );
   check('notebook_cells', cells.rows && cells.rows.length > 5 && cells.rows.every((r) => r.errors === 0), cells);
   const monthly = (cells.rows || []).find((r) => r.name === 'monthly');
-  check('notebook_cells: monthly has charts and depends on filtered', monthly && monthly.charts > 0 &&
-    (monthly.depends_on || []).includes('filtered'), monthly);
+  const filtered = (cells.rows || []).find((r) => r.name === 'filtered');
+  check('notebook_cells: monthly has charts and depends on filtered', monthly && filtered && monthly.charts > 0 &&
+    (monthly.depends_on || []).includes(filtered.idx), monthly);
 
   const script = await sql("SELECT sql FROM notebook_sql('revenue.sql')");
   check('notebook_sql', script.rows && /CREATE OR REPLACE TABLE orders/.test(script.rows[0].sql) &&
