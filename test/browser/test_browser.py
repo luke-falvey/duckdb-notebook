@@ -351,6 +351,30 @@ def test_metadata_error(browser, work):
     stop(shell)
 
 
+def test_metadata_first(browser, work):
+    # B3: the [notebook] cell's attach: applies to every request, not only runs: here an input's choices come from
+    # an attached database before anything has run.
+    folder = os.path.join(work, "attached")
+    os.makedirs(folder)
+    sql(os.path.join(folder, "extra.duckdb"), "CREATE TABLE picks AS SELECT unnest(['b', 'a']) AS c")
+    notebook = os.path.join(folder, "attach_first.sql")
+    with open(notebook, "w") as f:
+        f.write("-- %% [notebook]\n/*\nattach:\n  - {path: extra.duckdb, as: extra, read_only: true}\n*/\n\n"
+                "-- %% input pick select from=extra.picks.c\nSET VARIABLE pick = 'a';\n")
+    shell, url = serve(folder, notebook)
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        options = page.evaluate("() => App.api('GET', '/api/options?cell=1').then(r => r.values, e => 'error: ' + e.message)")
+        check(options == ["a", "b"], f"an input's choices from an attached database load before anything runs ({options})")
+        catalog = page.evaluate("() => App.api('GET', '/api/catalog').then(r => r.tables.map(t => t.qualified), e => 'error: ' + e.message)")
+        check(isinstance(catalog, list) and any("picks" in t for t in catalog), f"the catalog lists the attached database's tables ({catalog})")
+        page.close()
+    finally:
+        stop(shell)
+
+
 def test_cache(browser, work):
     """The result cache (FORMAT §8): a reopened notebook shows its last results without running anything,
     results whose inputs changed are marked, and the cache can be cleared or switched off."""
@@ -1844,6 +1868,7 @@ def main():
         try:
             test_server(browser, work)
             test_metadata_error(browser, work)
+            test_metadata_first(browser, work)
             test_cache(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.
             shells = glob.glob(os.path.expanduser(

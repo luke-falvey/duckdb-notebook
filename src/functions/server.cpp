@@ -428,6 +428,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            auto db = Database(state);
 		            Runner runner(*db, session->state);
 		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		            runner.ApplyMetadata(notebook, session->source);
 		            string type;
 		            if (auto cell = body.Get("cell")) {
 			            if (!cell->IsNull()) {
@@ -507,6 +508,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto db = Database(state);
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		           runner.ApplyMetadata(notebook, session->source);
 		           auto sql = notebook::DisplaySql(CellAt(notebook, Param(req, "cell")));
 		           if (sql.empty()) {
 			           throw InvalidInputException("That cell has no result to page through");
@@ -529,6 +531,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto db = Database(state);
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
+		           runner.ApplyMetadata(notebook, session->source);
 		           auto values = Json::Array();
 		           for (auto &value : InputChoices(runner.Conn(), CellAt(notebook, Param(req, "cell")), 1000)) {
 			           values.Push(ValueToJson(value));
@@ -542,6 +545,10 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    std::lock_guard<std::mutex> guard(session->lock);
 		    auto db = Database(state);
 		    Runner runner(*db, session->state);
+		    try { // the catalog lists what is there: a metadata failure is reported by a run, not here
+			    runner.ApplyMetadata(AnalyzeText(*runner.Conn().context, session->text), session->source);
+		    } catch (std::exception &) { // NOLINT
+		    }
 		    auto tables = Json::Array();
 		    auto result = runner.Conn().Query(
 		        "SELECT t.database_name, t.schema_name, t.table_name, t.kind, list({'name': c.column_name, 'type': "
