@@ -781,6 +781,25 @@ def test_exports(browser, work, chromium):
     check(True, "html-wasm: DuckDB-WASM re-runs the notebook's SQL in the page, offline")
     check(not errors, f"no browser errors in the html-wasm export {errors[:3]}")
 
+    # B14: a variable set in the page has the type the editor gives it, and {{ }} shows a value as the
+    # editor does (DuckDB's own text for it).
+    values = os.path.join(work, "wasm_values.html")
+    sql(db, f"FROM notebook_export('{os.path.join(ROOT, 'test', 'notebooks', 'wasm_values.sql')}', file := '{values}', "
+            f"format := 'html-wasm', wasm_runtime := '{runtime}')")
+    sql(db, "DROP TABLE IF EXISTS w_days")
+    page.goto(still("file://" + values))
+    page.wait_for_function("window.__NB_WASM === true", timeout=60000)
+    page.locator(".nb-input select").first.select_option(index=1)
+    page.wait_for_timeout(500)
+    number = page.locator(".nb-input input[type=number]")
+    number.fill("7")
+    number.dispatch_event("change")
+    page.wait_for_function("document.querySelector('.nb-md').textContent.includes(' 7')", timeout=30000)
+    page.wait_for_timeout(500)
+    text = page.locator(".nb-md").text_content().strip()
+    check(text == "values DOUBLE 7.0 DATE [1, 2] 1.50", f"html-wasm: variables and {{{{ }}}} values match the editor ({text})")
+    check(not errors, f"no browser errors in the html-wasm export {errors[:3]}")
+
 
 # ---- Handwriting (frontend/render-ink.js, docs/HANDWRITING.md) ----------------------------------
 

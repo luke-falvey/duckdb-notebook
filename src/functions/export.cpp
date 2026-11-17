@@ -326,7 +326,25 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 			}
 		}
 	}
-	return Json::Object().Set("db", Json::String(Base64(Gzip(bytes)))).Set("tables", exported).Set("setup", setup);
+	// The SQL type of every variable the page can set, as the editor gives it (VariableSqlType), so a value
+	// set in the page is the same value.
+	auto types = Json::Object();
+	for (auto &cell : notebook.cells) {
+		if (cell.kind == notebook::CellKind::INPUT && !cell.name.empty()) {
+			types.Set(cell.name, Json::String(VariableSqlType(connection, notebook, cell, cell.name)));
+		}
+		for (auto &spec : cell.charts) {
+			auto name = notebook::ChartSelectionInfo(spec).name;
+			if (!name.empty()) {
+				types.Set(name, Json::String(VariableSqlType(connection, notebook, cell, name)));
+			}
+		}
+	}
+	return Json::Object()
+	    .Set("db", Json::String(Base64(Gzip(bytes))))
+	    .Set("tables", exported)
+	    .Set("setup", setup)
+	    .Set("types", types);
 }
 
 //! The SQL a viewer running DuckDB-WASM needs per cell to refresh it.
