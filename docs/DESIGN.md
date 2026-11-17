@@ -282,7 +282,8 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 - Live preview while typing is a later addition. MotherDuck's Instant SQL does this by parsing the
   query locally, caching the data it depends on and rewriting it to run fast, and lets the user click
   into any CTE to see its rows. Here a named cell is already a view, so a preview is a `LIMIT` over
-  it and stepping through intermediate results is stepping through cells.
+  it and stepping through intermediate results is stepping through cells. Inside a cell, "peek under
+  the pen" (§19) shows the rows of the CTE or sub-query under the caret.
 
 ## 5. Notebooks inside the database
 
@@ -916,6 +917,75 @@ What building it taught us:
 - **`position: fixed` is not fixed in dark mode.** The dark theme is a filter on `body`, and a filtered
   element becomes the containing block of its fixed descendants. The page number stays in the corner
   only because the presenting page does not scroll: the screen scrolls inside its own box.
+
+## 19. Peek under the pen
+
+While a query cell is being edited, the first rows of the CTE or sub-query the caret is in appear in a
+small paper note beside the code, and the part is marked in the code with the highlighter. The cell is
+not run and its result does not change. It is the cell-sized half of Instant SQL (§4): cells already
+show their own results, so what was missing was a look inside one.
+
+**How it works.**
+
+- **Finding the part** (`src/functions/peek.cpp`, `FindPeekTarget`, also `notebook_peek(sql, cursor)`).
+  DuckDB's parser gives the parts: every CTE (with the CTEs it can see, scope by scope) and every
+  sub-query in `FROM`, in an expression or under a set operation. The parse tree records where
+  expressions and table references are but not where a CTE or a sub-query begins and ends, so each
+  part is matched to a pair of parentheses: the innermost pair (from `SqlScanner`, so strings and
+  comments are skipped) around something the part contains, whose text parses to the same query.
+  A CTE also starts at its name, found with DuckDB's tokenizer, so the caret on `name AS (` counts.
+  The innermost part around the caret wins; in the main query there is nothing to show.
+- **Building the statement.** A CTE becomes `WITH <the CTEs it reads> SELECT * FROM name`; a sub-query
+  becomes `SELECT * FROM (<it>)` with the CTEs it reads. Scopes are kept nested as they were, so a name
+  means what it meant in the cell, and a CTE that is not read is left out. It is printed from the parse
+  tree (`ToString`), not cut out of the text.
+- **Running it** (`Runner::Peek`, `POST /api/peek`). On a copy of the session's state, so the views and
+  variables of the cells above are there and nothing is recorded; in `BEGIN TRANSACTION READ ONLY`,
+  rolled back; with `max_execution_time` of 1.5 s on that connection. It fetches six rows to show five,
+  and counts the rest only if that is quick (a third of the limit).
+- **Safety.** Only a plain `SELECT` statement is looked into: `INSERT ... SELECT`, `CREATE TABLE AS`, a
+  CTE holding `INSERT ... RETURNING` are refused wherever the caret is. A part that calls a volatile
+  scalar function (`nextval`, `setval`, `write_log`...; `random()` and `uuid()` are allowed), or a table
+  function on a short list of ones that change something (`checkpoint`, `copy_database`, the
+  `notebook_*` functions, `enable_*`/`disable_*`), is refused before it runs. Anything the list misses
+  in the local database is stopped by the read-only transaction: a macro that hides `nextval` fails with
+  "cannot write". Effects outside it (an extension's function that writes to a remote system) are not.
+- **Trust.** Opening a notebook does not run it (§3), so the server refuses to peek in a session until
+  the reader has run something, and again after the text has been replaced from the file on disk. Its
+  own flag (`Session::trusted`) is separate from the result cache's `ran` (§17): a notebook reopened
+  showing its cached results has not been run, so nothing is peeked at until it is.
+- **Quiet.** The editor asks 320 ms after the caret stops; a newer peek interrupts the one running on
+  the server, and a run interrupts any peek. An answer for a caret or a text that has since moved is
+  dropped. Errors, SQL that does not parse and "nothing here" all show nothing. Escape puts the note
+  away until the caret is in another part; leaving the cell takes it away; the gear menu's "peek"
+  switch turns it off, remembered per browser (`localStorage`, `nb.peek`).
+- **Look** (`frontend/app-peek.js`, `.nb-peek` in `style.css`). A note like the hover tip, drawn by
+  `Sketch.outline`: the part's name (the CTE's, or the sub-query's alias), up to six columns that fit
+  in 340 px, five rows, and "first 5 of 320 rows" when the count was cheap. It is `position: fixed` on
+  `<body>`, so it never moves the page. It goes in the right margin when the window has room, else at
+  the cell's right beside lines of code short enough to leave room, nearest the caret, else under the
+  code. It is handed to the pen (`Ink.present(note, 'peek', ...)`); typing never writes anything else.
+  Exports and presenting (§18) do not have it.
+
+**What building it taught us.**
+
+- **The parse tree has no spans for query nodes.** DuckDB 2.0's PEG transformer gives expressions and
+  table references a location, but a `QueryNode` or a CTE has none. Matching parentheses by
+  re-parsing their contents and comparing the result to the node is exact and stays clear of text
+  search; it costs a parse per candidate pair, which is fine for a cell.
+- **Read-only transactions are the real guard.** Function stability catches the obvious cases with a
+  clear message; `BEGIN TRANSACTION READ ONLY` catches the rest (macros, extension functions) without
+  a list to maintain. `max_execution_time` is a per-connection setting, so the limit dies with the
+  peek's connection.
+- **A peek must not disturb the session.** Runner records variables into the state it is given when it
+  goes away; peeking on a copy keeps the session exactly as it was.
+
+**Not done.** A part of a recursive CTE that reads the CTE itself (its rows depend on the iteration);
+table functions from other extensions cannot be judged, so one that acts on a remote system (for
+example `postgres_execute`) inside a CTE could run during a peek: the read-only transaction protects
+only the local database; the note can
+cover part of the cell's (stale) result in a narrow window when the code leaves no room beside it.
+Only Chromium was available for testing.
 
 ## 20. Building for every platform
 

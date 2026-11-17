@@ -36,6 +36,22 @@ static void TestSplitStatements() {
 	CHECK(SplitStatements("SELECT 'it''s; fine'").size() == 1);
 }
 
+static void TestParenPairs() {
+	// Parentheses in strings, quoted identifiers, dollar strings and comments are not code.
+	std::string sql = "WITH a AS (SELECT ')' AS \"(\", $$)$$ /* ( */ FROM t -- (\n) SELECT (1 + (2)) FROM a";
+	auto pairs = ParenPairs(sql);
+	CHECK(pairs.size() == 3);
+	CHECK(sql.substr(pairs[0].open, pairs[0].close - pairs[0].open + 1).rfind("(SELECT ')'", 0) == 0);
+	CHECK(sql[pairs[0].close] == ')' && sql.substr(pairs[0].close, 9) == ") SELECT ");
+	CHECK(sql.substr(pairs[1].open, pairs[1].close - pairs[1].open + 1) == "(1 + (2))");
+	CHECK(sql.substr(pairs[2].open, pairs[2].close - pairs[2].open + 1) == "(2)");
+	// Unmatched parentheses are left out, whichever side is missing.
+	CHECK(ParenPairs("SELECT (1").empty());
+	CHECK(ParenPairs("SELECT 1)").empty());
+	CHECK(ParenPairs("SELECT (1))) + (2").size() == 1);
+	CHECK(ParenPairs("").empty());
+}
+
 static void TestIsQueryStatement() {
 	for (auto sql : {"SELECT 1", "from t", "VALUES (1)", "(SELECT 1) UNION ALL (SELECT 2)", "SUMMARIZE t",
 	                 "PIVOT t ON a USING sum(b)", "WITH a AS (SELECT 1) SELECT * FROM a",
@@ -572,6 +588,7 @@ static void TestTimingSetting() {
 
 int main() {
 	TestSplitStatements();
+	TestParenPairs();
 	TestIsQueryStatement();
 	TestReferencedVariables();
 	TestParseNotebook();
