@@ -24,7 +24,7 @@ var App = (function () {
   A.status = function (text) {
     $('status').textContent = text || '';
     $('status').title = text || '';
-    if (window.Ink) Ink.present($('status'), 'toolbar/status', text || '');
+    if (window.Ink) Ink.present($('status'), 'toolbar/status', text || '', { update: 'now' });
   };
   // A problem the reader must see in full (the status line is cut short): a banner above the cells.
   A.problem = function (text) {
@@ -855,8 +855,11 @@ var App = (function () {
     });
     if (window.Ink) {
       ['run-all', 'gear'].forEach(function (id) { Ink.present($(id), 'toolbar/' + id); });
-      $('ink').value = Ink.setting();
+      $('ink').value = Ink.mode();
       $('ink').onchange = function (e) { Ink.setSetting(e.target.value); };
+      // Watching starts by writing the whole page again; leaving it (Esc) puts the menu back.
+      Ink.onrewrite = function () { A.render(); };
+      window.addEventListener('inkmode', function () { $('ink').value = Ink.mode(); });
     } else $('ink').disabled = true;
     A.api('GET', '/api/notebook').then(function (data) {
       A.load(data);

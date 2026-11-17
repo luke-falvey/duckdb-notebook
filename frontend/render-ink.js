@@ -42,17 +42,86 @@ var Ink = (function () {
     tableRows: 3,       // rows written letter by letter before a table sweeps row by row
     plainGroup: 60      // a group with more plain marks than this fades in as one
   };
-  var SLOW = 1.8;
+
+  // Watch mode (ink=watch, the gear menu's "watch"): one pen writes the page in reading order, at a
+  // pace a person can follow, and the page follows the pen. Times are on the pen's clock, which runs
+  // at the reader's chosen speed and stops while they pause (docs/HANDWRITING.md, "Watch mode").
+  var W = {
+    text: 0.4,          // px of a glyph's pen travel per ms
+    glyphMin: 60,       // and no glyph quicker than this
+    shape: 0.8,         // px per ms along a drawn stroke
+    shapeMin: 110,      // a stroke takes at least this long
+    shapeMax: 1000,     // and at most this
+    hatchLine: 34,      // one line of hatching
+    hatch: 900,         // all the hatching of one fill, at most
+    hatchAll: 6000,     // and of one piece
+    fade: 260,          // a control or a background, faded in
+    fill: 150,          // a solid shape in a chart
+    dot: 40,            // one plain mark
+    chunk: 280,         // a handful of the plain marks after the first ones
+    marks: 60,          // strokes (or plain marks) drawn one by one at full pace before the pen hurries
+    hurry: 5000,        // the rest of a piece's strokes or marks, together
+    rows: 6,            // table rows written letter by letter
+    row: 220,           // and each row after them, swept at once
+    letter: 15,         // the pen lifted between letters,
+    word: 110,          // between words,
+    line: 300,          // between lines and blocks of text,
+    stroke: 70,         // between the strokes of a drawing,
+    kind: 180,          // from writing to drawing,
+    piece: 420,         // between the pieces of a cell,
+    cell: 800,          // and between cells
+    lag: 0.18           // the second pass of a doubled line starts this far into the first
+  };
+  var SPEEDS = [0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 3, 5, 8];
 
   function setting() {
-    try { return localStorage.getItem('nb.ink') || 'gentle'; } catch (e) { return 'gentle'; }
+    var s;
+    try { s = localStorage.getItem('nb.ink') || 'gentle'; } catch (e) { s = 'gentle'; }
+    // "slow" was the gentle pen stretched; watching replaces it.
+    return s === 'slow' ? 'gentle' : s;
   }
   I.setting = setting;
+  var override = null;     // the mode chosen on this page (watch from an export, leaving watch)
+  // gentle, watch or off: this page's choice, then the URL (ink=watch, ink=off), then the setting.
+  function mode() {
+    if (override) return override;
+    var m = /[?&#]ink=(off|watch|gentle)\b/.exec(location.search + location.hash);
+    if (m) return m[1];
+    return setting();
+  }
+  I.mode = mode;
   I.setSetting = function (value) {
+    var was = mode();
     try { localStorage.setItem('nb.ink', value); } catch (e) { /* private window */ }
-    if (value === 'off') I.finishAll();
+    setMode(value, was);
   };
-  function scale() { return setting() === 'slow' ? SLOW : 1; }
+  // Changing mode finishes what is being written; choosing watch writes the page again from the top.
+  function setMode(value, was) {
+    if (was == null) was = mode();
+    override = value;
+    if (value === was) return;
+    I.finishAll();
+    if (value === 'watch') I.rewrite();
+    controls();
+    try { window.dispatchEvent(new CustomEvent('inkmode', { detail: value })); } catch (e) { /* old browser */ }
+  }
+  I.watch = function () { setMode('watch'); };
+  I.leave = function () {
+    var was = mode();
+    if (setting() === 'watch') { try { localStorage.setItem('nb.ink', 'gentle'); } catch (e) { /* private window */ } }
+    setMode('gentle', was);
+  };
+  // Forget what has been written and ask the page to build itself again (the editor and the viewer
+  // set onrewrite to their render function).
+  I.rewrite = function () {
+    I.finishAll();
+    registry = {};
+    pen.free = -1e9; pen.group = null;
+    // What follows is the page appearing again, not an answer to the reader's click.
+    lastAction = -1e9;
+    view.on = true;
+    if (typeof I.onrewrite === 'function') I.onrewrite();
+  };
 
   var supported = (function () {
     try {
@@ -66,12 +135,16 @@ var Ink = (function () {
   // Off for reduced motion, print, a page marked not to animate (PDF export), the reader's setting,
   // ink=off in the URL, and browsers that lack what the writer needs.
   I.enabled = function () {
-    if (!supported || printing) return false;
-    if (document.documentElement.getAttribute('data-ink') === 'off') return false;
-    if (/[?&#]ink=off\b/.test(location.search + location.hash)) return false;
-    if (media('(prefers-reduced-motion: reduce)') || media('print')) return false;
-    return setting() !== 'off';
+    if (!I.available()) return false;
+    return mode() !== 'off';
   };
+  // Whether the page could be written at all, whatever the reader's setting (for a "watch" button).
+  I.available = function () {
+    return supported && !printing && document.documentElement.getAttribute('data-ink') !== 'off' &&
+      !media('(prefers-reduced-motion: reduce)') && !media('print');
+  };
+  function watching() { return I.enabled() && mode() === 'watch'; }
+  I.watching = watching;
 
   // ---- Registry and scheduler ---------------------------------------------------------------
   var registry = {};       // key -> {sig, job}
@@ -90,6 +163,20 @@ var Ink = (function () {
   I.advance = function (ms) { frozen += ms; schedule(); };
   I.now = now;
   function schedule() { if (!raf) raf = requestAnimationFrame(frame); }
+
+  // The pen's clock, for watch mode: it follows the clock above at the reader's speed, and stands still
+  // while they pause. Every time in a watched piece is on this clock, so changing speed or pausing
+  // mid-stroke needs nothing re-planned.
+  var pen = { t: 0, last: null, held: false, free: -1e9, group: null, speed: 1 };
+  try { var saved = parseFloat(localStorage.getItem('nb.ink.speed')); if (saved > 0) pen.speed = saved; } catch (e) { /* private window */ }
+  function penClock() {
+    var t = now();
+    if (pen.last != null && t > pen.last && !pen.held) pen.t += (t - pen.last) * pen.speed;
+    pen.last = t;
+    return pen.t;
+  }
+  function clock() { return watching() ? penClock() : now(); }
+  I.penNow = function () { return penClock(); };
 
   // A cheap hash of what an element shows. Clip-path ids from Sketch.fill are random; leave them out.
   function signature(el) {
@@ -111,8 +198,24 @@ var Ink = (function () {
       pending = pending.filter(function (p) { return p.job !== entry.job; });
       pending.push({ el: el, job: entry.job });
     } else {
+      var quick = now() - lastAction < C.recent;
+      var job = { key: key, sig: sig, el: null, state: 'new', quick: quick, level: 0, opts: opts || {} };
+      if (watching()) {
+        // Watching: a reader's change to a piece already written (or being written) shows at once; a
+        // piece the pen has not reached yet keeps its place in the queue, whatever changed it.
+        // A new piece counts as written when the pen has already passed where it is.
+        var before = entry ? entry.job.state : aheadOfPen(el) ? 'parked' : 'done';
+        // A piece marked update 'now' (the editor's status line) is never queued behind the pen.
+        if ((quick || job.opts.update === 'now') && (before === 'done' || before === 'running')) {
+          if (entry) drop(entry.job);
+          job.state = 'done';
+          registry[key] = { sig: sig, job: job };
+          return;
+        }
+        job.quick = false;
+        if (entry && before !== 'done') { drop(entry.job); entry = null; }
+      }
       if (entry) drop(entry.job);
-      var job = { key: key, sig: sig, el: null, state: 'new', quick: now() - lastAction < C.recent, level: 0, opts: opts || {} };
       // Text that was already there before the change is not written again.
       if (entry && entry.job.texts) job.prev = entry.job.texts;
       registry[key] = { sig: sig, job: job };
@@ -121,6 +224,22 @@ var Ink = (function () {
     }
     schedule();
   };
+
+  // Whether an element is further on than the pen has got: after the piece it is writing, or after the
+  // first piece still waiting when it is between pieces.
+  function aheadOfPen(el) {
+    // A render replaces every element: what it has presented so far (pending) is the page as it is now.
+    var run = null, first = null;
+    var look = function (j, e) {
+      if (!e || !e.isConnected) return;
+      if (j.state === 'running') run = e;
+      else if (j.state === 'parked' && (!first || (first.compareDocumentPosition(e) & 2))) first = e;
+    };
+    jobs.forEach(function (j) { look(j, j.el); });
+    pending.forEach(function (p) { look(p.job, p.el); });
+    var at = run || first;
+    return !!(at && (at.compareDocumentPosition(el) & 4));
+  }
 
   // The reader asked for a run (Run all, a cell's run button): its results are fresh, not an update.
   I.fresh = function () { lastAction = -1e9; };
@@ -135,7 +254,7 @@ var Ink = (function () {
     }
   }
   function frame1(ts) {
-    var t = now(), t0 = t;
+    var t = now(), t0 = t, watch = watching(), pt = watch ? penClock() : t;
     var list = pending;
     pending = [];
     var h = viewHeight();
@@ -143,9 +262,11 @@ var Ink = (function () {
       if (p.job.state === 'done') return;
       if (!p.el.isConnected) { if (!p.job.el) finish(p.job); return; }
       // Below the fold a piece only waits, hidden as a whole; it is taken apart when it comes into view.
+      // Watching, every piece waits like that until the pen comes to it.
       if (p.job.state === 'new' || p.job.state === 'parked') {
         var r = p.el.getBoundingClientRect();
         if (!r.width && !r.height) { finish(p.job); return; }
+        if (watch) { park(p.job, p.el); return; }
         if (r.top >= h) { park(p.job, p.el); return; }
         if (r.bottom < 0) { finish(p.job); return; }
         unpark(p.job);
@@ -155,12 +276,21 @@ var Ink = (function () {
     });
     prof('attach', t0);
     var t1 = now();
-    if (fontsReady) planVisible(t);
+    if (fontsReady) { if (watch) planWatch(pt); else planVisible(t); }
     prof('plan', t1);
     jobs.slice().forEach(function (job) {
-      if (job.reattach && job.el) { job.reattach = false; if (job.el.isConnected) attach(job, job.el); else finish(job); }
-      if (job.state === 'running') step(job, t);
+      if (job.reattach && job.el && job.state !== 'parked') { job.reattach = false; if (job.el.isConnected) attach(job, job.el); else finish(job); }
+      if (job.state === 'running') step(job, watch ? pt : t);
     });
+    // The pen finished a piece this frame: the next one is planned now, not a frame later.
+    // A clock moved far ahead (a test, a slow frame) may finish several pieces in one frame.
+    for (var more = 0; watch && fontsReady && more < 20 && !jobs.some(function (j) { return j.state === 'running'; }); more++) {
+      var n = jobs.length;
+      planWatch(pt);
+      jobs.forEach(function (job) { if (job.state === 'running') step(job, pt); });
+      if (!jobs.length || (jobs.length === n && jobs.some(function (j) { return j.state === 'running'; }))) break;
+    }
+    if (watch) follow();
     drain();
     var spent = now() - t0;
     stats.frames.push([ts, spent, jobs.filter(function (j) { return j.state === 'running'; }).length]);
@@ -173,7 +303,9 @@ var Ink = (function () {
     }
     stats.last = Object.assign({}, stats.ms);
     if (stats.frames.length > 4000) stats.frames.splice(0, 2000);
-    if (jobs.some(function (j) { return j.state === 'running'; }) || pending.length) schedule();
+    if (watch) controls();
+    if (pending.length || (jobs.some(function (j) { return j.state === 'running'; }) && !(watch && pen.held))) schedule();
+    else if (watch && !pen.held && jobs.length && !fontsReady) schedule();
   }
 
   // ---- Jobs ---------------------------------------------------------------------------------
@@ -196,10 +328,14 @@ var Ink = (function () {
     if (job.state === 'new') job.state = 'waiting';
     if (jobs.indexOf(job) < 0) jobs.push(job);
     watch(job);
-    if (job.state === 'running') { timeline(job); step(job, now()); }
+    if (job.state === 'running') {
+      if (job.watch) { timelineWatch(job); pen.free = job.start + job.end; step(job, penClock()); }
+      else { timeline(job); step(job, now()); }
+    }
   }
 
   function finish(job) {
+    if (job.watch && job.state === 'running') pen.free = Math.min(pen.free, pen.t);
     teardown(job);
     job.state = 'done';
     job.el = null;
@@ -215,7 +351,9 @@ var Ink = (function () {
     pending.forEach(function (p) { p.job.state = 'done'; });
     pending = [];
     jobs.slice().forEach(finish);
+    pen.free = Math.min(pen.free, pen.t);
     drain();
+    controls();
   };
 
   function viewHeight() { return window.innerHeight || document.documentElement.clientHeight; }
@@ -262,7 +400,7 @@ var Ink = (function () {
     if (!batch.length) return;
     batch.sort(function (a, b) { return a.el.compareDocumentPosition(b.el) & 2 ? 1 : -1; });
     // A wave: the pieces of a cell start close together, and each cell soon after the one above.
-    var k = scale(), cursor = 0, prev = 0, group = null, groupStart = 0, groupEnd = 0, end = 0;
+    var k = 1, cursor = 0, prev = 0, group = null, groupStart = 0, groupEnd = 0, end = 0;
     batch.forEach(function (job) {
       if (job.quick) { job.dur = job.end = C.quick; job.offset = 0; return; }
       // A piece mostly clipped away is paced by what shows, and done when that is drawn.
@@ -290,6 +428,134 @@ var Ink = (function () {
       if (I.plans.length > 500) I.plans.splice(0, 250);
       I.plans.push({ key: job.key, at: Math.round(t), start: Math.round(job.offset), dur: Math.round(job.dur), end: Math.round(job.end), ink: Math.round(job.ink), atoms: job.atoms.length, level: job.level, peaks: job.peaks });
     });
+  }
+
+  // Watching: one pen. When it is free it takes the first waiting piece in reading order (document
+  // order), wherever that is on the page, so results that arrive for a cell further down wait their
+  // turn and an earlier piece that changed is written before anything after it.
+  function planWatch(pt) {
+    if (jobs.some(function (j) { return j.state === 'running'; })) return;
+    for (;;) {
+      var next = null;
+      jobs.forEach(function (j) {
+        if ((j.state !== 'parked' && j.state !== 'waiting') || !j.el || !j.el.isConnected) return;
+        if (!next || (next.el.compareDocumentPosition(j.el) & 2)) next = j;
+      });
+      if (!next) {
+        // Anything left is detached from the page: nothing to write.
+        jobs.slice().forEach(function (j) { if (j.state === 'parked' || j.state === 'waiting') finish(j); });
+        return;
+      }
+      var el = next.el;
+      if (next.state === 'parked') { unpark(next); next.state = 'new'; }
+      next.level = 0;
+      next.watch = true;
+      attach(next, el);
+      if (next.state === 'done') continue;
+      timelineWatch(next);
+      var group = next.key.split('/')[0];
+      var gap = pen.group == null ? 0 : group === pen.group ? W.piece : W.cell;
+      next.start = Math.max(pt, pen.free + gap);
+      next.offset = next.start - pt;
+      next.state = 'running';
+      pen.group = group;
+      pen.free = next.start + next.end;
+      if (I.plans.length > 500) I.plans.splice(0, 250);
+      I.plans.push({ key: next.key, at: Math.round(now()), pen: Math.round(next.start), start: Math.round(next.offset), dur: Math.round(next.dur), end: Math.round(next.end), ink: Math.round(next.ink), atoms: next.atoms.length, level: 0, watch: true });
+      return;
+    }
+  }
+
+  // How long the pen spends on one atom when watching, on the pen's clock.
+  function watchDur(job, a) {
+    if (a.type === 'glyph') {
+      var travel = a.w - (a.space || 0);
+      return Math.max(W.glyphMin, travel / W.text * (a.sweep ? 0.7 : 1));
+    }
+    if (a.type === 'path') {
+      if (a.fast) return W.hatchLine;
+      var seen = job.opts.visible || 1;
+      // A stroke mostly clipped away is paced by what shows.
+      return Math.max(W.shapeMin, Math.min(W.shapeMax, W.shapeMin * 0.4 + a.len * seen / W.shape)) / seen;
+    }
+    if (a.type === 'wipe') return a.row ? W.row : Math.max(W.glyphMin, a.w / W.text);
+    if (a.type === 'appear') return a.nodes.length > 1 ? W.chunk : W.dot;
+    if (a.type === 'pseudo') return Math.max(W.shapeMin, Math.min(W.shapeMax, a.w / W.shape));
+    return a.el instanceof SVGElement && !a.group ? W.fill : W.fade;
+  }
+
+  // The pause before an atom, after the one before it.
+  function watchGap(prev, a) {
+    var g;
+    if (a.hurried && prev.hurried) g = 6;
+    else if (prev.type === 'glyph' && a.type === 'glyph') {
+      if (prev.unit === a.unit) g = prev.gap === 'line' ? W.line : prev.gap === 'word' ? W.word : W.letter;
+      else g = prev.unit.block === a.unit.block && prev.unit.block ? (prev.gap === 'line' ? W.line : W.word) : W.line;
+    } else if (prev.type === 'path' && a.type === 'path') g = prev.fast && a.fast ? (a.hgap != null ? a.hgap : 8) : W.stroke;
+    else if (prev.type === 'appear' && a.type === 'appear') g = 8;
+    else if (prev.type === 'wipe' && a.type === 'wipe') g = W.word;
+    else if (prev.type === a.type) g = W.stroke;
+    else g = W.kind;
+    // The second pass of a doubled line is drawn before the pen moves on.
+    if (prev.partner) g = Math.max(g, W.lag * (prev.t1 - prev.t0) + 30);
+    return g;
+  }
+
+  // One pen: atoms one after another, constant speed along each, a pause between them.
+  function timelineWatch(job) {
+    var atoms = job.atoms;
+    atoms.forEach(function (a) { a.partner = false; a.hurried = false; a.hgap = null; });
+    atoms.forEach(function (a) { if (a.with) a.with.partner = true; else if (!a.instant) a.d = watchDur(job, a); });
+    // Hatching: each fill is scribbled in quickly, within W.hatch.
+    var fills = new Map();
+    atoms.forEach(function (a) { if (a.fill && !a.with && !a.instant) { var f = fills.get(a.fill) || []; f.push(a); fills.set(a.fill, f); } });
+    var hatching = 0;
+    fills.forEach(function (list) {
+      var sum = list.reduce(function (n, a) { return n + a.d + 8; }, 0);
+      if (sum > W.hatch) list.forEach(function (a) { a.d = Math.max(10, (a.d + 8) * W.hatch / sum - 8); });
+      hatching += Math.min(sum, W.hatch);
+    });
+    // A chart with many hatched shapes: the pen scribbles faster still.
+    if (hatching > W.hatchAll) {
+      var f = W.hatchAll / hatching;
+      fills.forEach(function (list) { list.forEach(function (a) { a.d = Math.max(1, (a.d + 8) * f - 8 * f); a.hgap = 8 * f; }); });
+    }
+    // A long run of strokes, marks (filled shapes, plain marks) or table rows: the first ones at full pace, then the pen
+    // hurries through the rest, which share W.hurry between them.
+    ['mark', 'row'].forEach(function (kind) {
+      var list = atoms.filter(function (a) {
+        if (a.with || a.instant || a.fill) return false;
+        return kind === 'row' ? !!a.row : (a.type === 'path' || a.type === 'fade' || (a.type === 'appear' && a.nodes.length === 1));
+      });
+      if (kind === 'mark' && list.length <= W.marks) return;
+      var tail = kind === 'row' ? list : list.slice(W.marks);
+      var sum = tail.reduce(function (n, a) { return n + a.d + W.stroke; }, 0);
+      if (sum <= W.hurry) return;
+      tail.forEach(function (a) { a.d = Math.max(12, (a.d + W.stroke) * W.hurry / sum - 6); a.hurried = true; });
+    });
+    var t = 0, prev = null, end = 0;
+    atoms.forEach(function (a) {
+      if (a.instant) { a.t0 = a.t1 = 0; return; }
+      if (a.with) {
+        var span = a.with.t1 - a.with.t0;
+        a.t0 = a.with.t0 + span * W.lag;
+        a.t1 = a.t0 + span;
+        end = Math.max(end, a.t1);
+        return;
+      }
+      if (prev) t += watchGap(prev, a);
+      a.t0 = t;
+      a.t1 = t = t + a.d;
+      end = Math.max(end, t);
+      prev = a;
+    });
+    job.dur = end;
+    // A piece mostly clipped away (a cell's bracket, drawn from its end) is done when what shows is.
+    var seen = job.opts.visible || 1;
+    job.end = seen < 1 ? Math.min(end, atoms.reduce(function (m, a) { return a.instant ? m : Math.max(m, a.t0 + (a.t1 - a.t0) * seen); }, 0) + 40) : end;
+    atoms.sort(function (a, b) { return a.t0 - b.t0 || a.order - b.order; });
+    job.next = 0;
+    job.active = [];
   }
 
   // Too much in motion at once is slow to paint: write tables row by row, then everything as
@@ -408,9 +674,10 @@ var Ink = (function () {
         add({ type: 'fade', el: el, to: +cs.opacity, w: 8 });
         instant = false;
       }
-      if (tag === 'TR' && job.level >= 1 && el.parentElement && el.parentElement.tagName === 'TBODY' && el.sectionRowIndex >= C.tableRows) {
+      var rows = job.watch ? W.rows : job.level >= 1 ? C.tableRows : Infinity;
+      if (tag === 'TR' && el.parentElement && el.parentElement.tagName === 'TBODY' && el.sectionRowIndex >= rows) {
         var row = textUnits(el);
-        if (row.length) add({ type: 'wipe', units: row, text: true, w: Math.max(30, el.offsetWidth * 0.12) });
+        if (row.length) add({ type: 'wipe', units: row, text: true, row: true, w: Math.max(30, el.offsetWidth * 0.12) });
         return;
       }
       for (var n = el.firstChild; n; n = n.nextSibling) {
@@ -443,7 +710,16 @@ var Ink = (function () {
       unit.family = fam;
       while (i < data.length) {
         var code = data.codePointAt(i), ch = String.fromCodePoint(code), len = ch.length;
-        if (/\s/.test(ch)) { if (atoms.length) atoms[atoms.length - 1].w += C.space * size; i += len; continue; }
+        if (/\s/.test(ch)) {
+          var last = atoms[atoms.length - 1];
+          if (last) {
+            last.w += C.space * size;
+            last.space = (last.space || 0) + C.space * size;
+            if (last.unit === unit) last.gap = ch === '\n' || last.gap === 'line' ? 'line' : 'word';
+          }
+          i += len;
+          continue;
+        }
         // A run of operators in the code font may be one ligature: written as one unit, swept.
         if (fam === 'Cascadia' && /[!=<>\-|&:*\/+.~^%#?;]/.test(ch)) {
           var j = i + 1;
@@ -469,6 +745,14 @@ var Ink = (function () {
         if (isPlain(c)) {
           var run = [c];
           for (var r = c.nextElementSibling; r && isPlain(r); r = r.nextElementSibling) run.push(r);
+          if (job.watch && run.length > W.marks) {
+            // Watching: the first marks one by one, the rest in a few handfuls.
+            run.slice(0, W.marks).forEach(function (n) { add({ type: 'appear', nodes: [n], w: 2 }); });
+            var restOf = run.slice(W.marks), hands = Math.min(6, restOf.length);
+            for (var q = 0; q < hands; q++) add({ type: 'appear', nodes: restOf.slice(Math.floor(q * restOf.length / hands), Math.floor((q + 1) * restOf.length / hands)), w: 10 });
+            c = run[run.length - 1];
+            continue;
+          }
           if (run.length > C.plainGroup) {
             // Most of a group: the group fades, one element. Otherwise the run appears in chunks.
             if (run.length >= 0.8 * g.childElementCount) { add({ type: 'fade', el: g, to: 1, w: 60, group: true }); fills = []; break; }
@@ -512,7 +796,7 @@ var Ink = (function () {
 
     // A stroked path: one atom per subpath. A doubled line's second pass runs just behind its first.
     var lastShape = null;
-    function shape(el, fast) {
+    function shape(el, fast, fill) {
       var pieces = subpaths(el), list = [];
       if (pieces.length > 1) {
         var group = document.createElementNS(SVGNS, 'g');
@@ -528,7 +812,7 @@ var Ink = (function () {
       var half = list.length % 2 === 0 && !fast ? list.length / 2 : list.length;
       var made = [];
       list.forEach(function (p, k) {
-        var a = { type: 'path', el: p, split: split, len: 0, w: 0, fast: fast };
+        var a = { type: 'path', el: p, split: split, len: 0, w: 0, fast: fast, fill: fill };
         if (k >= half) a.with = made[k - half];
         made.push(add(a));
       });
@@ -541,7 +825,7 @@ var Ink = (function () {
     function hatching(g) {
       if (job.level >= 1) { add({ type: 'fade', el: g, to: 1, w: 20 }); return; }
       var lines = g.querySelectorAll('g > path');
-      Array.prototype.forEach.call(lines, function (p) { shape(p, true); });
+      Array.prototype.forEach.call(lines, function (p) { shape(p, true, g); });
     }
 
     function svgText(el) {
@@ -595,7 +879,12 @@ var Ink = (function () {
   }
 
   // How a text unit is painted, read before anything is hidden.
+  var INLINE = { SPAN: 1, B: 1, STRONG: 1, EM: 1, I: 1, CODE: 1, A: 1, MARK: 1, SMALL: 1, SUB: 1, SUP: 1, U: 1, S: 1, KBD: 1, LABEL: 1 };
   function style(u, cs, alpha) {
+    // The block a text unit is part of: the pen moves on to the next word, not the next line, within it.
+    var b = u.el;
+    while (b && b.nodeType === 1 && INLINE[b.tagName]) b = b.parentNode;
+    u.block = b;
     u.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
     u.size = fontPx(cs);
     u.color = u.svg ? cs.fill : cs.color;
@@ -801,6 +1090,10 @@ var Ink = (function () {
   }
   function measure1(job, u) {
     layers(job);
+    // The page may have scrolled since the canvases were laid (watch mode follows the pen): measure
+    // from where they are now.
+    var lr = job.layers[0].getBoundingClientRect();
+    job.origin = { x: lr.left, y: lr.top };
     u.chars = {};
     var ox = job.origin.x, oy = job.origin.y, z = job.z, data = u.svg ? u.node.textContent : u.node.data;
     if (u.svg) {
@@ -1066,7 +1359,10 @@ var Ink = (function () {
   // Sketch.outline draws a new SVG when its element changes size: it continues the old one's job.
   I.replaced = function (old, svg) {
     jobs.forEach(function (job) {
-      if (job.el === old) { job.el = svg; job.reattach = true; schedule(); }
+      if (job.el !== old) return;
+      // A piece still waiting keeps waiting, hidden: the new drawing is hidden in its place.
+      if (job.state === 'parked') { park(job, svg); return; }
+      job.el = svg; job.reattach = true; schedule();
     });
     pending.forEach(function (p) { if (p.el === old) p.el = svg; });
   };
@@ -1076,6 +1372,7 @@ var Ink = (function () {
   // within a second is drawn quickly; see I.fresh for runs.
   function act(e) {
     if (e.type === 'keydown' && (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta')) return;
+    if (watching()) { watchInput(e); return; }
     lastAction = now();
     if (jobs.length || pending.length) I.finishAll();
   }
@@ -1096,6 +1393,208 @@ var Ink = (function () {
     // Fonts that never arrive must not leave a page hidden.
     setTimeout(function () { if (!fontsReady) { fontsReady = true; schedule(); } }, 3000);
   } else fontsReady = true;
+
+  // ---- Watching ---------------------------------------------------------------------------------
+  // Where the pen is now, in client coordinates: the end of the stroke being drawn.
+  function penPoint() {
+    var job = null;
+    for (var i = 0; i < jobs.length; i++) if (jobs[i].state === 'running' && jobs[i].watch) { job = jobs[i]; break; }
+    if (!job || !job.el) return null;
+    var a = null;
+    for (var k = job.active.length - 1; k >= 0; k--) if (!job.active[k].with) { a = job.active[k]; break; }
+    if (!a) return pen.at || null;
+    var p = Math.max(0, Math.min(1, a.p || 0)), r;
+    try {
+      if (a.type === 'path') {
+        var L = a.len * ease(p), pt = a.el.getPointAtLength(job.opts.reverse ? a.len - L : L), m = a.el.getScreenCTM();
+        if (m) return (pen.at = { x: m.a * pt.x + m.c * pt.y + m.e, y: m.b * pt.x + m.d * pt.y + m.f });
+      } else if (a.type === 'glyph' && job.layers) {
+        var c = a.unit.chars[a.i];
+        if (!c) return pen.at || null;
+        var q = a.g ? strokePoint(a.g, p) : [0.6 * p * 1000, -300], e = a.unit.size / 1000;
+        var x = c.m[0] * q[0] * e + c.m[2] * q[1] * e + c.m[4], y = c.m[1] * q[0] * e + c.m[3] * q[1] * e + c.m[5];
+        var lr = job.layers[1].getBoundingClientRect(), z = lr.width / (job.layers[1].offsetWidth || lr.width || 1);
+        return (pen.at = { x: lr.left + x * z, y: lr.top + y * z });
+      } else {
+        var el = a.el || (a.nodes && a.nodes[0]) || (a.units && a.units[0] && a.units[0].el);
+        if (!el) return pen.at || null;
+        r = el.getBoundingClientRect();
+        return (pen.at = { x: r.left + r.width * p, y: r.top + r.height / 2 });
+      }
+    } catch (err) { /* a node that went away mid-frame */ }
+    return pen.at || null;
+  }
+  // The point a glyph's pen has reached, in its em/1000 units (the end of strokePartial's path).
+  function strokePoint(g, p) {
+    var lift = C.lift * 1000, budget = p * (g.total + lift * g.s.length), at = [g.s[0][0], g.s[0][1]];
+    for (var i = 0; i < g.s.length && budget > 0; i++) {
+      var s = g.s[i], use = Math.min(g.lens[i], budget);
+      budget -= g.lens[i] + lift;
+      at = [s[0], s[1]];
+      for (var j = 2; j < s.length; j += 2) {
+        var seg = Math.hypot(s[j] - s[j - 2], s[j + 1] - s[j - 1]);
+        if (seg >= use) { var f = seg ? use / seg : 1; at = [s[j - 2] + (s[j] - s[j - 2]) * f, s[j - 1] + (s[j + 1] - s[j - 1]) * f]; break; }
+        use -= seg;
+        at = [s[j], s[j + 1]];
+      }
+    }
+    return at;
+  }
+
+  // The page follows the pen, keeping it between a fifth and two thirds of the way down. A reader who
+  // scrolls stops it; it starts again when they leave the pen on screen for a moment, or press a key.
+  var view = { on: true, target: null, last: 0, quiet: 0, scroller: null };
+  function scrollerOf(el) {
+    for (var e = el && el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      var o = getComputedStyle(e).overflowY;
+      if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight + 4) return e;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+  function follow() {
+    var t = now(), dt = Math.min(100, t - (view.last || t));
+    view.last = t;
+    var at = penPoint();
+    nib(at);
+    // A presented screen fits the window: nothing to scroll.
+    if (!at || document.body.classList.contains('presenting')) return;
+    var job = jobs.filter(function (j) { return j.state === 'running' && j.watch; })[0];
+    var sc = job ? scrollerOf(job.el) : view.scroller;
+    if (!sc) return;
+    if (sc !== view.scroller) { view.scroller = sc; view.target = null; }
+    var page = sc === document.scrollingElement || sc === document.documentElement;
+    var top = page ? 0 : sc.getBoundingClientRect().top + sc.clientTop, h = page ? viewHeight() : sc.clientHeight;
+    var y = at.y - top;
+    if (!view.on) {
+      // Back on when the reader has stopped scrolling with the pen in view.
+      if (t - view.quiet > 1500 && y > 0.1 * h && y < 0.8 * h) view.on = true;
+      else return;
+    }
+    var max = sc.scrollHeight - sc.clientHeight;
+    if (view.target == null && (y > 0.66 * h || y < 0.15 * h)) view.target = Math.max(0, Math.min(max, sc.scrollTop + y - 0.36 * h));
+    if (view.target == null) return;
+    var d = view.target - sc.scrollTop;
+    if (Math.abs(d) < 1 || (d > 0 && sc.scrollTop >= max - 1) || (d < 0 && sc.scrollTop <= 0)) { view.target = null; return; }
+    // Eased, and never slower than a little per frame, so a long way is covered smoothly.
+    var move = d * (1 - Math.exp(-dt / 280));
+    if (Math.abs(move) < 1.5) move = Math.sign(d) * Math.min(Math.abs(d), 1.5);
+    view.expect = sc.scrollTop + move;
+    sc.scrollTop = view.expect;
+  }
+  function stopFollowing() { view.on = false; view.target = null; view.quiet = now(); }
+  ['wheel', 'touchmove'].forEach(function (type) {
+    window.addEventListener(type, function () { if (watching() && I.busy()) stopFollowing(); }, { passive: true, capture: true });
+  });
+  // A press on a scrollbar lands on the scrolling element itself.
+  window.addEventListener('pointerdown', function (e) {
+    if (watching() && I.busy() && (e.target === document.documentElement || e.target === view.scroller)) stopFollowing();
+  }, true);
+
+  // A small dot at the end of the stroke being drawn.
+  var tip = null;
+  function nib(at) {
+    if (!at || pen.hideNib) { if (tip) { tip.remove(); tip = null; } return; }
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.className = 'ink-nib';
+      tip.setAttribute('aria-hidden', 'true');
+      document.documentElement.appendChild(tip);
+    }
+    tip.style.transform = 'translate(' + at.x.toFixed(1) + 'px,' + at.y.toFixed(1) + 'px)';
+  }
+
+  // The controls: a small mark in the corner while the pen has work, gone when it has none.
+  var mark = null;
+  function penWork() { return pending.length > 0 || jobs.some(function (j) { return j.watch || j.state === 'parked'; }); }
+  function speedLabel() { var v = pen.speed; return (v < 1 ? String(v).replace(/^0/, '') : String(v)) + '×'; }
+  function controls() {
+    var show = watching() && penWork();
+    if (!show) {
+      if (mark) { mark.remove(); mark = null; }
+      nib(null);
+      return;
+    }
+    if (!mark) {
+      var b = function (act, text, title) {
+        var x = document.createElement('button');
+        x.type = 'button';
+        x.setAttribute('data-ink-act', act);
+        x.textContent = text;
+        x.title = title;
+        return x;
+      };
+      mark = document.createElement('div');
+      mark.className = 'ink-watch';
+      mark.setAttribute('role', 'toolbar');
+      mark.setAttribute('aria-label', 'Watching the page being written');
+      [b('pause', '', 'Pause or go on (space, p)'), b('slower', '−', 'Slower (-)'), document.createElement('span'), b('faster', '+', 'Faster (+)'),
+        b('piece', 'skip', 'Finish this piece (n)'), b('all', 'finish', 'Write everything now (e)'), b('follow', 'follow', 'Follow the pen again (any key)'),
+        b('leave', '×', 'Stop watching (Esc)')].forEach(function (x) { mark.appendChild(x); });
+      mark.children[2].className = 'ink-speed';
+      mark.addEventListener('click', function (e) {
+        var x = e.target.closest && e.target.closest('[data-ink-act]');
+        if (x) command(x.getAttribute('data-ink-act'));
+      });
+      document.documentElement.appendChild(mark);
+    }
+    var pause = mark.children[0], label = pen.held ? 'go on' : 'pause';
+    if (pause.textContent !== label) pause.textContent = label;
+    if (mark.children[2].textContent !== speedLabel()) mark.children[2].textContent = speedLabel();
+    mark.classList.toggle('ink-held', pen.held);
+    mark.classList.toggle('ink-lost', !view.on);
+  }
+
+  function command(what) {
+    penClock();
+    if (what === 'pause') { pen.held = !pen.held; view.on = true; }
+    else if (what === 'faster' || what === 'slower') {
+      var i = 0;
+      while (i < SPEEDS.length - 1 && SPEEDS[i] < pen.speed - 1e-9) i++;
+      pen.speed = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, i + (what === 'faster' ? 1 : -1)))];
+      try { localStorage.setItem('nb.ink.speed', String(pen.speed)); } catch (e) { /* private window */ }
+    } else if (what === 'piece') {
+      jobs.slice().forEach(function (j) { if (j.state === 'running' && j.watch) finish(j); });
+      pen.free = pen.t;
+    } else if (what === 'all') I.finishAll();
+    else if (what === 'follow') view.on = true;
+    else if (what === 'leave') { I.leave(); return; }
+    controls();
+    schedule();
+  }
+  I.command = command;
+  I.speed = function () { return pen.speed; };
+  I.held = function () { return pen.held; };
+  I.following = function () { return view.on; };
+
+  // Keys while watching. Keys typed into a control belong to it; the pen's keys apply only while it
+  // has work. Presenting (render-present.js) keeps Space and Escape for itself.
+  var SCROLLKEYS = { PageUp: 1, PageDown: 1, ArrowUp: 1, ArrowDown: 1, Home: 1, End: 1 };
+  function watchInput(e) {
+    if (e.type !== 'keydown') {
+      // A press on the page is the reader's own action; on the controls it is not.
+      if (!(e.target && e.target.closest && e.target.closest('.ink-watch'))) lastAction = now();
+      return;
+    }
+    lastAction = now();
+    var t = e.target, tag = t && t.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || (t && t.isContentEditable)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || !penWork()) return;
+    var key = e.key, presenting = document.body.classList.contains('presenting');
+    if (SCROLLKEYS[key] && !presenting) { stopFollowing(); return; }
+    view.on = true;
+    var what = null;
+    if ((key === ' ' && !presenting && tag !== 'BUTTON') || key === 'p' || key === 'P') what = 'pause';
+    else if (key === '+' || key === '=' || key === ']') what = 'faster';
+    else if (key === '-' || key === '_' || key === '[') what = 'slower';
+    else if (key === 'n' || key === 'N') what = 'piece';
+    else if (key === 'e' || key === 'E') what = 'all';
+    // Escape closes an open menu first.
+    else if (key === 'Escape' && !presenting && !document.querySelector('.open')) what = 'leave';
+    if (!what) { schedule(); return; }
+    e.preventDefault();
+    e.stopPropagation();
+    command(what);
+  }
 
   // A cell's outline is clipped to its left edge, which is the end of the path: draw it backwards,
   // and pace it by the part that shows.

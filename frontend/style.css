@@ -353,7 +353,30 @@ body.presenting .nb-peek, body.presenting .nb-peek-marks { display: none !import
 canvas.ink-layer { position: absolute; pointer-events: none; z-index: 3; }
 /* A heading's underline (a ::after background) is wiped in after its text. */
 [style*="--ink-wipe"]::after { clip-path: inset(-4px calc(100% - var(--ink-wipe)) -4px -4px); }
+/* Watch mode: the pen's nib, and its controls in the corner. Both live on <html>, outside the page,
+   only while the pen has work; dark mode inverts them as it inverts the body. */
+.ink-nib { position: fixed; left: 0; top: 0; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
+  background: var(--nb-ink); box-shadow: 0 0 0 2px rgba(252, 250, 245, .7); pointer-events: none; z-index: 45; will-change: transform; }
+.ink-watch { position: fixed; left: 22px; bottom: 14px; z-index: 45; display: flex; gap: .3em; align-items: baseline;
+  font: 16px/1 var(--nb-hand); color: var(--nb-muted); user-select: none; }
+.ink-watch button, .ink-watch button:hover:not(:disabled) { background: none; border: none; box-shadow: none; padding: 0 4px;
+  font: inherit; color: var(--nb-faint); min-width: 1.2em; }
+.ink-watch button:hover:not(:disabled), .ink-watch button:focus-visible { color: var(--nb-fg); }
+.ink-watch button[data-ink-act="pause"] { color: var(--nb-muted); }
+.ink-watch.ink-held button[data-ink-act="pause"] { color: var(--nb-accent); }
+.ink-watch .ink-speed { min-width: 2.4em; text-align: center; }
+.ink-watch button[data-ink-act="follow"] { display: none; }
+.ink-watch.ink-lost button[data-ink-act="follow"] { display: inline; color: var(--nb-accent); }
+button.ink-watch-start, button.ink-watch-start:hover:not(:disabled) { background: none; border: none; box-shadow: none; padding: 0 2px;
+  margin-left: 12px; font-size: 14px; color: var(--nb-faint); }
+button.ink-watch-start:hover:not(:disabled) { color: var(--nb-fg); }
+/* Where the page is never written (reduced motion, a page marked not to animate) there is nothing to watch. */
+:root[data-ink="off"] .ink-watch-start { display: none; }
+@media (prefers-reduced-motion: reduce) { .ink-watch-start { display: none; } }
+.ink-watch::before { content: '✎'; margin-right: .35em; color: var(--nb-muted); }
+:root[data-theme="dark"] .ink-nib, :root[data-theme="dark"] .ink-watch { filter: invert(93%) hue-rotate(180deg); }
 @media print {
+  .ink-nib, .ink-watch, .ink-watch-start { display: none !important; }
   .ink-hide { -webkit-text-fill-color: currentcolor !important; }
   canvas.ink-layer { display: none !important; }
 }
