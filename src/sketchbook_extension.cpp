@@ -1,6 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
-#include "notebook_extension.hpp"
+#include "sketchbook_extension.hpp"
 
 #include "notebook/functions.hpp"
 #include "notebook/result_cache.hpp"
@@ -19,17 +19,17 @@ static void LoadInternal(ExtensionLoader &loader) {
 	RegisterNotebookCache(loader);
 }
 
-void NotebookExtension::Load(ExtensionLoader &loader) {
+void SketchbookExtension::Load(ExtensionLoader &loader) {
 	LoadInternal(loader);
 }
 
-std::string NotebookExtension::Name() {
-	return "notebook";
+std::string SketchbookExtension::Name() {
+	return "sketchbook";
 }
 
-std::string NotebookExtension::Version() const {
-#ifdef EXT_VERSION_NOTEBOOK
-	return EXT_VERSION_NOTEBOOK;
+std::string SketchbookExtension::Version() const {
+#ifdef EXT_VERSION_SKETCHBOOK
+	return EXT_VERSION_SKETCHBOOK;
 #else
 	return "";
 #endif
@@ -39,7 +39,7 @@ std::string NotebookExtension::Version() const {
 
 extern "C" {
 
-DUCKDB_CPP_EXTENSION_ENTRY(notebook, loader) {
+DUCKDB_CPP_EXTENSION_ENTRY(sketchbook, loader) {
 	duckdb::LoadInternal(loader);
 }
 }

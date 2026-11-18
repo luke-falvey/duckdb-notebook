@@ -2,7 +2,7 @@
 # description: notebook_run executes every cell in a session of its own
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 query IIIIII
 SELECT idx, kind, name, status, error, row_count FROM notebook_run('test/notebooks/basic.sql') ORDER BY idx

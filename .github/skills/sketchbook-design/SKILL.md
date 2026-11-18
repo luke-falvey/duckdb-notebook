@@ -1,6 +1,6 @@
 ---
 name: sketchbook-design
-description: 'Make a duckdb-notebook sketchbook look good and read well in its hand-drawn, Excalidraw-style look: page structure and story, the 12-column span grid, KPI rows, hiding code and plumbing cells, chart titles, number formats, colours, table page sizes, highlighted {{ }} values, dark mode, and a visual review loop. Use when asked to polish, tidy, lay out, style, beautify, design or review a notebook or sketchbook, make a dashboard or report from one, or prepare it for sharing.'
+description: 'Make a duckdb-sketchbook sketchbook look good and read well in its hand-drawn, Excalidraw-style look: page structure and story, the 12-column span grid, KPI rows, hiding code and plumbing cells, chart titles, number formats, colours, table page sizes, highlighted {{ }} values, dark mode, and a visual review loop. Use when asked to polish, tidy, lay out, style, beautify, design or review a notebook or sketchbook, make a dashboard or report from one, or prepare it for sharing.'
 argument-hint: 'The sketchbook to polish, and who will read it'
 ---
 

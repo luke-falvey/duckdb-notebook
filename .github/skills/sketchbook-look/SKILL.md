@@ -1,6 +1,6 @@
 ---
 name: sketchbook-look
-description: 'Change the sketchbook look itself in duckdb-notebook: the Excalidraw-style hand-drawn renderer, paper and handwriting styles, colours, palette, chart drawing, cell outlines, tabs, tables, dark mode and the export viewer, in frontend/ (style.css, render-sketch.js, render-core.js, render-chart.js, render-typed.js, app.js, viewer.js). Use when asked to restyle, theme, tweak fonts or colours, fix a rendering or layout bug, add a chart renderer, or make charts or cells look better for every notebook rather than one.'
+description: 'Change the sketchbook look itself in duckdb-sketchbook: the Excalidraw-style hand-drawn renderer, paper and handwriting styles, colours, palette, chart drawing, cell outlines, tabs, tables, dark mode and the export viewer, in frontend/ (style.css, render-sketch.js, render-core.js, render-chart.js, render-typed.js, app.js, viewer.js). Use when asked to restyle, theme, tweak fonts or colours, fix a rendering or layout bug, add a chart renderer, or make charts or cells look better for every notebook rather than one.'
 argument-hint: 'What should look different, and where (editor, exports, charts)'
 ---
 

@@ -48,11 +48,11 @@ DuckDB-WASM has started.
 
 Every push to `main` builds `wasm_eh`, `wasm_threads` and `wasm_mvp` with the other platforms; see
 [install](../start/install.md#download-the-ci-build). The artifact
-`notebook-v2.0.0-extension-wasm_eh` holds `notebook.duckdb_extension.wasm`. Serve that file from your
+`sketchbook-v2.0.0-extension-wasm_eh` holds `sketchbook.duckdb_extension.wasm`. Serve that file from your
 site: DuckDB-WASM loads extensions by URL.
 
 To build it yourself you need Emscripten 6.0.9, the version DuckDB's pipeline uses; the
-[contributor notes](https://github.com/luke-falvey/duckdb-notebook/blob/main/CLAUDE.md#webassembly-duckdb-wasm)
+[contributor notes](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/CLAUDE.md#webassembly-duckdb-wasm)
 have the commands. Build it stamped for v2.0.0 (`OVERRIDE_GIT_DESCRIBE=v2.0.0`): DuckDB-WASM refuses an
 extension whose recorded version or platform does not match exactly.
 
@@ -71,7 +71,7 @@ repository it will be signed, and the flag will not be needed.
 
 ## Use it
 
-After `LOAD notebook`, the functions take SQL as usual. Hand DuckDB-WASM the notebook's text, then
+After `LOAD sketchbook`, the functions take SQL as usual. Hand DuckDB-WASM the notebook's text, then
 call them:
 
 ```js
@@ -90,6 +90,6 @@ into the SQL to run and a description of what to draw.
 - The `html-wasm` export still uses its own DuckDB-WASM 1.5 runtime and does not load the extension.
   Moving it to DuckDB-WASM 2.0, and later inlining the extension so an exported page can recompile
   charts and be edited, are planned; see
-  [DESIGN §21](https://github.com/luke-falvey/duckdb-notebook/blob/main/docs/DESIGN.md#21-the-extension-in-duckdb-wasm).
+  [DESIGN §21](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/docs/DESIGN.md#21-the-extension-in-duckdb-wasm).
 - A notebook on DuckDB-WASM's `opfs://` storage should have a working result cache, since OPFS has
   directories, but that is untested.

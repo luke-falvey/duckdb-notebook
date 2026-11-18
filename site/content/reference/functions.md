@@ -214,7 +214,7 @@ removed. Nothing else is lost: running the notebook keeps them again.
 notebook_save(path VARCHAR, name := …, message := …, database := …, force := …)
 ```
 
-Reads the notebook at `path` and stores it as a new version in the `_notebook` schema, creating the
+Reads the notebook at `path` and stores it as a new version in the `_sketchbook` schema, creating the
 schema on first use.
 
 | Argument | Default | Meaning |

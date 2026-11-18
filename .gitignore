@@ -1,3 +1,4 @@
+.duckdb-sketchbook/
 .duckdb-notebook/
 *.duckdb
 *.duckdb.wal

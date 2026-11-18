@@ -1,4 +1,4 @@
-# Working on duckdb-notebook
+# Working on duckdb-sketchbook
 
 A DuckDB extension that makes a plain `.sql` file a notebook. Read `docs/DESIGN.md` for what is being
 built and why, and `docs/FORMAT.md` for the file format. This file is about how to work in the code.
@@ -14,7 +14,7 @@ taught us and where it departs from the design.
 | `notebook_sql(path)` | The notebook as a plain SQL script | `src/functions/notebook_sql.cpp` |
 | `notebook_run(path, params := {…})` | Runs every cell (charts too) in its own session; one row per cell | `src/functions/notebook_run.cpp` |
 | `notebook_chart_query(spec, from)` | The SQL and render description a chart spec compiles to | `src/functions/notebook_chart_query.cpp` |
-| `notebook_save`, `notebook_checkout` | Notebooks in the `_notebook` schema, with history | `src/functions/storage.cpp` |
+| `notebook_save`, `notebook_checkout` | Notebooks in the `_sketchbook` schema, with history | `src/functions/storage.cpp` |
 | `notebook_export(path, file := …, format := …)` | html, html-wasm, pdf, md, sql, data | `src/functions/export.cpp` |
 | `notebook_start`, `notebook_stop` | The HTTP server and browser UI (not in WASM builds) | `src/functions/server.cpp` |
 | `notebook_peek(sql, cursor)` | The CTE or sub-query at a byte offset and the query that selects from it (DESIGN §19) | `src/functions/peek.cpp` |
@@ -45,7 +45,7 @@ it decides which cells make the current screen and scales them to the window; `a
 still build the cells.
 
 The result cache (FORMAT §8, DESIGN §17) keeps each cell's last `/api/run` result beside the notebook
-(`.duckdb-notebook/`) or in `_notebook.cache`. Keys and the fresh/stale decision are in
+(`.duckdb-sketchbook/`) or in `_sketchbook.cache`. Keys and the fresh/stale decision are in
 `src/core/cache.cpp`; the store and the session's copy in `src/functions/result_cache.cpp`. The editor
 reads it on open and writes it after every run; `notebook_run` writes it only with `cache := true`.
 
@@ -111,7 +111,7 @@ Runs `test/sql/*.test` against the release build.
 
 A DuckDB shell with the extension already linked in, for trying things by hand.
 
-The loadable file is `build/release/extension/notebook/notebook.duckdb_extension`. A local build
+The loadable file is `build/release/extension/sketchbook/sketchbook.duckdb_extension`. A local build
 stamps it with DuckDB's commit hash, because the submodule is a shallow clone with no tag, so it
 loads into the shell built here but not into a released DuckDB. CI builds are stamped `v2.0.0`.
 
@@ -119,11 +119,11 @@ To use the extension in an installed DuckDB v2.0.0 (for example one with the `hd
 copy stamped `v2.0.0` and install it; a running server must be restarted afterwards:
 
 ```bash
-ninja -C build/v2.0.0 notebook_loadable_extension   # configured once with -DOVERRIDE_GIT_DESCRIBE=v2.0.0
-duckdb -unsigned -init /dev/null -c "FORCE INSTALL '$PWD/build/v2.0.0/extension/notebook/notebook.duckdb_extension'"
+ninja -C build/v2.0.0 sketchbook_loadable_extension   # configured once with -DOVERRIDE_GIT_DESCRIBE=v2.0.0
+duckdb -unsigned -init /dev/null -c "FORCE INSTALL '$PWD/build/v2.0.0/extension/sketchbook/sketchbook.duckdb_extension'"
 ```
 
-Then `LOAD notebook` in `duckdb -unsigned`. A quicker check that a local build loads into a released
+Then `LOAD sketchbook` in `duckdb -unsigned`. A quicker check that a local build loads into a released
 DuckDB is the Python package, which also loads extensions with `RTLD_LOCAL` as most clients do:
 `pip install duckdb==2.0.0`, connect with `allow_unsigned_extensions` and
 `allow_extensions_metadata_mismatch` set, and `LOAD` the file.
@@ -168,7 +168,7 @@ source /opt/emsdk/emsdk_env.sh
 OVERRIDE_GIT_DESCRIBE=v2.0.0 make wasm_eh
 ```
 
-Writes `build/wasm_eh/extension/notebook/notebook.duckdb_extension.wasm`. It compiles DuckDB for
+Writes `build/wasm_eh/extension/sketchbook/sketchbook.duckdb_extension.wasm`. It compiles DuckDB for
 WebAssembly too: about 12 minutes on 4 cores the first time. `make wasm_threads` builds the threaded
 variant. Then:
 
@@ -182,7 +182,7 @@ functions on `examples/revenue.sql` (`test/wasm/README.md`). CI runs it on the p
 
 ## The documentation site
 
-`site/` is the user documentation, published at https://luke-falvey.github.io/duckdb-notebook/ by
+`site/` is the user documentation, published at https://luke-falvey.github.io/duckdb-sketchbook/ by
 `.github/workflows/docs.yml` (builds on every pull request, deploys from `main`). It is MkDocs with a
 small theme of its own (`site/theme/`); the toolchain is `site/requirements.txt`.
 
@@ -224,7 +224,7 @@ notebook call `ThrowIfInvalid`, which reports the first error and points at `not
 
 **Adding a SQL function.** Declare `RegisterX` in `src/include/notebook/functions.hpp`, implement it in
 `src/functions/x.cpp` as a table function (bind reads and parses, scan emits rows), add the file to
-`CMakeLists.txt`, call it from `src/notebook_extension.cpp`, and add `test/sql/x.test`. Copy
+`CMakeLists.txt`, call it from `src/sketchbook_extension.cpp`, and add `test/sql/x.test`. Copy
 `notebook_sql.cpp` as the smallest example. A function that returns its rows in one call uses `OnceState`
 and `OnceInit`, and reads named parameters with `NamedString`/`NamedBool` (`common.cpp`).
 
@@ -333,6 +333,13 @@ create, because all test files share one database.
   Opening a notebook must run no SQL, so cached variables are restored by casting text to their
   recorded type, not by `SET VARIABLE`. A change to what a cache key covers or to the entry layout
   raises `CACHE_FORMAT` in `src/core/cache.cpp`.
+- The extension was called `notebook` before it became `sketchbook` (`LOAD sketchbook`,
+  `sketchbook.duckdb_extension`, CMake target and CI artifacts). The SQL functions keep their `notebook_*`
+  names and a file is still a notebook. Stored data moved to `_sketchbook` and `.duckdb-sketchbook/`, and
+  the old `_notebook` schema and `.duckdb-notebook/` cache are still read: `StorageSchema` in
+  `storage.cpp` (the first save copies an old history over) and the `legacy` store in `result_cache.cpp`
+  (read when the new place has nothing, cleared with it, never written). `test/sql/legacy_names.test`
+  and `test_cache` cover both; keep them.
 - `to` is a reserved word: a table function cannot take `to :=`. Output paths are `file :=`.
 - `ExtensionCallback::OnConnectionClosed` runs with DuckDB's connection-manager lock held. Do not
   create or destroy connections from it.

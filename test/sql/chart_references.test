@@ -2,7 +2,7 @@
 # description: rules and bands on charts: aggregates are computed by DuckDB when the chart runs
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 # Averages, medians and percentiles on number and date axes, and an aggregate of another column, all run;
 # a rule that cannot be drawn is the chart's error and keeps the query's result

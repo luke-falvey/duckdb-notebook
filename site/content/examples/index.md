@@ -12,9 +12,9 @@ browser with no server. Open one, then look at the `.sql` file it came from.
 
 | Export | Notebook | Made with |
 |---|---|---|
-| [revenue.html](revenue.html) | [`examples/revenue.sql`](https://github.com/luke-falvey/duckdb-notebook/blob/main/examples/revenue.sql) | `notebook_export('examples/revenue.sql', file := 'revenue.html', interactive := 'precomputed')` |
-| [charts.html](charts.html) | [`examples/charts.sql`](https://github.com/luke-falvey/duckdb-notebook/blob/main/examples/charts.sql) | `notebook_export('examples/charts.sql', file := 'charts.html')` |
-| [hello.html](hello.html) | [`site/notebooks/hello.sql`](https://github.com/luke-falvey/duckdb-notebook/blob/main/site/notebooks/hello.sql) | `notebook_export('hello.sql', file := 'hello.html')` |
+| [revenue.html](revenue.html) | [`examples/revenue.sql`](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/examples/revenue.sql) | `notebook_export('examples/revenue.sql', file := 'revenue.html', interactive := 'precomputed')` |
+| [charts.html](charts.html) | [`examples/charts.sql`](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/examples/charts.sql) | `notebook_export('examples/charts.sql', file := 'charts.html')` |
+| [hello.html](hello.html) | [`site/notebooks/hello.sql`](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/site/notebooks/hello.sql) | `notebook_export('hello.sql', file := 'hello.html')` |
 
 Press **✎ watch** in an export's header (or add `?ink=watch`) to watch one pen write it, add `?ink=off`
 to see it without the handwriting animation, or `#present` to
@@ -30,7 +30,7 @@ which is too heavy to keep regenerating in the repository for this site. Make on
 ## The notebooks behind the docs
 
 The other notebooks shown in these pages live in
-[`site/notebooks/`](https://github.com/luke-falvey/duckdb-notebook/tree/main/site/notebooks).
+[`site/notebooks/`](https://github.com/luke-falvey/duckdb-sketchbook/tree/main/site/notebooks).
 The repository's tests check that each one parses without errors, so the examples on this site
 stay valid as the extension changes.
 

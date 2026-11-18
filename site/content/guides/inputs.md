@@ -43,7 +43,7 @@ options every cell takes, such as `span=` to put several on one row.
 variable that column's type. It also makes the input depend on that cell, so `regions` must sit above
 it. With `options=` the values are text.
 
-Here is every widget in one notebook ([`site/notebooks/inputs.sql`](https://github.com/luke-falvey/duckdb-notebook/blob/main/site/notebooks/inputs.sql)):
+Here is every widget in one notebook ([`site/notebooks/inputs.sql`](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/site/notebooks/inputs.sql)):
 
 ```sql
 --8<-- "site/notebooks/inputs.sql"

@@ -1,9 +1,9 @@
 # Install
 
-duckdb-notebook is a DuckDB extension. It needs **DuckDB 2.0.0**: notebooks read variables with
+duckdb-sketchbook is a DuckDB extension. It needs **DuckDB 2.0.0**: notebooks read variables with
 `$name`, which DuckDB introduced in 2.0.
 
-The extension is not yet in DuckDB's community repository, so `INSTALL notebook FROM community` does
+The extension is not yet in DuckDB's community repository, so `INSTALL sketchbook FROM community` does
 not work. There are two ways to get it: download the build from CI, or build it yourself.
 
 ## Supported platforms
@@ -40,15 +40,15 @@ links against the DuckDB already in the page and is 1.2 MB.
 Every push to `main` builds the extension for each platform above, stamped for DuckDB v2.0.0.
 
 1. Open the latest successful
-   [*Build and test* run on `main`](https://github.com/luke-falvey/duckdb-notebook/actions/workflows/MainDistributionPipeline.yml?query=branch%3Amain+is%3Asuccess)
+   [*Build and test* run on `main`](https://github.com/luke-falvey/duckdb-sketchbook/actions/workflows/MainDistributionPipeline.yml?query=branch%3Amain+is%3Asuccess)
    (you need to be signed in to GitHub to download artifacts).
-2. Download the artifact for your platform, `notebook-v2.0.0-extension-<platform>` (for example
-   `notebook-v2.0.0-extension-osx_arm64`), and unzip it. It holds `notebook.duckdb_extension`.
+2. Download the artifact for your platform, `sketchbook-v2.0.0-extension-<platform>` (for example
+   `sketchbook-v2.0.0-extension-osx_arm64`), and unzip it. It holds `sketchbook.duckdb_extension`.
    To find your platform's name, run `PRAGMA platform;` in your DuckDB.
 3. Install it into DuckDB 2.0.0. The build is not signed, so DuckDB must be started with `-unsigned`:
 
 ```sh
-duckdb -unsigned -c "FORCE INSTALL '/path/to/notebook.duckdb_extension'"
+duckdb -unsigned -c "FORCE INSTALL '/path/to/sketchbook.duckdb_extension'"
 ```
 
 Then, in any later session:
@@ -58,7 +58,7 @@ duckdb -unsigned
 ```
 
 ```sql
-LOAD notebook;
+LOAD sketchbook;
 ```
 
 `-unsigned` is the CLI's form of the `allow_unsigned_extensions` setting. In Python, pass
@@ -70,8 +70,8 @@ You need git, CMake, a C++17 compiler and Ninja (or Make). The first build compi
 takes about 15 minutes on four cores; later builds take seconds.
 
 ```sh
-git clone https://github.com/luke-falvey/duckdb-notebook
-cd duckdb-notebook
+git clone https://github.com/luke-falvey/duckdb-sketchbook
+cd duckdb-sketchbook
 git submodule update --init --recursive --depth 1
 GEN=ninja make release
 ```
@@ -79,12 +79,12 @@ GEN=ninja make release
 This gives you two things:
 
 - `./build/release/duckdb`, a DuckDB shell with the extension already linked in. Nothing to load.
-- `build/release/extension/notebook/notebook.duckdb_extension`, the loadable file.
+- `build/release/extension/sketchbook/sketchbook.duckdb_extension`, the loadable file.
 
 The loadable file from a local build is stamped with DuckDB's commit hash rather than `v2.0.0`, so it
 loads into the shell built alongside it but not into a released DuckDB. To use it in an installed
 DuckDB v2.0.0, build a copy stamped `v2.0.0`; the
-[contributor notes](https://github.com/luke-falvey/duckdb-notebook/blob/main/CLAUDE.md#build-and-test)
+[contributor notes](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/CLAUDE.md#build-and-test)
 show how.
 
 ## Check that it works

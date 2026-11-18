@@ -2,7 +2,7 @@
 # description: notebook_start and notebook_stop run the HTTP server on 127.0.0.1
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 query II
 SELECT url LIKE 'http://127.0.0.1:%/?token=%&nb=test%2Fnotebooks%2Fbasic.sql', length(token) FROM notebook_start('test/notebooks/basic.sql', open := false)

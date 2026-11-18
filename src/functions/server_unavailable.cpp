@@ -12,7 +12,7 @@ namespace {
 
 [[noreturn]] void Unavailable(const char *name) {
 	throw NotImplementedException(
-	    "%s: the notebook server is not available in this build of the notebook extension. It needs sockets "
+	    "%s: the notebook server is not available in this build of the sketchbook extension. It needs sockets "
 	    "and threads, which DuckDB-WASM does not have. notebook_cells, notebook_sql, notebook_run, "
 	    "notebook_chart_query and notebook_export (except pdf) work here",
 	    name);

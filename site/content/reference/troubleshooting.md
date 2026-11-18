@@ -72,7 +72,7 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 
 | Symptom | Cause and fix |
 |---|---|
-| `INSTALL notebook FROM community` fails | It is not in the community repository yet. See [install](../start/install.md) |
+| `INSTALL sketchbook FROM community` fails | It is not in the community repository yet. See [install](../start/install.md) |
 | The extension refuses to load: not signed | Start DuckDB with `-unsigned` (or `allow_unsigned_extensions` in a client) |
 | The extension refuses to load: built for another platform | Download the artifact whose name ends in your platform; `PRAGMA platform;` tells you which |
 | The extension refuses to load: built for another version | It must match your DuckDB exactly. CI builds are for v2.0.0; a local build is stamped with DuckDB's commit and only loads into the shell built with it |
@@ -105,10 +105,10 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 
 | Symptom | Cause and fix |
 |---|---|
-| `No notebooks are stored in this database: there is no _notebook.versions table` | Nothing has been saved in this database. Check you opened the right file, or pass `database :=` |
+| `No notebooks are stored in this database: there is no _sketchbook.versions table` | Nothing has been saved in this database. Check you opened the right file, or pass `database :=` |
 | `notebook_save: "x.sql" matches version 1 of 'x', but version 2 is newer…` | You are saving an old version over newer work. Check out the latest first, or pass `force := true` |
 | `notebook_checkout: "x.sql" has changes that are not saved in 'x'…` | The file has unsaved work. Save it with `notebook_save`, or pass `force := true` |
 | Saved notebooks vanished | They were saved in an in-memory database. Open a database file |
 
-Still stuck? Open an [issue](https://github.com/luke-falvey/duckdb-notebook/issues) with the output
+Still stuck? Open an [issue](https://github.com/luke-falvey/duckdb-sketchbook/issues) with the output
 of the two queries at the top of this page.

@@ -4,7 +4,7 @@
 set -eu
 duckdb=${2:-duckdb}
 nb=$(printf '%s' "$1" | sed "s/'/''/g")
-problems=$("$duckdb" -unsigned -init /dev/null -noheader -csv -c "LOAD notebook" -c "
+problems=$("$duckdb" -unsigned -init /dev/null -noheader -csv -c "LOAD sketchbook" -c "
   SELECT (SELECT count(*) FROM notebook_cells('$nb') WHERE len(errors) > 0)
        + (SELECT count(*) FROM notebook_run('$nb') WHERE status = 'error')")
 if [ "$problems" -gt 0 ]; then

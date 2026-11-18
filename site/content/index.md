@@ -1,8 +1,8 @@
-# duckdb-notebook
+# duckdb-sketchbook
 
 <p class="lede">A notebook for DuckDB where the notebook is a plain <code>.sql</code> file.</p>
 
-duckdb-notebook is a DuckDB extension. It reads a `.sql` file whose cells are marked with comments,
+duckdb-sketchbook is a DuckDB extension. It reads a `.sql` file whose cells are marked with comments,
 works out how the cells depend on each other, runs them, and serves an editor in your browser from
 the DuckDB process you already have. Charts are short YAML specs that compile to aggregate queries.
 Notebooks can be stored in the database with their history, and exported to a single HTML file that

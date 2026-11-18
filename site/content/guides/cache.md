@@ -41,10 +41,10 @@ text, so it survives cells moving around it but not an edit. Name the cells you 
 
 ## Where results are kept
 
-For a notebook file, in a `.duckdb-notebook/` folder beside it, one folder per notebook:
+For a notebook file, in a `.duckdb-sketchbook/` folder beside it, one folder per notebook:
 
 ```text
-.duckdb-notebook/
+.duckdb-sketchbook/
   .gitignore                     *
   revenue/
     monthly.json                 a named cell's result
@@ -53,10 +53,14 @@ For a notebook file, in a `.duckdb-notebook/` folder beside it, one folder per n
 ```
 
 The extension writes the `.gitignore`, so the cache is never committed by accident. For a notebook
-stored in a database (`db:<name>`), results go in that database's `_notebook.cache` table.
+stored in a database (`db:<name>`), results go in that database's `_sketchbook.cache` table.
 
 A remote notebook (a URL, an object store) and a notebook not saved yet have no cache. If the
 location cannot be written, there is quietly no cache; a run never fails because of it.
+
+Results kept before the extension was renamed from `notebook` to `sketchbook`, in `.duckdb-notebook/`
+or `_notebook.cache`, are still shown until the notebook is next run; clearing the cache clears them
+too.
 
 Each entry is the result the editor was sent: status, row count, timing, rendered prose, the first page
 of a query's rows, each chart's data, an input's value and choices. A result larger than **4 MiB** is

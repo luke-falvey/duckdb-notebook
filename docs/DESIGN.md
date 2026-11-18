@@ -17,8 +17,8 @@ changes. The same text can be saved, with history, in a table inside any DuckDB 
 exports to one HTML file that opens anywhere without DuckDB, and to PDF.
 
 ```sql
-INSTALL notebook FROM community;
-LOAD notebook;
+INSTALL sketchbook FROM community;
+LOAD sketchbook;
 CALL notebook_start('reports/revenue.sql');   -- opens the browser
 ```
 
@@ -166,7 +166,7 @@ chooses to run it.
 ```
  DuckDB process (CLI, Python, any client)
  ┌─────────────────────────────────────────────────────────────┐
- │  notebook extension                                         │
+ │  sketchbook extension                                       │
  │   ├─ format parser, dependency graph, chart-spec compiler   │
  │   ├─ runner (a session replayed onto a connection per run)  │
  │   ├─ exporters (HTML, PDF, SQL, Markdown, data, WASM)       │
@@ -292,15 +292,15 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 A notebook can be saved into any attached, writable database. The schema is small:
 
 ```sql
-CREATE SCHEMA IF NOT EXISTS _notebook;
+CREATE SCHEMA IF NOT EXISTS _sketchbook;
 
-CREATE TABLE _notebook.notebooks (
+CREATE TABLE _sketchbook.notebooks (
     name        VARCHAR PRIMARY KEY,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE _notebook.versions (
-    name         VARCHAR NOT NULL REFERENCES _notebook.notebooks (name),
+CREATE TABLE _sketchbook.versions (
+    name         VARCHAR NOT NULL REFERENCES _sketchbook.notebooks (name),
     version      INTEGER NOT NULL,
     content      VARCHAR NOT NULL,      -- the .sql file, byte for byte
     content_hash VARCHAR NOT NULL,      -- sha256(content)
@@ -309,8 +309,8 @@ CREATE TABLE _notebook.versions (
     PRIMARY KEY (name, version)
 );
 
-CREATE VIEW _notebook.current AS
-SELECT * FROM _notebook.versions
+CREATE VIEW _sketchbook.current AS
+SELECT * FROM _sketchbook.versions
 QUALIFY version = max(version) OVER (PARTITION BY name);
 ```
 
@@ -321,8 +321,12 @@ QUALIFY version = max(version) OVER (PARTITION BY name);
   skipped. Old versions can be listed, diffed and restored with plain SQL.
 - **A database carries its own analysis.** Send someone `sales.duckdb` and they get the data and the
   notebooks that explain it. `CALL notebook_start('db:revenue')` opens a stored notebook.
-- **Result cache.** For a database-backed notebook the cache goes in `_notebook.cache(name, cell,
+- **Result cache.** For a database-backed notebook the cache goes in `_sketchbook.cache(name, cell,
   format, key, data, saved_at, result)` in place of the sidecar directory (FORMAT.md §8, and §17 below).
+- **Databases from before the rename.** The extension was called `notebook` and its schema `_notebook`.
+  A database with `_notebook.versions` and no `_sketchbook.versions` is read from the old schema, and the
+  first save there copies the old history into `_sketchbook` so versions carry on; `_notebook` is left
+  as it was.
 
 **File and database together.** A notebook session has one source of truth: the place it was opened
 from. `notebook_save` and `notebook_checkout` copy between the two explicitly. There is no automatic
@@ -522,7 +526,7 @@ Other risks:
 2. **Server and minimal UI.** Editor, grid, reactive runs, file sync. Resolves S2, S3. **Done.**
 3. **Charts and inputs.** Chart compiler, grammar charts, KPI and table, input widgets, selections.
    **Done.**
-4. **In-database storage.** `_notebook` schema, save, checkout, history. **Done.**
+4. **In-database storage.** `_sketchbook` schema, save, checkout, history. **Done.**
 5. **Export.** Single-file HTML, PDF, Markdown, precomputed interactivity. **Done.**
 6. **More chart types.** Maps, hierarchies, flows, networks, pivot. **Done.**
 7. **Interactive WASM export.** Resolves S5. **Done.**
@@ -1087,7 +1091,7 @@ set aside as not needed.
   bundle any more. CI still builds `wasm_mvp`, because the community repository does, but nothing
   can load that build.
 - **Unsigned builds load for testing.** `db.open({allowUnsignedExtensions: true})`, then
-  `LOAD '<url of notebook.duckdb_extension.wasm>'`. DuckDB-WASM fetches extensions by URL. Without
+  `LOAD '<url of sketchbook.duckdb_extension.wasm>'`. DuckDB-WASM fetches extensions by URL. Without
   the flag, only extensions signed with DuckDB's core or community keys load, which a build from the
   community repository would be.
 

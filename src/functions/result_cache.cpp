@@ -18,7 +18,12 @@ using notebook::Json;
 
 namespace {
 
-const char *const CACHE_TABLE = "_notebook.cache";
+// Where entries live, and where they lived before the extension was renamed: read when the new place has
+// nothing for a notebook, cleared with it, never written.
+const char *const CACHE_SCHEMA = "_sketchbook";
+const char *const LEGACY_CACHE_SCHEMA = "_notebook";
+const char *const CACHE_DIRECTORY = ".duckdb-sketchbook";
+const char *const LEGACY_CACHE_DIRECTORY = ".duckdb-notebook";
 
 string Now() {
 	// `YYYY-MM-DD hh:mm:ss`, UTC.
@@ -38,9 +43,10 @@ unique_ptr<QueryResult> Execute(Connection &connection, const string &sql, vecto
 	return result;
 }
 
-bool CacheTableExists(Connection &connection) {
+bool CacheTableExists(Connection &connection, const string &schema) {
 	auto result = connection.Query("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
-	                               "schema_name = '_notebook' AND table_name = 'cache'");
+	                               "schema_name = " +
+	                               notebook::QuoteString(schema) + " AND table_name = 'cache'");
 	if (result->HasError()) {
 		return false;
 	}
@@ -78,7 +84,9 @@ bool ReadSmallFile(FileSystem &fs, const string &path, string &text) {
 
 // ---- The store -------------------------------------------------------------------------------------
 
-ResultCacheStore::ResultCacheStore(DatabaseInstance &db, const string &source) : db(db) {
+ResultCacheStore::ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy)
+    : db(db), source(source), legacy(legacy) {
+	table = string(legacy ? LEGACY_CACHE_SCHEMA : CACHE_SCHEMA) + ".cache";
 	if (source.compare(0, 3, "db:") == 0) {
 		in_database = true;
 		name = source.substr(3);
@@ -96,7 +104,8 @@ ResultCacheStore::ResultCacheStore(DatabaseInstance &db, const string &source) :
 		auto file = slash == string::npos ? source : source.substr(slash + 1);
 		auto dot = file.rfind('.');
 		auto stem = dot == string::npos || dot == 0 ? file : file.substr(0, dot);
-		root = (slash == string::npos ? string() : source.substr(0, slash + 1)) + ".duckdb-notebook";
+		root = (slash == string::npos ? string() : source.substr(0, slash + 1)) +
+		       (legacy ? LEGACY_CACHE_DIRECTORY : CACHE_DIRECTORY);
 		directory = root + fs.PathSeparator(source) + notebook::CacheFileName(stem);
 		available = true;
 	} catch (...) { // NOLINT
@@ -119,14 +128,14 @@ bool ResultCacheStore::Prepare() {
 	try {
 		if (in_database) {
 			Connection connection(db);
-			Execute(connection, "CREATE SCHEMA IF NOT EXISTS _notebook");
+			Execute(connection, string("CREATE SCHEMA IF NOT EXISTS ") + CACHE_SCHEMA);
 			Execute(connection,
-			        string("CREATE TABLE IF NOT EXISTS ") + CACHE_TABLE +
+			        string("CREATE TABLE IF NOT EXISTS ") + table +
 			            " (name VARCHAR NOT NULL, cell VARCHAR NOT NULL, format INTEGER NOT NULL, key "
 			            "VARCHAR NOT NULL, data VARCHAR, saved_at TIMESTAMP NOT NULL, result VARCHAR NOT NULL, "
 			            "PRIMARY KEY (name, cell))");
 			// A table made before entries kept their data key (cache format 1).
-			Execute(connection, string("ALTER TABLE ") + CACHE_TABLE + " ADD COLUMN IF NOT EXISTS data VARCHAR");
+			Execute(connection, string("ALTER TABLE ") + table + " ADD COLUMN IF NOT EXISTS data VARCHAR");
 		} else {
 			auto &fs = FileSystem::GetFileSystem(db);
 			if (!fs.DirectoryExists(root)) {
@@ -143,7 +152,7 @@ bool ResultCacheStore::Prepare() {
 			}
 			auto ignore = root + "/.gitignore";
 			if (!fs.FileExists(ignore)) {
-				WriteTextFile(db, ignore, "# Results cached by the DuckDB notebook extension. Safe to delete.\n*\n");
+				WriteTextFile(db, ignore, "# Results cached by the DuckDB sketchbook extension. Safe to delete.\n*\n");
 			}
 		}
 		prepared = true;
@@ -154,23 +163,33 @@ bool ResultCacheStore::Prepare() {
 }
 
 void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, CacheEntry> &entries, CacheState &state) {
-	if (!available) {
+	if (Read(ids, entries, state) || legacy || !available) {
 		return;
+	}
+	// Nothing here yet: a notebook cached before the extension was renamed.
+	ResultCacheStore(db, source, true).Read(ids, entries, state);
+}
+
+bool ResultCacheStore::Read(const std::vector<string> &ids, std::map<string, CacheEntry> &entries, CacheState &state) {
+	bool found = false;
+	if (!available) {
+		return found;
 	}
 	try {
 		if (in_database) {
 			Connection connection(db);
-			if (!CacheTableExists(connection)) {
-				return;
+			if (!CacheTableExists(connection, table.substr(0, table.find('.')))) {
+				return found;
 			}
 			auto result = Execute(
 			    connection,
 			    string("SELECT cell, key, strftime(saved_at, '%Y-%m-%d %H:%M:%S'), result, coalesce(data, '') FROM ") +
-			        CACHE_TABLE + " WHERE name = ? AND format = ? AND length(result) <= ?",
+			        table + " WHERE name = ? AND format = ? AND length(result) <= ?",
 			    {Value(name), Value::INTEGER(notebook::CACHE_FORMAT),
 			     Value::BIGINT(NumericCast<int64_t>(notebook::CACHE_MAX_RESULT_BYTES))});
 			while (auto chunk = result->Fetch()) {
 				for (idx_t r = 0; r < chunk->size(); r++) {
+					found = true;
 					auto id = chunk->GetValue(0, r).ToString();
 					auto text = chunk->GetValue(3, r).ToString();
 					if (id == notebook::CACHE_STATE_ID) {
@@ -181,12 +200,13 @@ void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, Cac
 					}
 				}
 			}
-			return;
+			return found;
 		}
 		auto &fs = FileSystem::GetFileSystem(db);
 		if (!fs.DirectoryExists(directory)) {
-			return;
+			return found;
 		}
+		found = true;
 		string text;
 		if (ReadSmallFile(fs, FilePath(notebook::CACHE_STATE_ID), text)) {
 			notebook::ParseCacheState(text, state);
@@ -199,6 +219,7 @@ void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, Cac
 		}
 	} catch (...) { // NOLINT: an unreadable cache is no cache
 	}
+	return found;
 }
 
 bool ResultCacheStore::Write(const string &id, const string &key, const string &data, const string &saved_at,
@@ -210,7 +231,7 @@ bool ResultCacheStore::Write(const string &id, const string &key, const string &
 		if (in_database) {
 			Connection connection(db);
 			Execute(connection,
-			        string("INSERT OR REPLACE INTO ") + CACHE_TABLE +
+			        string("INSERT OR REPLACE INTO ") + table +
 			            " (name, cell, format, key, data, saved_at, result) VALUES (?, ?, ?, ?, ?, ?::TIMESTAMP, ?)",
 			        {Value(name), Value(id), Value::INTEGER(notebook::CACHE_FORMAT), Value(key), Value(data),
 			         Value(saved_at), Value(text)});
@@ -243,8 +264,8 @@ void ResultCacheStore::Remove(const string &id) {
 	try {
 		if (in_database) {
 			Connection connection(db);
-			if (CacheTableExists(connection)) {
-				Execute(connection, string("DELETE FROM ") + CACHE_TABLE + " WHERE name = ? AND cell = ?",
+			if (CacheTableExists(connection, table.substr(0, table.find('.')))) {
+				Execute(connection, string("DELETE FROM ") + table + " WHERE name = ? AND cell = ?",
 				        {Value(name), Value(id)});
 			}
 			return;
@@ -259,9 +280,8 @@ vector<string> ResultCacheStore::StoredIds() {
 	vector<string> stored;
 	if (in_database) {
 		Connection connection(db);
-		if (CacheTableExists(connection)) {
-			auto result =
-			    Execute(connection, string("SELECT cell FROM ") + CACHE_TABLE + " WHERE name = ?", {Value(name)});
+		if (CacheTableExists(connection, table.substr(0, table.find('.')))) {
+			auto result = Execute(connection, string("SELECT cell FROM ") + table + " WHERE name = ?", {Value(name)});
 			while (auto chunk = result->Fetch()) {
 				for (idx_t r = 0; r < chunk->size(); r++) {
 					stored.push_back(chunk->GetValue(0, r).ToString());
@@ -308,6 +328,14 @@ void ResultCacheStore::Prune(const std::vector<string> &ids) {
 }
 
 idx_t ResultCacheStore::Clear() {
+	idx_t removed = ClearHere();
+	if (!legacy && available) {
+		removed = MaxValue<idx_t>(removed, ResultCacheStore(db, source, true).ClearHere());
+	}
+	return removed;
+}
+
+idx_t ResultCacheStore::ClearHere() {
 	idx_t removed = 0;
 	if (!available) {
 		return removed;
@@ -322,7 +350,7 @@ idx_t ResultCacheStore::Clear() {
 		if (in_database) {
 			if (!stored.empty()) {
 				Connection connection(db);
-				Execute(connection, string("DELETE FROM ") + CACHE_TABLE + " WHERE name = ?", {Value(name)});
+				Execute(connection, string("DELETE FROM ") + table + " WHERE name = ?", {Value(name)});
 			}
 			return removed;
 		}
@@ -330,7 +358,7 @@ idx_t ResultCacheStore::Clear() {
 		for (auto &file : stored) {
 			fs.TryRemoveFile(directory + "/" + file);
 		}
-		// The notebook's directory goes if nothing else is in it; `.duckdb-notebook` itself stays.
+		// The notebook's directory goes if nothing else is in it; the cache directory itself stays.
 		bool empty = true;
 		if (fs.DirectoryExists(directory)) {
 			fs.ListFiles(directory, [&](const string &, bool) { empty = false; });

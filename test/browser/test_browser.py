@@ -531,7 +531,7 @@ def test_cache(browser, work):
     notebook = os.path.join(folder, "revenue.sql")
     shutil.copy(os.path.join(ROOT, "examples", "revenue.sql"), notebook)
     db = os.path.join(folder, "cache.duckdb")
-    sidecar = os.path.join(folder, ".duckdb-notebook", "revenue")
+    sidecar = os.path.join(folder, ".duckdb-sketchbook", "revenue")
 
     def start(source=notebook):
         return serve(folder, source, db)
@@ -595,13 +595,26 @@ def test_cache(browser, work):
     names = sorted(os.listdir(sidecar)) if os.path.isdir(sidecar) else []
     check("monthly.json" in names and "@state.json" in names and "filtered.json" in names
           and len([n for n in names if n.startswith("@") and n != "@state.json"]) == 2,
-          f"running keeps each cell's result beside the notebook ({len(names)} files in .duckdb-notebook/revenue)")
-    check(open(os.path.join(folder, ".duckdb-notebook", ".gitignore")).read().strip().endswith("*"),
+          f"running keeps each cell's result beside the notebook ({len(names)} files in .duckdb-sketchbook/revenue)")
+    check(open(os.path.join(folder, ".duckdb-sketchbook", ".gitignore")).read().strip().endswith("*"),
           "the cache directory ignores itself in git")
     check(max(os.path.getsize(os.path.join(sidecar, n)) for n in names) < 4 * 1024 * 1024, "every entry is under the size limit")
     check(not page.errors, f"no browser errors while running {page.errors[:3]}")
     page.close()
     stop(shell)
+
+    # ---- A cache kept before the extension was renamed (.duckdb-notebook/) is still shown. ----
+    current, legacy = os.path.join(folder, ".duckdb-sketchbook"), os.path.join(folder, ".duckdb-notebook")
+    os.rename(current, legacy)
+    shell, url = start()
+    page = open_page(url)
+    old = shown(page)
+    check(old["badges"] == first["badges"] and old["grid"] == first["grid"] and old["region"] == "US",
+          "a cache in the old .duckdb-notebook folder is read when the new folder has none")
+    check(not os.path.exists(current), "reading an old cache writes nothing in the new folder")
+    page.close()
+    stop(shell)
+    os.rename(legacy, current)
 
     # ---- A new process: the page shows the same results at once, and nothing runs. ----
     shell, url = start()
@@ -729,9 +742,9 @@ def test_cache(browser, work):
     run_all(page)
     page.close()
     stop(shell)
-    rows = sql(db, "SELECT count(*), count(*) FILTER (cell = 'monthly') FROM _notebook.cache WHERE name = 'stored'").strip()
+    rows = sql(db, "SELECT count(*), count(*) FILTER (cell = 'monthly') FROM _sketchbook.cache WHERE name = 'stored'").strip()
     check(rows.split("|")[0].isdigit() and int(rows.split("|")[0]) >= 10 and rows.split("|")[1] == "1",
-          f"a stored notebook's results are rows of _notebook.cache ({rows})")
+          f"a stored notebook's results are rows of _sketchbook.cache ({rows})")
     shell, url = start("db:stored")
     page = open_page(url)
     check(page.locator(".nb-cell[data-idx='6'] table.nb-grid").count() == 1 and outdated(page) == [] and "run" not in page.calls

@@ -770,7 +770,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	} else if (format == "pdf") {
 #ifdef NOTEBOOK_NO_HOST_FEATURES
 		throw NotImplementedException("notebook_export: format 'pdf' runs a local Chrome, which this build of the "
-		                              "notebook extension cannot do (it was built without host features, as for "
+		                              "sketchbook extension cannot do (it was built without host features, as for "
 		                              "DuckDB-WASM). Export html and print it from the browser instead");
 #endif
 		auto browser = FindBrowser(bind.options.chrome);

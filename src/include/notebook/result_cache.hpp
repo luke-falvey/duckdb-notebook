@@ -10,8 +10,10 @@
 // an entry is fresh is decided in src/core/cache.cpp; this is where entries live and when they are
 // written.
 //
-// A notebook file keeps its cache in `.duckdb-notebook/<file name without extension>/` beside it; a
-// notebook stored in a database (`db:<name>`) keeps it in that database's `_notebook.cache` table.
+// A notebook file keeps its cache in `.duckdb-sketchbook/<file name without extension>/` beside it; a
+// notebook stored in a database (`db:<name>`) keeps it in that database's `_sketchbook.cache` table.
+// Caches written before the extension was renamed (`.duckdb-notebook/`, `_notebook.cache`) are read when
+// the new place has nothing for the notebook, and cleared with it; nothing is written there.
 // The cache is only ever a convenience: nothing here throws. A place that cannot be read gives no
 // entries, a place that cannot be written is left alone, and an entry that is not whole is ignored.
 namespace duckdb {
@@ -19,14 +21,16 @@ namespace duckdb {
 //! Where one notebook's entries are kept.
 class ResultCacheStore {
 public:
-	ResultCacheStore(DatabaseInstance &db, const string &source);
+	//! `legacy`: the place caches were kept before the extension was renamed.
+	ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy = false);
 
 	//! False for a notebook with nowhere to keep a cache: a remote file, or one not saved yet.
 	bool Available() const {
 		return available;
 	}
 
-	//! The entries of the given cells that exist and are whole, and the state if there is one.
+	//! The entries of the given cells that exist and are whole, and the state if there is one. Read from
+	//! the old place when the new one has nothing for this notebook.
 	void Load(const std::vector<string> &ids, std::map<string, notebook::CacheEntry> &entries,
 	          notebook::CacheState &state);
 	//! False if the entry could not be written (a read-only directory or database).
@@ -35,20 +39,28 @@ public:
 	void Remove(const string &id);
 	//! Removes every entry that is not one of `ids` (cells that were renamed or deleted).
 	void Prune(const std::vector<string> &ids);
-	//! Removes the notebook's whole cache. Returns how many cell results there were.
+	//! Removes the notebook's whole cache, in the old place too. Returns how many cell results there were.
 	idx_t Clear();
 
 private:
 	DatabaseInstance &db;
+	string source;
+	bool legacy;
+	//! Database: the cache table, schema-qualified.
+	string table;
 	bool available = false;
 	bool in_database = false;
-	//! Files: the notebook's directory inside `.duckdb-notebook`, and that directory.
+	//! Files: the notebook's directory inside the cache directory, and the cache directory.
 	string directory, root;
 	//! Database: the stored notebook's name.
 	string name;
 	bool prepared = false;
 
 	bool Prepare();
+	//! Load from this place only. True if it has anything for the notebook (files: its directory exists).
+	bool Read(const std::vector<string> &ids, std::map<string, notebook::CacheEntry> &entries,
+	          notebook::CacheState &state);
+	idx_t ClearHere();
 	string FilePath(const string &id) const;
 	bool Write(const string &id, const string &key, const string &data, const string &saved_at, const string &text);
 	vector<string> StoredIds();

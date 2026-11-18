@@ -7,8 +7,9 @@
 #include "duckdb/main/prepared_statement.hpp"
 #include "notebook/script.hpp"
 
-// Notebooks stored inside a database (docs/DESIGN.md section 5). The `_notebook` schema holds the
-// same text as the file, one row per saved version:
+// Notebooks stored inside a database (docs/DESIGN.md section 5). The `_sketchbook` schema holds the
+// same text as the file, one row per saved version. Databases written before the extension was renamed
+// keep them in `_notebook`: they are read from there until the first save, which copies them over.
 //   notebook_save(path, name := ..., message := ..., database := ..., force := ...)
 //   notebook_checkout(name, file := ..., version := ..., database := ..., force := ...)
 // Both run their SQL on a connection of their own, created in the scan and released after it.
@@ -18,6 +19,19 @@ namespace {
 
 string Prefix(const string &database) {
 	return database.empty() ? string() : notebook::QuoteIdentifier(database) + ".";
+}
+
+//! True if `schema.versions` exists in the database (the current one when `database` is empty).
+bool HasVersions(Connection &connection, const string &database, const string &schema) {
+	auto result =
+	    connection.Query("SELECT 1 FROM duckdb_tables() WHERE schema_name = " + notebook::QuoteString(schema) +
+	                     " AND table_name = 'versions' AND database_name = " +
+	                     (database.empty() ? string("current_database()") : notebook::QuoteString(database)));
+	if (result->HasError()) {
+		return false;
+	}
+	auto chunk = result->Fetch();
+	return chunk && chunk->size() > 0;
 }
 
 void Check(unique_ptr<QueryResult> result) {
@@ -151,10 +165,10 @@ void CheckoutScan(ClientContext &context, TableFunctionInput &data, DataChunk &o
 		if (fs.FileExists(bind.to) && !bind.force) {
 			auto existing = ReadNotebookText(context, bind.to);
 			if (existing != content) {
-				auto prefix = Prefix(bind.database);
 				auto known = Rows(Execute(connection,
-				                          "SELECT count(*) FROM " + prefix +
-				                              "_notebook.versions WHERE name = ? AND content_hash = sha256(?)",
+				                          "SELECT count(*) FROM " + Prefix(bind.database) +
+				                              StorageSchema(connection, bind.database) +
+				                              ".versions WHERE name = ? AND content_hash = sha256(?)",
 				                          bind.name, existing));
 				if (known[0][0].GetValue<int64_t>() == 0) {
 					throw InvalidInputException(
@@ -180,7 +194,7 @@ int32_t SaveNotebookVersion(Connection &connection, const string &database, cons
 	auto prefix = Prefix(database);
 	auto versions = Rows(Execute(connection,
 	                             "SELECT version, content_hash FROM " + prefix +
-	                                 "_notebook.versions WHERE name = ? ORDER BY version DESC",
+	                                 "_sketchbook.versions WHERE name = ? ORDER BY version DESC",
 	                             name));
 	auto hash = Rows(Execute(connection, "SELECT sha256(?)", content))[0][0].GetValue<string>();
 	int32_t current = versions.empty() ? 0 : versions[0][0].GetValue<int32_t>();
@@ -201,10 +215,11 @@ int32_t SaveNotebookVersion(Connection &connection, const string &database, cons
 		}
 	}
 	Check(connection.Query("BEGIN TRANSACTION"));
-	Execute(connection, "INSERT INTO " + prefix + "_notebook.notebooks (name) VALUES (?) ON CONFLICT DO NOTHING", name);
+	Execute(connection, "INSERT INTO " + prefix + "_sketchbook.notebooks (name) VALUES (?) ON CONFLICT DO NOTHING",
+	        name);
 	Execute(connection,
 	        "INSERT INTO " + prefix +
-	            "_notebook.versions (name, version, content, content_hash, message) VALUES (?, ?, ?, ?, ?)",
+	            "_sketchbook.versions (name, version, content, content_hash, message) VALUES (?, ?, ?, ?, ?)",
 	        name, current + 1, content, hash, message.empty() ? Value() : Value(message));
 	Check(connection.Query("COMMIT"));
 	saved = true;
@@ -214,40 +229,56 @@ int32_t SaveNotebookVersion(Connection &connection, const string &database, cons
 
 void EnsureStorage(Connection &connection, const string &database) {
 	auto prefix = Prefix(database);
-	Check(connection.Query("CREATE SCHEMA IF NOT EXISTS " + prefix + "_notebook"));
+	bool created = !HasVersions(connection, database, STORAGE_SCHEMA);
+	Check(connection.Query("CREATE SCHEMA IF NOT EXISTS " + prefix + "_sketchbook"));
 	Check(connection.Query("CREATE TABLE IF NOT EXISTS " + prefix +
-	                       "_notebook.notebooks (name VARCHAR PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL "
+	                       "_sketchbook.notebooks (name VARCHAR PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL "
 	                       "DEFAULT now())"));
 	Check(connection.Query("CREATE TABLE IF NOT EXISTS " + prefix +
-	                       "_notebook.versions (name VARCHAR NOT NULL REFERENCES " + prefix +
-	                       "_notebook.notebooks (name), version INTEGER NOT NULL, content VARCHAR NOT NULL, "
+	                       "_sketchbook.versions (name VARCHAR NOT NULL REFERENCES " + prefix +
+	                       "_sketchbook.notebooks (name), version INTEGER NOT NULL, content VARCHAR NOT NULL, "
 	                       "content_hash VARCHAR NOT NULL, saved_at TIMESTAMPTZ NOT NULL DEFAULT now(), message "
 	                       "VARCHAR, PRIMARY KEY (name, version))"));
-	Check(connection.Query("CREATE VIEW IF NOT EXISTS " + prefix + "_notebook.current AS SELECT * FROM " + prefix +
-	                       "_notebook.versions QUALIFY version = max(version) OVER (PARTITION BY name)"));
+	Check(connection.Query("CREATE VIEW IF NOT EXISTS " + prefix + "_sketchbook.current AS SELECT * FROM " + prefix +
+	                       "_sketchbook.versions QUALIFY version = max(version) OVER (PARTITION BY name)"));
+	// A database from before the rename: its history comes along on the first save, so versions carry
+	// on from where they were. The old schema is left as it was.
+	if (created && HasVersions(connection, database, LEGACY_STORAGE_SCHEMA)) {
+		Check(connection.Query("BEGIN TRANSACTION"));
+		Check(connection.Query("INSERT INTO " + prefix + "_sketchbook.notebooks (name, created_at) SELECT name, " +
+		                       "created_at FROM " + prefix + "_notebook.notebooks"));
+		Check(connection.Query("INSERT INTO " + prefix +
+		                       "_sketchbook.versions (name, version, content, content_hash, saved_at, message) " +
+		                       "SELECT name, version, content, content_hash, saved_at, message FROM " + prefix +
+		                       "_notebook.versions"));
+		Check(connection.Query("COMMIT"));
+	}
+}
+
+string StorageSchema(Connection &connection, const string &database) {
+	if (!HasVersions(connection, database, STORAGE_SCHEMA) &&
+	    HasVersions(connection, database, LEGACY_STORAGE_SCHEMA)) {
+		return LEGACY_STORAGE_SCHEMA;
+	}
+	return STORAGE_SCHEMA;
 }
 
 string StoredNotebook(Connection &connection, const string &database, const string &name, int32_t version,
                       int32_t &found_version) {
-	auto prefix = Prefix(database);
-	auto table =
-	    connection.Query("SELECT 1 FROM duckdb_tables() WHERE schema_name = '_notebook' AND table_name = "
-	                     "'versions'" +
-	                     (database.empty() ? string() : " AND database_name = " + notebook::QuoteString(database)));
-	if (table->HasError() || Rows(std::move(table)).empty()) {
-		throw InvalidInputException("No notebooks are stored in %s: there is no _notebook.versions table",
+	auto schema = StorageSchema(connection, database);
+	if (!HasVersions(connection, database, schema)) {
+		throw InvalidInputException("No notebooks are stored in %s: there is no _sketchbook.versions table",
 		                            database.empty() ? "this database" : database);
 	}
+	auto versions = Prefix(database) + schema + ".versions";
 	vector<vector<Value>> rows;
 	if (version > 0) {
-		rows = Rows(Execute(
-		    connection, "SELECT version, content FROM " + prefix + "_notebook.versions WHERE name = ? AND version = ?",
-		    name, version));
+		rows = Rows(Execute(connection, "SELECT version, content FROM " + versions + " WHERE name = ? AND version = ?",
+		                    name, version));
 	} else {
-		rows = Rows(Execute(connection,
-		                    "SELECT version, content FROM " + prefix +
-		                        "_notebook.versions WHERE name = ? ORDER BY version DESC LIMIT 1",
-		                    name));
+		rows = Rows(Execute(
+		    connection, "SELECT version, content FROM " + versions + " WHERE name = ? ORDER BY version DESC LIMIT 1",
+		    name));
 	}
 	if (rows.empty()) {
 		throw InvalidInputException("No stored notebook '%s'%s", name,

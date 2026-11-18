@@ -1,0 +1,111 @@
+# name: test/sql/legacy_names.test
+# description: Data written before the extension was renamed from notebook to sketchbook is still read
+# group: [notebook]
+
+require sketchbook
+
+# ---- Stored notebooks: a database whose notebooks are in the old _notebook schema ----
+
+statement ok
+ATTACH '{TEST_DIR}/legacy_names.duckdb' AS legacy_db
+
+statement ok
+CREATE SCHEMA legacy_db._notebook
+
+statement ok
+CREATE TABLE legacy_db._notebook.notebooks (name VARCHAR PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now())
+
+statement ok
+CREATE TABLE legacy_db._notebook.versions (name VARCHAR NOT NULL REFERENCES legacy_db._notebook.notebooks (name),
+    version INTEGER NOT NULL, content VARCHAR NOT NULL, content_hash VARCHAR NOT NULL,
+    saved_at TIMESTAMPTZ NOT NULL DEFAULT now(), message VARCHAR, PRIMARY KEY (name, version))
+
+statement ok
+INSERT INTO legacy_db._notebook.notebooks (name) VALUES ('old')
+
+statement ok
+INSERT INTO legacy_db._notebook.versions (name, version, content, content_hash, message)
+VALUES ('old', 1, 'SELECT 42 AS answer;', sha256('SELECT 42 AS answer;'), 'saved before the rename')
+
+# Read from the old schema while the database has no new one
+query II
+SELECT version, content FROM notebook_checkout('old', database := 'legacy_db')
+----
+1	SELECT 42 AS answer;
+
+# The first save copies the old history, so versions carry on from where they were
+query IIII
+FROM notebook_save('test/notebooks/basic.sql', name := 'old', database := 'legacy_db')
+----
+old	2	true	new version
+
+query II
+SELECT version, message FROM legacy_db._sketchbook.versions WHERE name = 'old' ORDER BY version
+----
+1	saved before the rename
+2	NULL
+
+# The old schema is left as it was
+query I
+SELECT count(*) FROM legacy_db._notebook.versions
+----
+1
+
+query I
+SELECT version FROM notebook_checkout('old', database := 'legacy_db')
+----
+2
+
+statement ok
+DETACH legacy_db
+
+# ---- The result cache of a stored notebook, kept in the old _notebook.cache table ----
+
+statement ok
+FROM notebook_save('test/notebooks/cache.sql', name := 'legacy_cache')
+
+statement ok
+FROM notebook_run('db:legacy_cache', cache := true)
+
+statement ok
+CREATE SCHEMA _notebook
+
+statement ok
+CREATE TABLE _notebook.cache AS SELECT * FROM _sketchbook.cache WHERE name = 'legacy_cache'
+
+statement ok
+DELETE FROM _sketchbook.cache WHERE name = 'legacy_cache'
+
+# Nothing in the new table: the old one is read
+query I
+SELECT count(*) > 0 FROM notebook_cache('db:legacy_cache')
+----
+true
+
+# Clearing clears the old place too
+query I
+SELECT removed > 0 FROM notebook_cache_clear('db:legacy_cache')
+----
+true
+
+query I
+SELECT count(*) FROM _notebook.cache WHERE name = 'legacy_cache'
+----
+0
+
+query I
+SELECT count(*) FROM notebook_cache('db:legacy_cache')
+----
+0
+
+statement ok
+DROP SCHEMA _notebook CASCADE
+
+statement ok
+DELETE FROM _sketchbook.cache WHERE name = 'legacy_cache'
+
+statement ok
+DELETE FROM _sketchbook.versions WHERE name = 'legacy_cache'
+
+statement ok
+DELETE FROM _sketchbook.notebooks WHERE name = 'legacy_cache'

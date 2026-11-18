@@ -1,8 +1,8 @@
-# duckdb-notebook
+# duckdb-sketchbook
 
 A notebook environment for DuckDB where the notebook is a plain `.sql` file.
 
-**Documentation: https://luke-falvey.github.io/duckdb-notebook/**: install, a first notebook in
+**Documentation: https://luke-falvey.github.io/duckdb-sketchbook/**: install, a first notebook in
 five minutes, guides, the full reference, and live exports of the examples.
 
 **Status: early, but every part of the design has a first implementation.** A DuckDB extension
@@ -81,7 +81,7 @@ FROM notebook_export('examples/revenue.sql', format := 'data');     -- one Parqu
 
 -- Notebooks stored in the database, with history; db:<name> works wherever a path does
 FROM notebook_save('examples/revenue.sql', message := 'first draft');
-SELECT name, version, saved_at FROM _notebook.versions;
+SELECT name, version, saved_at FROM _sketchbook.versions;
 FROM notebook_checkout('revenue', file := 'revenue_copy.sql');
 
 -- Peek under the pen: the CTE or sub-query at a byte offset, and the query that selects from it.
@@ -121,7 +121,7 @@ details.
 
 ## Documents
 
-- [The documentation site](https://luke-falvey.github.io/duckdb-notebook/), built from
+- [The documentation site](https://luke-falvey.github.io/duckdb-sketchbook/), built from
   [site/](site/): for people using the extension.
 - [docs/DESIGN.md](docs/DESIGN.md): architecture, execution model, storage, visualisation, export,
   risks and roadmap.
