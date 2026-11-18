@@ -19,7 +19,7 @@ us") and §14 (charts as tabs). For a single notebook's appearance use **sketchb
 | `frontend/render-sketch.js` | `Sketch`: seeded hand-drawn SVG primitives: `reseed`, `el`, `line`, `fill` (hachure, cross-hatch, solid), `rect`, `roundRect`, `ellipse`, `polyline`, `smooth`, `shape`, `arrow`, `outline(el, {kind, width, fill})` |
 | `frontend/render-core.js` | `NB`: palette and pastels, colour `schemes`/`ramp`, number and date formats, markdown (with `{{ }}` highlight markers), `NB.table` (paging, page sizes), `NB.tabs`, `NB.chartLabel`, `suggestChart` |
 | `frontend/render-sql.js` | SQL highlighting: `NB.tokenizeSql`, `NB.highlightSql`, `NB.setSqlWords` (DuckDB's keywords and types from the server). The editor lays the highlighted `<pre>` behind a transparent, self-sizing textarea (`.nb-code-wrap` in `app.js`); both must share every text metric. Colours are the `.tk-*` classes in `style.css` |
-| `frontend/render-chart.js` | Grammar charts: scales, axes (wobbly arrows), marks, legends, brushing; `SKETCH_LIMIT` (600) above which marks are plain SVG |
+| `frontend/render-chart.js` | Grammar charts: scales, axes (wobbly arrows), marks, legends, brushing; rules and bands (`drawReferences`, behind the marks, muted ink) and notes (`drawNotes`, after the marks, placed clear of what the marks left in `plot.__points`, `__bars`, `__dots`); `SKETCH_LIMIT` (600) above which marks are plain SVG |
 | `frontend/render-typed.js` | Typed charts: KPI, gauge, sankey, chord, treemap, sunburst, icicle, network, funnel, candlestick, gantt, calendar, map, table, pivot, raw specs |
 | `frontend/app.js`, `app-extra.js`, `index.html` | The editor: toolbar and gear menu, cells, query tabs and chart spec editor, stubs for hidden parts, catalog, graph, chart picker |
 | `frontend/viewer.js` | The export viewer (html, precomputed, html-wasm, PDF) |
@@ -99,7 +99,9 @@ exactly the page without it, so the look itself is unchanged; these rules keep i
   piece with `ink=off`. Do not read `canvas.ink-layer`, `.ink-hide` or inline styles that Ink sets.
 - **Look at it moving.** Check a new component part-way through, on a stopped clock (`Ink.pause()`,
   `Ink.advance(ms)`, as `test_ink` does), in the editor, the reading view, dark mode and an export. The
-  gear menu's "handwriting" setting and `?ink=off` (or `&ink=off`) switch it off.
+  gear menu's "handwriting" setting and `?ink=off` (or `&ink=off`) switch it off. Look at it in watch
+  mode too (`?ink=watch`): one pen, every stroke drawn in turn, so a component's order and the number of
+  strokes it is made of show up there first.
 - **New fonts** need pen strokes: run `tools/font_strokes.py` and look at `tools/contact-sheet.html`.
 
 ## Cell chrome

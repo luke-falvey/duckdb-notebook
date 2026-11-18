@@ -5,6 +5,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/database.hpp"
+#include "notebook/result_cache.hpp"
 #include "notebook/script.hpp"
 #include "notebook/session.hpp"
 
@@ -12,8 +13,11 @@
 
 // notebook_run(path, params := {...}) runs a notebook headlessly, in a connection of its
 // own. Cells run in file order, except that a markdown cell waits for the cells its
-// `{{ }}` expressions read (notebook::RunOrder). It is the seed of the runner the server
-// will use.
+// `{{ }}` expressions read (notebook::RunOrder). Cells run through Runner (session.cpp), as in
+// the server and the exports.
+//
+// A run never reads the result cache: it exists to compute from the data as it is now. With
+// cache := true it writes it, so the next person to open the notebook sees these results at once.
 //
 // The Runner's connection is created here and destroyed when the scan finishes. Never
 // store a Connection (or anything else that owns the DatabaseInstance) in state that
@@ -29,6 +33,8 @@ struct RunBindData : public TableFunctionData {
 	vector<int> order;
 	//! Values from params := {...}, by variable name.
 	std::map<string, Value> params;
+	//! cache := true: keep each cell's result as the editor would (FORMAT §8).
+	bool cache = false;
 };
 
 struct RunState : public GlobalTableFunctionState {
@@ -36,6 +42,9 @@ struct RunState : public GlobalTableFunctionState {
 	unique_ptr<Runner> runner;
 	//! Position in RunBindData::order.
 	idx_t next = 0;
+	//! With cache := true: the notebook's cache and what this run adds to it.
+	ResultCache cache;
+	vector<RanCell> ran;
 };
 
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
@@ -64,6 +73,8 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 		}
 	}
 
+	result->cache = NamedBool(input, "cache");
+
 	auto column = [&](const char *name, LogicalType type) {
 		names.emplace_back(name);
 		return_types.push_back(std::move(type));
@@ -88,8 +99,10 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 	// the caller's attached databases.
 	state->runner = make_uniq<Runner>(DatabaseInstance::GetDatabase(context), state->session);
 	auto &bind_data = input.bind_data->Cast<RunBindData>();
-	state->runner->ApplyMetadata(bind_data.notebook, bind_data.path);
-	state->runner->InitializeVariables(bind_data.notebook, bind_data.params);
+	state->runner->Prepare(bind_data.notebook, bind_data.path, bind_data.params);
+	if (bind_data.cache) {
+		state->cache.Load(DatabaseInstance::GetDatabase(context), bind_data.path, bind_data.notebook);
+	}
 	return std::move(state);
 }
 
@@ -98,6 +111,11 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &cells = bind_data.notebook.cells;
 	auto &state = data.global_state->Cast<RunState>();
 	if (state.next >= bind_data.order.size()) {
+		if (state.runner && bind_data.cache) {
+			state.runner->Save();
+			state.cache.Record(DatabaseInstance::GetDatabase(context), bind_data.path, bind_data.notebook,
+			                   state.session, state.ran);
+		}
 		// Release the connection as soon as the last cell has been reported.
 		state.runner.reset();
 		return;
@@ -108,7 +126,18 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	options.params = bind_data.params;
 	// Chart cells compile and query their data, so a broken spec fails the run.
 	options.charts = true;
-	auto outcome = state.runner->Run(bind_data.notebook, cell, options);
+	CellOutcome outcome;
+	if (bind_data.cache) {
+		// The result the editor would be sent: a page of rows, chart data, marked {{ }} values.
+		options.page_rows = 100;
+		options.mark_values = true;
+		auto result = notebook::Json::Object();
+		outcome = RunForEditor(*state.runner, bind_data.notebook, cell, options, result);
+		outcome.output = StringUtil::Replace(StringUtil::Replace(outcome.output, VALUE_OPEN, ""), VALUE_CLOSE, "");
+		state.ran.push_back(RanFromResult(cell.index, outcome.status, result));
+	} else {
+		outcome = state.runner->Run(bind_data.notebook, cell, options);
+	}
 
 	output.data[0].Append(Value::INTEGER(cell.index));
 	output.data[1].Append(Value(notebook::CellKindName(cell.kind)));
@@ -125,8 +154,10 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 void RegisterNotebookRun(ExtensionLoader &loader) {
 	TableFunction function("notebook_run", {LogicalType::VARCHAR}, Scan, Bind, Init);
 	// params := {name: value, ...} overrides input defaults and sets selection variables.
-	function.GetSignature().WithTypedKwargs("options",
-	                                        [](TypedKwargs &options) { options.Add("params", LogicalType::ANY); });
+	// cache := true keeps the results for the editor to show when the notebook is next opened.
+	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("params", LogicalType::ANY).Add("cache", LogicalType::BOOLEAN);
+	});
 	loader.RegisterFunction(function);
 }
 

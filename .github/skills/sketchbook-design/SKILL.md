@@ -78,7 +78,8 @@ query hide=code rows=10                          (detail table)
 - **Continuous colour**: `scheme: blues` (default), `greens`, `reds`, `oranges`, `purples`, `greys`,
   `viridis`, `magma`. Sequential data only; do not use them for categories.
 - **Pies** only for 2 to 5 parts of one whole; otherwise ranked bars.
-- **Reference lines** via `layers` (a `rule` at `agg: avg`) say more than another series.
+- **Reference lines** (`rules: [{y: avg, label: Average}]`) and target `bands` say more than another series.
+- **A note** (`notes: [{x: 2026-02-01, text: "a short month"}]`) tells the reader where to look. One or two per chart, a few words each.
 
 ## Tables
 
@@ -102,6 +103,25 @@ query hide=code rows=10                          (detail table)
 Run times show in the bottom right of each cell in the editor. For a notebook you present or record,
 set `timing: false` in the `[notebook]` cell (or untick "timing" in the gear menu) to hide them.
 Exports never show them.
+
+## Laying out for presenting
+
+A notebook is presented one screen at a time (sketchbook-preview-export, "Presenting"). A screen is a
+**row of the span grid**, scaled up to fill the window, so the layout above is already the slide plan:
+
+- One idea per row. `6+6` puts two charts on one screen, `4+4+4` three KPIs; a full-width cell is a
+  screen of its own.
+- Inputs are shown with the row after them. Put the cell that best shows their effect straight after.
+- A screen is scaled to fit, down to four fifths of reading size, and then scrolls. Keep rows short enough not to:
+  `rows=8` or so on tables, the default chart height, three sentences of prose. Check with the window
+  at laptop size (1366 x 768), where there is least room.
+- `screen=join` keeps a cell with the one before it: a sentence under its chart, a table under its KPI
+  row. `screen=new` splits a row in two screens. `screen=skip` keeps working tables and long detail out
+  of the talk while leaving them in the reading view and exports.
+- A `## ` heading cell on its own makes a section screen. Use `screen=join` on the cell after it if the
+  heading should introduce it on the same screen.
+- A screen is as wide as what it holds and is centred, so a title, one chart or a KPI row fills the
+  window. The less a screen holds, the larger it is drawn (up to 2.5 times).
 
 ## Dark mode
 

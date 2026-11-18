@@ -92,10 +92,15 @@ std::string JsonToSqlLiteral(const Json &value, const std::string &type) {
 		auto literal = value.Dump();
 		return type.empty() ? literal : literal + "::" + type;
 	}
-	case Json::Type::STRING:
-	case Json::Type::RAW: {
+	case Json::Type::STRING: {
 		auto literal = QuoteString(value.Str());
 		return type.empty() ? literal : literal + "::" + type;
+	}
+	case Json::Type::RAW: {
+		// JSON text kept as it was serialised: the literal of the value it holds.
+		std::string error;
+		auto parsed = ParseJson(value.Dump(), error);
+		return error.empty() ? JsonToSqlLiteral(parsed, type) : "NULL";
 	}
 	case Json::Type::ARRAY: {
 		std::string out = "[";
@@ -149,6 +154,37 @@ std::string CellSql(const Cell &cell) {
 		result += WithSemicolon(query);
 	}
 	return result;
+}
+
+std::string ReplaySql(const Cell &cell) {
+	if (cell.kind != CellKind::SQL) {
+		return std::string();
+	}
+	// A named query cell's last statement becomes its view, replayed in CellSql's wrapped form.
+	bool defines_view = cell.is_query && !cell.name.empty();
+	auto statements = SplitStatements(cell.sql);
+	std::string replay;
+	for (size_t i = 0; i < statements.size() && !(defines_view && i + 1 == statements.size()); i++) {
+		if (IsConnectionState(statements[i].text)) {
+			replay += statements[i].text + ";\n";
+		}
+	}
+	if (defines_view) {
+		auto wrapped = SplitStatements(CellSql(cell));
+		replay += wrapped.empty() ? std::string() : wrapped.back().text + ";\n";
+	}
+	return replay;
+}
+
+std::string DisplaySql(const Cell &cell) {
+	if (cell.kind != CellKind::SQL || !cell.is_query) {
+		return std::string();
+	}
+	if (!cell.name.empty()) {
+		return "SELECT * FROM " + QuoteIdentifier(cell.name);
+	}
+	auto statements = SplitStatements(cell.sql);
+	return statements.empty() ? std::string() : statements.back().text;
 }
 
 std::string ChartFrom(const Cell &cell) {

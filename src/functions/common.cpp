@@ -69,6 +69,11 @@ notebook::Notebook AnalyzeText(ClientContext &context, const string &text) {
 	return notebook;
 }
 
+notebook::Notebook AnalyzeText(DatabaseInstance &db, const string &text) {
+	Connection connection(db);
+	return AnalyzeText(*connection.context, text);
+}
+
 notebook::Notebook ReadNotebook(ClientContext &context, const string &path) {
 	return AnalyzeText(context, ReadNotebookText(context, path));
 }
@@ -83,6 +88,21 @@ void ThrowIfInvalid(const notebook::Notebook &notebook, const string &path) {
 			                            path, cell.start_line, cell.errors[0], path);
 		}
 	}
+}
+
+unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunctionInitInput &input) {
+	return make_uniq<OnceState>();
+}
+
+string NamedString(TableFunctionBindInput &input, const char *key) {
+	auto found = input.named_parameters.find(key);
+	return found == input.named_parameters.end() || found->second.IsNull() ? string()
+	                                                                       : found->second.GetValue<string>();
+}
+
+bool NamedBool(TableFunctionBindInput &input, const char *key) {
+	auto found = input.named_parameters.find(key);
+	return found != input.named_parameters.end() && !found->second.IsNull() && found->second.GetValue<bool>();
 }
 
 } // namespace duckdb

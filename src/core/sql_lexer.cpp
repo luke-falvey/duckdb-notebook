@@ -1,4 +1,5 @@
 #include "notebook/sql_lexer.hpp"
+#include "notebook/text.hpp"
 
 #include <cctype>
 #include <cstdint>
@@ -15,24 +16,6 @@ bool IsIdentChar(char c) {
 }
 bool IsSpace(char c) {
 	return std::isspace(static_cast<unsigned char>(c));
-}
-
-std::string Trim(const std::string &s) {
-	size_t b = 0, e = s.size();
-	while (b < e && IsSpace(s[b])) {
-		b++;
-	}
-	while (e > b && IsSpace(s[e - 1])) {
-		e--;
-	}
-	return s.substr(b, e - b);
-}
-
-std::string Upper(std::string s) {
-	for (auto &c : s) {
-		c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-	}
-	return s;
 }
 
 //! A word or single punctuation character found in code, with its parenthesis depth.
@@ -277,16 +260,36 @@ bool IsQueryStatement(const std::string &statement) {
 	return false;
 }
 
-std::vector<std::string> ReferencedVariables(const std::string &sql) {
-	std::vector<std::string> names;
-	auto add = [&](const std::string &name) {
-		for (auto &existing : names) {
-			if (existing == name) {
-				return;
-			}
+std::vector<ParenPair> ParenPairs(const std::string &sql) {
+	std::vector<ParenPair> pairs;
+	std::vector<size_t> open;
+	SqlScanner scan(sql);
+	while (!scan.Done()) {
+		auto state = scan.CurrentState();
+		size_t at = scan.Position();
+		scan.Advance();
+		if (state != SqlScanner::State::CODE) {
+			continue;
 		}
-		names.push_back(name);
-	};
+		if (sql[at] == '(') {
+			open.push_back(pairs.size());
+			pairs.push_back({at, std::string::npos});
+		} else if (sql[at] == ')' && !open.empty()) {
+			pairs[open.back()].close = at;
+			open.pop_back();
+		}
+	}
+	std::vector<ParenPair> balanced;
+	for (auto &pair : pairs) {
+		if (pair.close != std::string::npos) {
+			balanced.push_back(pair);
+		}
+	}
+	return balanced;
+}
+
+std::vector<VariableRef> VariableRefs(const std::string &sql) {
+	std::vector<VariableRef> refs;
 	SqlScanner scan(sql);
 	while (!scan.Done()) {
 		auto state = scan.CurrentState();
@@ -297,29 +300,42 @@ std::vector<std::string> ReferencedVariables(const std::string &sql) {
 			continue;
 		}
 		size_t p = at + 1;
+		std::string name;
+		size_t end = p;
 		if (p < sql.size() && sql[p] == '"') {
-			size_t end = p + 1;
-			std::string name;
+			end = p + 1;
 			while (end < sql.size()) {
 				if (sql[end] == '"' && end + 1 < sql.size() && sql[end + 1] == '"') {
 					name += '"';
 					end += 2;
 				} else if (sql[end] == '"') {
+					end++;
 					break;
 				} else {
 					name += sql[end++];
 				}
 			}
-			if (!name.empty()) {
-				add(name);
-			}
 		} else if (p < sql.size() && IsIdentStart(sql[p])) {
-			size_t end = p;
 			while (end < sql.size() && IsIdentChar(sql[end])) {
 				end++;
 			}
-			add(sql.substr(p, end - p));
+			name = sql.substr(p, end - p);
 		}
+		if (name.empty()) {
+			continue;
+		}
+		refs.push_back({at, end, name});
+		while (scan.Position() < end && !scan.Done()) {
+			scan.Advance();
+		}
+	}
+	return refs;
+}
+
+std::vector<std::string> ReferencedVariables(const std::string &sql) {
+	std::vector<std::string> names;
+	for (auto &ref : VariableRefs(sql)) {
+		AddUnique(names, ref.name);
 	}
 	return names;
 }
@@ -351,7 +367,8 @@ bool IsSetVariable(const std::string &statement, std::string &name) {
 	if (tokens.size() < 4 || tokens[0].text != "SET" || tokens[1].text != "VARIABLE" || tokens[3].text != "=") {
 		return false;
 	}
-	if (!IsIdentStart(tokens[2].text[0])) {
+	bool quoted = tokens[2].text == "\"";
+	if (!quoted && !IsIdentStart(tokens[2].text[0])) {
 		return false;
 	}
 	// CodeTokens upper-cases words; recover the name as written.
@@ -364,6 +381,21 @@ bool IsSetVariable(const std::string &statement, std::string &name) {
 		while (p < stripped.size() && IsSpace(stripped[p])) {
 			p++;
 		}
+	}
+	if (quoted) {
+		// "name", with "" standing for one quote.
+		name.clear();
+		for (size_t q = p + 1; q < stripped.size(); q++) {
+			if (stripped[q] == '"' && q + 1 < stripped.size() && stripped[q + 1] == '"') {
+				name += '"';
+				q++;
+			} else if (stripped[q] == '"') {
+				break;
+			} else {
+				name += stripped[q];
+			}
+		}
+		return !name.empty();
 	}
 	size_t end = p;
 	while (end < stripped.size() && IsIdentChar(stripped[end])) {

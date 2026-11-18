@@ -24,10 +24,16 @@
         <button id="save" title="Save (Ctrl+S)">Save</button>
         <label title="Re-run query, markdown and chart cells when something they read changes"><input type="checkbox" id="autorun" checked> auto-run</label>
       </div>
+      <div class="row">
+        <label title="Keep each cell's last result beside the notebook, so it opens showing them without running anything (cache: in the [notebook] cell, saved with the notebook)"><input type="checkbox" id="keep-results" checked> keep results</label>
+        <span class="grow"></span>
+        <button id="forget-results" title="Forget the results kept for this notebook. Nothing else is lost: running it brings them back.">Forget</button>
+      </div>
 
       <h4>view</h4>
       <div class="row">
         <button id="view-reading" title="Reading view: hide code and chrome">Reading</button>
+        <button id="view-present" title="Present: one screen at a time. Arrows, Space or a click move; Esc leaves; F for full screen">Present</button>
         <button id="view-graph" title="Show the dependency graph">Graph</button>
         <button id="view-sidebar" title="Show or hide the catalog">Catalog</button>
         <button id="theme" title="Light or dark">◐</button>
@@ -36,12 +42,16 @@
         <select id="page-size" title="Default page size for tables without rows= set"></select>
         <label title="Show how long each cell took (timing: in the [notebook] cell, saved with the notebook)"><input type="checkbox" id="show-timing" checked> timing</label>
       </div>
+      <div class="row">
+        <label title="Use the whole width of the window for cells, tables and charts (remembered in this browser; open with ?width=wide or ?width=normal; width: wide in the [notebook] cell makes it the default for readers)"><input type="checkbox" id="wide"> wide</label>
+      </div>
       <div class="row">handwriting
-        <select id="ink" title="How the page is written when it appears (remembered in this browser)">
+        <select id="ink" title="How the page is written when it appears (remembered in this browser). Watch: space pauses, + and − change speed, n finishes a piece, e everything, Esc stops.">
           <option value="gentle">gentle</option>
-          <option value="slow">slow</option>
+          <option value="watch" title="One pen writes the page slowly, in reading order, for watching">watch</option>
           <option value="off">off</option>
         </select>
+        <label title="While editing a query, show the first rows of the CTE or sub-query the caret is in (remembered in this browser)"><input type="checkbox" id="peek" checked> peek</label>
       </div>
 
       <h4>export</h4>
@@ -78,8 +88,10 @@
 <script src="/assets/render-sql.js"></script>
 <script src="/assets/render-chart.js"></script>
 <script src="/assets/render-typed.js"></script>
+<script src="/assets/render-present.js"></script>
 <script src="/assets/app.js"></script>
 <script src="/assets/app-extra.js"></script>
+<script src="/assets/app-peek.js"></script>
 <script>App.start();</script>
 </body>
 </html>

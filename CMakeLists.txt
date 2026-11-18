@@ -37,6 +37,26 @@ string(APPEND NOTEBOOK_ASSET_CODE "\n} // namespace\n\nconst string &GetAsset(co
 file(WRITE ${NOTEBOOK_ASSET_CPP}.tmp "${NOTEBOOK_ASSET_CODE}")
 configure_file(${NOTEBOOK_ASSET_CPP}.tmp ${NOTEBOOK_ASSET_CPP} COPYONLY)
 
+# Features that need the host operating system: the HTTP server (sockets and threads), opening a
+# browser and printing PDFs through a local Chrome (processes). DuckDB-WASM has none of these, so a
+# WebAssembly build leaves them out: server_unavailable.cpp registers notebook_start and notebook_stop
+# with the same signatures, failing with a clear message, and export.cpp refuses format 'pdf'.
+# Everything else (parsing, analysis, the chart compiler, running, storage, the other exports)
+# is the same in both builds. See docs/DESIGN.md section 21.
+if(EMSCRIPTEN)
+  set(NOTEBOOK_HOST_FEATURES_DEFAULT OFF)
+else()
+  set(NOTEBOOK_HOST_FEATURES_DEFAULT ON)
+endif()
+option(NOTEBOOK_HOST_FEATURES "Build the HTTP server and PDF printing (needs sockets, threads, processes)"
+       ${NOTEBOOK_HOST_FEATURES_DEFAULT})
+if(NOTEBOOK_HOST_FEATURES)
+  set(NOTEBOOK_SERVER_SOURCE src/functions/server.cpp)
+else()
+  set(NOTEBOOK_SERVER_SOURCE src/functions/server_unavailable.cpp)
+  add_definitions(-DNOTEBOOK_NO_HOST_FEATURES)
+endif()
+
 # core/      plain C++ with no DuckDB dependency: format, lexer, script generation, graph.
 #            Unit-tested on its own with `make core_test`.
 # functions/ the SQL surface, one file per function, written against DuckDB's C++ API.
@@ -48,21 +68,46 @@ set(EXTENSION_SOURCES
     src/core/json.cpp
     src/core/yaml.cpp
     src/core/chart.cpp
+    src/core/chart_grammar.cpp
+    src/core/chart_references.cpp
+    src/core/chart_typed.cpp
+    src/core/cache.cpp
+    src/core/document.cpp
     src/functions/common.cpp
     src/functions/references.cpp
     src/functions/session.cpp
+    src/functions/result_cache.cpp
     src/functions/notebook_cells.cpp
     src/functions/notebook_sql.cpp
     src/functions/notebook_run.cpp
     src/functions/notebook_chart_query.cpp
     src/functions/storage.cpp
     src/functions/export.cpp
-    src/functions/server.cpp
+    ${NOTEBOOK_SERVER_SOURCE}
+    src/functions/peek.cpp
     ${NOTEBOOK_ASSET_CPP}
     src/notebook_extension.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
+
+# Size (docs/DESIGN.md, "Building for every platform"). A loadable extension statically links
+# all of DuckDB (about 95% of its bytes; that is how DuckDB distributes C++ extensions), so what we
+# control is our own code and the symbol table.
+# - Our code is optimised for size: it parses notebook files, compiles chart specs and serves
+#   requests, none of it hot (queries run in DuckDB). About 0.6 MB.
+# - The symbol table is stripped at link time, before DuckDB's metadata footer is appended. The
+#   entry point is in the dynamic symbol table, which stripping keeps. About 8.6 MB. MSVC keeps
+#   symbols in a separate PDB; Emscripten is left alone (its -s means something else).
+if(NOT MSVC)
+  target_compile_options(${EXTENSION_NAME} PRIVATE -Os)
+  target_compile_options(${LOADABLE_EXTENSION_NAME} PRIVATE -Os)
+endif()
+if(APPLE)
+  target_link_options(${LOADABLE_EXTENSION_NAME} PRIVATE -Wl,-x)
+elseif(NOT MSVC AND NOT EMSCRIPTEN)
+  target_link_options(${LOADABLE_EXTENSION_NAME} PRIVATE -s)
+endif()
 
 install(
   TARGETS ${EXTENSION_NAME}

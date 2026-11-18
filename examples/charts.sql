@@ -23,7 +23,7 @@ SELECT
     ['Laptops', 'Phones', 'Licences', 'Support', 'Training'][1 + (i // 12) % 5] AS product,
     CASE WHEN i * 7919 % 100 < 50 THEN 'visit' WHEN i * 7919 % 100 < 75 THEN 'signup'
         WHEN i * 7919 % 100 < 90 THEN 'trial' ELSE 'purchase' END AS stage,
-    round(10 + (i * 7919 % 1000) / 10.0 + (i % 4) * 15, 2) AS amount,
+    round(10 + (i * 7919 % 1000) / 10.0 + (i % 4) * 15, 2)::DECIMAL(10, 2) AS amount,
     (i * 31 % 997) / 10.0 AS x,
     (i * 31 % 997) / 10.0 * 0.8 + (i * 17 % 211) / 5.0 AS y,
     -36.85 + (i * 7919 % 400) / 1000.0 * ((i % 7) / 7.0) AS lat,
@@ -40,12 +40,14 @@ SELECT * FROM (VALUES
 -- %% daily
 SELECT day, region, category, sum(amount) AS revenue, count(*) AS orders
 FROM gallery_sales
-GROUP BY ALL;
+GROUP BY ALL
+ORDER BY ALL;
 
 -- %% flows
 SELECT category AS source, product AS target, sum(amount) AS value
 FROM gallery_sales
-GROUP BY ALL;
+GROUP BY ALL
+ORDER BY ALL;
 
 -- %% prices
 SELECT
@@ -284,4 +286,29 @@ spec:
   series:
     - type: pie
       encode: {itemName: target, value: value}
+*/
+
+-- %% chart references from=daily
+/*
+title: Monthly revenue against its average and a target range
+mark: line
+x: {field: day, timeunit: month}
+y: {field: revenue, agg: sum, format: "$,.0f"}
+rules:
+  - {y: avg, label: "average {value}"}
+  - {x: 2026-07-01, label: price change}
+bands:
+  - {y: [136000, 141000], label: target}
+*/
+
+-- %% chart annotated from=daily
+/*
+title: Notes point at what matters
+mark: line
+x: {field: day, timeunit: month}
+y: {field: revenue, agg: sum, format: "$,.0f"}
+notes:
+  - {x: 2026-02-01, text: "February is a short month", circle: true}
+  - {x: [2026-05-01, 2026-08-01], text: steady summer}
+  - {x: 2026-11-01, text: "stock ran out", side: below}
 */

@@ -31,6 +31,39 @@ SELECT content = (SELECT sql FROM notebook_sql('test/notebooks/basic.sql')) FROM
 ----
 true
 
+# B10: options are checked before anything runs; params names as notebook_run checks them
+statement error
+FROM notebook_export('test/notebooks/basic.sql', format := 'docx')
+----
+Unknown export format 'docx'; expected html, html-wasm, md, sql, data or pdf
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', format := 'data', data_format := 'xlsx')
+----
+data_format must be 'parquet' or 'csv', not 'xlsx'
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', interactive := 'live')
+----
+interactive must be 'precomputed', not 'live'
+
+statement error
+FROM notebook_export('examples/revenue.sql', file := '{TEST_DIR}/p.html', params := {no_such_input: 1})
+----
+no_such_input
+
+# B1: the sql export refuses what notebook_sql refuses, graph errors included
+statement error
+FROM notebook_export('test/notebooks/graph_errors.sql', file := '{TEST_DIR}/graph_errors.expanded.sql', format := 'sql')
+----
+'later' is defined further down, at line 5
+
+# The expanded example in examples/ is notebook_sql's output, kept in step with the notebook
+query I
+SELECT content = (SELECT sql FROM notebook_sql('examples/revenue.sql')) FROM read_text('examples/revenue.expanded.sql')
+----
+true
+
 # One file per named query cell
 query II
 SELECT format, note FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/basic_data', format := 'data', data_format := 'csv')
@@ -105,3 +138,26 @@ DROP TABLE nb_test_numbers
 
 statement ok
 DROP TABLE orders
+
+# Exports are the same on every run: grouped and sorted chart queries have a total order, and the example's
+# data is exact (B32). This is probabilistic: three runs can agree by chance. The exact guard is the core
+# test of the ORDER BY each query gets (TestChartErrors).
+statement ok
+FROM notebook_export('examples/charts.sql', file := '{TEST_DIR}/det1.md', format := 'md')
+
+statement ok
+FROM notebook_export('examples/charts.sql', file := '{TEST_DIR}/det2.md', format := 'md')
+
+statement ok
+FROM notebook_export('examples/charts.sql', file := '{TEST_DIR}/det3.md', format := 'md')
+
+query I
+SELECT count(DISTINCT content) FROM read_text('{TEST_DIR}/det*.md')
+----
+1
+
+statement ok
+DROP TABLE gallery_sales
+
+statement ok
+DROP TABLE gallery_tasks

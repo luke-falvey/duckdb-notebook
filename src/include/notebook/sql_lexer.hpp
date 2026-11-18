@@ -48,6 +48,16 @@ private:
 	std::string dollar_tag;
 };
 
+//! A balanced `( ... )` in SQL code: byte offsets of its two parentheses.
+struct ParenPair {
+	size_t open = 0;
+	size_t close = 0;
+};
+
+//! Every balanced pair of parentheses in code (not in strings, quoted identifiers or comments),
+//! ordered by their opening parenthesis. Unmatched parentheses are left out.
+std::vector<ParenPair> ParenPairs(const std::string &sql);
+
 //! Splits text into statements on top-level semicolons. Comments stay attached to
 //! the statement that follows them; a trailing comment-only fragment is dropped.
 std::vector<Statement> SplitStatements(const std::string &sql);
@@ -60,6 +70,15 @@ bool IsQueryStatement(const std::string &statement);
 //! Names referenced as `$name` or `$"name"` in code (not in strings or comments),
 //! in order of first appearance. Positional parameters such as `$1` are ignored.
 std::vector<std::string> ReferencedVariables(const std::string &sql);
+
+//! One `$name` or `$"quoted name"` in SQL code: its byte range (from the `$`) and the name it reads.
+struct VariableRef {
+	size_t start;
+	size_t end;
+	std::string name;
+};
+//! Every variable reference in code, in order; strings, comments and `$tag$` strings are skipped.
+std::vector<VariableRef> VariableRefs(const std::string &sql);
 
 //! True if the statement changes state that belongs to one connection and is not a variable:
 //! `CREATE TEMP ...`, `SET`/`RESET` of a setting, `USE`. A session that runs each request on a

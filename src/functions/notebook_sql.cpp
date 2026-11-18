@@ -11,10 +11,6 @@ struct SqlBindData : public TableFunctionData {
 	string script;
 };
 
-struct SqlState : public GlobalTableFunctionState {
-	bool done = false;
-};
-
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
                               vector<Identifier> &names) {
 	auto path = input.inputs[0].GetValue<string>();
@@ -28,12 +24,8 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	return std::move(result);
 }
 
-unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-	return make_uniq<SqlState>();
-}
-
 void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &state = data.global_state->Cast<SqlState>();
+	auto &state = data.global_state->Cast<OnceState>();
 	if (state.done) {
 		return;
 	}
@@ -44,7 +36,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 } // namespace
 
 void RegisterNotebookSql(ExtensionLoader &loader) {
-	loader.RegisterFunction(TableFunction("notebook_sql", {LogicalType::VARCHAR}, Scan, Bind, Init));
+	loader.RegisterFunction(TableFunction("notebook_sql", {LogicalType::VARCHAR}, Scan, Bind, OnceInit));
 }
 
 } // namespace duckdb

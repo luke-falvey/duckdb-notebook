@@ -1,0 +1,291 @@
+# name: test/sql/notebook_cache.test
+# description: The result cache: written by notebook_run(cache := true), listed by notebook_cache, disposable
+# group: [notebook]
+
+require notebook
+
+# A copy of the test notebook in the test directory, so its cache is written there
+statement ok
+FROM notebook_save('test/notebooks/cache.sql', name := 'nb_cache_test')
+
+statement ok
+FROM notebook_save('test/notebooks/cache_edited.sql', name := 'nb_cache_edited')
+
+statement ok
+FROM notebook_save('test/notebooks/cache_off.sql', name := 'nb_cache_off')
+
+statement ok
+FROM notebook_checkout('nb_cache_test', file := '{TEST_DIR}/nb_cache.sql', force := true)
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_cache.sql')
+
+# A run does not read or write the cache unless asked
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_cache.sql')
+
+query I
+SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
+----
+0
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-notebook/nb_cache/*')
+----
+0
+
+# cache := true keeps each computed result; the run's own output is unchanged
+query IIIII
+SELECT idx, name, status, row_count, output FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true) ORDER BY idx
+----
+0	NULL	skipped	NULL	NULL
+1	nb_cache_numbers	ok	NULL	NULL
+2	lowest	ok	NULL	NULL
+3	kept	ok	6	NULL
+4	by_group	ok	3	NULL
+5	NULL	ok	NULL	There are 6 rows.
+6	NULL	skipped	NULL	Plain prose.
+7	NULL	ok	1	NULL
+
+# One entry per cell, prose and settings included, so a reopened notebook looks as it did after the
+# run. Unnamed cells are known by a hash of their text.
+query IIIII
+SELECT idx, CASE WHEN cell LIKE '@%' THEN '@' || (length(cell) - 1) ELSE cell END, kind, status, bytes > 50 FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
+----
+0	@16	notebook	fresh	true
+1	nb_cache_numbers	sql	fresh	true
+2	lowest	input	fresh	true
+3	kept	sql	fresh	true
+4	by_group	sql	fresh	true
+5	@16	markdown	fresh	true
+6	@16	markdown	fresh	true
+7	@16	sql	fresh	true
+
+# It lives beside the notebook: a file per cell, the variables, and a .gitignore that ignores it all
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-notebook/nb_cache/*.json')
+----
+9
+
+query I
+SELECT content LIKE '%*%' FROM read_text('{TEST_DIR}/.duckdb-notebook/.gitignore')
+----
+true
+
+# An entry holds what the editor shows: the page of rows and the chart's data
+query IIII
+SELECT content LIKE '{"format":2,"cell":"kept","key":"%', content LIKE '%"rows":[[4,1],[5,2],[6,0],[7,1],[8,2],[9,0]]%', content LIKE '%"charts":[{"render":%', content LIKE '%"datasets":[{%' FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json')
+----
+true	true	true	true
+
+query I
+SELECT content FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/@state.json')
+----
+{"format":2,"variables":{"lowest":{"type":"INTEGER","value":"4","shown":4}}}
+
+# Running again with another value keeps the new results, all fresh for that value
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_cache.sql', params := {lowest: 7}, cache := true)
+
+query II
+SELECT count(*), count(*) FILTER (status = 'fresh') FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
+----
+8	8
+
+query I
+SELECT content LIKE '%"rows":[[7,1],[8,2],[9,0]]%' FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json')
+----
+true
+
+# The notebook is edited: the edited cell and everything that reads it are stale, the rest is not
+statement ok
+FROM notebook_checkout('nb_cache_edited', file := '{TEST_DIR}/nb_cache.sql', force := true)
+
+query II
+SELECT idx, status FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
+----
+0	fresh
+1	fresh
+2	fresh
+3	stale
+4	stale
+5	stale
+6	fresh
+7	fresh
+
+# Nothing ran to find that out
+statement error
+SELECT * FROM kept
+----
+Table with name kept does not exist
+
+# Running it makes everything fresh again
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
+
+query I
+SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql') WHERE status = 'stale'
+----
+0
+
+# A corrupt entry, a truncated one and one of another format are ignored, never an error
+statement ok
+COPY (SELECT 'this is not json') TO '{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+COPY (SELECT '{"format":2') TO '{TEST_DIR}/.duckdb-notebook/nb_cache/by_group.json' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+COPY (SELECT replace(content, '{"format":2', '{"format":1') FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json')) TO '{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json' (FORMAT csv, HEADER false, QUOTE '', DELIMITER '|')
+
+query I
+SELECT idx FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
+----
+0
+1
+5
+6
+7
+
+# The next run writes them again
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
+
+query I
+SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
+----
+8
+
+# cache: false in the [notebook] cell: nothing is shown, and a run removes what was kept
+statement ok
+FROM notebook_checkout('nb_cache_off', file := '{TEST_DIR}/nb_cache.sql', force := true)
+
+query I
+SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
+----
+0
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-notebook/nb_cache/*')
+----
+0
+
+# Clearing reports how many results it removed
+statement ok
+FROM notebook_checkout('nb_cache_test', file := '{TEST_DIR}/nb_cache.sql', force := true)
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
+
+query I
+FROM notebook_cache_clear('{TEST_DIR}/nb_cache.sql')
+----
+8
+
+query I
+FROM notebook_cache_clear('{TEST_DIR}/nb_cache.sql')
+----
+0
+
+query I
+SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
+----
+0
+
+# Somewhere the cache cannot be written (here a file where its directory would be): the run is
+# unaffected and there is simply no cache
+statement ok
+FROM notebook_checkout('nb_cache_test', file := '{TEST_DIR}/nb_cache_blocked.sql', force := true)
+
+statement ok
+COPY (SELECT 'in the way') TO '{TEST_DIR}/.duckdb-notebook/nb_cache_blocked' (FORMAT csv, HEADER false, QUOTE '')
+
+query I
+SELECT count(*) FILTER (status = 'ok') FROM notebook_run('{TEST_DIR}/nb_cache_blocked.sql', cache := true)
+----
+6
+
+query I
+SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache_blocked.sql')
+----
+0
+
+# A notebook stored in the database keeps its cache in _notebook.cache
+query I
+SELECT count(*) FROM notebook_cache('db:nb_cache_test')
+----
+0
+
+statement ok
+FROM notebook_run('db:nb_cache_test', cache := true)
+
+query II
+SELECT idx, status FROM notebook_cache('db:nb_cache_test') ORDER BY idx
+----
+0	fresh
+1	fresh
+2	fresh
+3	fresh
+4	fresh
+5	fresh
+6	fresh
+7	fresh
+
+query III
+SELECT cell, format, result LIKE '{"status":"ok"%' FROM _notebook.cache WHERE name = 'nb_cache_test' AND cell NOT LIKE '@%' ORDER BY cell
+----
+by_group	2	true
+kept	2	true
+lowest	2	true
+nb_cache_numbers	2	true
+
+# A new version of the stored notebook makes what changed stale
+statement ok
+FROM notebook_save('test/notebooks/cache_edited.sql', name := 'nb_cache_test')
+
+query II
+SELECT idx, status FROM notebook_cache('db:nb_cache_test') ORDER BY idx
+----
+0	fresh
+1	fresh
+2	fresh
+3	stale
+4	stale
+5	stale
+6	fresh
+7	fresh
+
+# A row that is not a result is ignored
+statement ok
+UPDATE _notebook.cache SET result = '{"status":' WHERE name = 'nb_cache_test' AND cell = 'kept'
+
+query I
+SELECT count(*) FROM notebook_cache('db:nb_cache_test')
+----
+7
+
+query I
+FROM notebook_cache_clear('db:nb_cache_test')
+----
+8
+
+query I
+SELECT count(*) FROM _notebook.cache
+----
+0
+
+# Clean up: all test files share one database
+statement ok
+DROP TABLE nb_cache_numbers
+
+statement ok
+DROP TABLE _notebook.cache
+
+statement ok
+DELETE FROM _notebook.versions WHERE name LIKE 'nb_cache_%'
+
+statement ok
+DELETE FROM _notebook.notebooks WHERE name LIKE 'nb_cache_%'

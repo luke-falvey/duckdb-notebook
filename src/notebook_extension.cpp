@@ -3,6 +3,7 @@
 #include "notebook_extension.hpp"
 
 #include "notebook/functions.hpp"
+#include "notebook/result_cache.hpp"
 
 namespace duckdb {
 
@@ -14,6 +15,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	RegisterNotebookStorage(loader);
 	RegisterNotebookExport(loader);
 	RegisterNotebookServer(loader);
+	RegisterNotebookPeek(loader);
+	RegisterNotebookCache(loader);
 }
 
 void NotebookExtension::Load(ExtensionLoader &loader) {

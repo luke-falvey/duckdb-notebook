@@ -51,7 +51,14 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
 - **▶ Run all**, or Shift+Enter in a cell to run it and (with auto-run) what depends on it.
 - Ctrl+S or **Save** writes the `.sql` file. Edits made in another editor appear in the browser.
 - The ⚙ gear menu: open another notebook, save, auto-run, **Reading** view (code hidden, `span` grid),
-  **Graph** (dependencies), **Catalog** (tables), ◐ dark mode, default rows per page, export.
+  **Graph** (dependencies), **Catalog** (tables), ◐ dark mode, default rows per page, export, and
+  **handwriting**: gentle (the page is written quickly as it appears), watch, or off.
+- **Watch** (or `?ink=watch` on the editor's or an export's URL; an export also has "✎ watch" in its
+  header) writes the page again slowly with one pen, in reading order, the page following the pen. Space
+  or p pauses, + and − change speed, n finishes the piece being written, e everything, Escape stops
+  watching; the controls sit small in the bottom-left corner while the pen has work. Scrolling yourself
+  stops the following until you leave the pen in view or press a key. Use it to show a notebook to
+  someone, or to record it; `?ink=off` is still the way to check the finished page.
 - In a cell's button strip: `</>` and `◫` write `hide=code` / `hide=output`; under a table the page-size picker
   writes `rows=N`, and "+ chart" opens the chart picker. Under a query's charts: tabs, "edit chart
   spec", "+ chart".
@@ -61,8 +68,30 @@ Then read the URL from the log (wait a few seconds; the old log may still be the
   its buttons appear on hover in a row at its top right, in line with the dot. Its rows, what it defines and its run time are in the bottom right;
   the gear's "timing" switch writes `timing: false` into the `[notebook]` cell.
 - Pointing at a chart shows the values under the pointer (the nearest point on lines).
+- Peek under the pen: once the notebook has run, the caret in a CTE or sub-query of a query cell shows
+  its first rows in a note beside the code. Escape hides it; the gear's "peek" switch turns it off.
+
+## Presenting
+
+- In the editor: ⚙ → **Present**. In an HTML export: the faint `present` control at the top right, or
+  open the file with `#present` at the end of its address (`revenue.html#present=3` starts on the third
+  screen). The address keeps the current screen, so a reload or a shared link comes back to it.
+- **→**, **Space**, **Page Down** or a click on the page move on; **←**, **Page Up** go back; **Home**
+  and **End** jump; **F** is full screen; **Esc** (or the faint ✕ by the page number) leaves, landing on
+  the cell that was showing.
+- Inputs, chart brushing, tabs and table paging work as usual and do not move on. In a static export
+  inputs are frozen as always; export with `interactive := 'precomputed'` or `format := 'html-wasm'` for
+  a presentation whose inputs work without the editor.
+- Code is never shown. A notebook that has not run is run first (editor).
+- Each screen is written by the pen when it first arrives; going back to one already shown is instant.
+  Any key or click finishes the writing. `ink=off` (`revenue.html?ink=off#present`) presents without it.
+- Printing leaves presenting: paper and PDF always get the whole notebook.
+- What goes on a screen: sketchbook-design, "Laying out for presenting".
 
 ## Looking at it (agents)
+
+- To check a presentation with Playwright, open `...#present=N` for each screen and screenshot; the page
+  number is `.nb-present-page`, and `Present.count` is the number of screens.
 
 - Check in the **reading view** and in an **HTML export**, which is what readers get.
 - Screenshots from the VS Code browser tools can be one render behind: take a second one before

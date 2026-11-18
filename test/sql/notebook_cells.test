@@ -83,14 +83,16 @@ SELECT name, warnings FROM notebook_cells('test/notebooks/graph_errors.sql') WHE
 ----
 loose	['variable \'nobody_sets_this\' is not set by any cell, so it reads as NULL']
 
-# hide= and rows= are checked; other options are free-form
+# hide=, rows= and screen= are checked; other options are free-form
 query II
 SELECT name, errors FROM notebook_cells('test/notebooks/options.sql') ORDER BY idx
 ----
 shown	[]
 secret	[]
-bad_hide	['hide=everything is not valid; use hide=code, hide=output or hide=all']
+bad_hide	['hide=everything is not valid; use hide=code, hide=output, hide=all or hide=none']
 bad_rows	['rows=0 is not valid; rows is a page size from 1 to 10000']
+joined	[]
+bad_screen	['screen=next is not valid; use screen=new, screen=join or screen=skip']
 
 # Format errors are data, one list per cell, so a UI can show them all
 query II
@@ -104,6 +106,17 @@ SELECT idx, errors[1] FROM notebook_cells('test/notebooks/errors.sql') ORDER BY 
 5	chart cell needs from=<cell or table>
 6	unterminated {{ in markdown; expressions are written {{ expr }}
 
+# width: in the [notebook] cell is normal or wide (FORMAT §6); anything else is an error on that cell
+query I
+SELECT count(*) FILTER (len(errors) > 0) FROM notebook_cells('test/notebooks/metadata.sql')
+----
+0
+
+query II
+SELECT kind, errors[1] FROM notebook_cells('test/notebooks/bad_width.sql') WHERE len(errors) > 0
+----
+notebook	width: 1400px is not valid; use width: normal or width: wide
+
 # The example notebook in the repository stays valid
 query II
 SELECT count(*), count(*) FILTER (len(errors) > 0) FROM notebook_cells('examples/revenue.sql')
@@ -113,4 +126,4 @@ SELECT count(*), count(*) FILTER (len(errors) > 0) FROM notebook_cells('examples
 statement error
 SELECT * FROM notebook_cells('test/notebooks/missing.sql')
 ----
-No such file or directory
+<REGEX>:.*Cannot open file.*missing\.sql.*

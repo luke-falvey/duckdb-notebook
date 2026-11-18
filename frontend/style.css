@@ -25,7 +25,7 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.45 0 0 0 0 0.38 0 0 0 0 0.25 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 button, select, input, textarea { font: inherit; color: inherit; }
-button, select, .nb-btn {
+button, select {
   background: var(--nb-card); border: 1.6px solid var(--nb-ink); border-radius: var(--nb-wobbly);
   padding: 2px 12px 3px; cursor: pointer; font-family: var(--nb-hand); font-size: 16px;
 }
@@ -148,6 +148,9 @@ textarea.nb-code-over::selection { color: transparent; background: rgba(103, 65,
 .nb-meta:empty { display: none; }
 /* How long the cell took, in the bottom right corner of its box. */
 .nb-foot { text-align: right; color: var(--nb-faint); font-size: 13px; line-height: 1.2; margin: 6px -6px -6px 0; }
+/* A result from an earlier run whose inputs have changed since: fainter ink and a note, until the cell runs. */
+.nb-cell.outdated .nb-output, .nb-cell.outdated .nb-foot > :not(.nb-outdated) { opacity: .45; }
+.nb-foot .nb-outdated { color: var(--nb-stale); }
 button.nb-pick-chart { display: block; margin-top: 4px; }
 .nb-error { color: var(--nb-error); white-space: pre-wrap; font-family: var(--nb-mono); font-size: 12.5px; padding: 4px 0; }
 .nb-warning { color: var(--nb-warn); font-size: 14px; }
@@ -226,6 +229,14 @@ td.nb-null { color: var(--nb-faint); }
 .nb-facets { display: grid; gap: 8px; }
 .nb-facet-title { font-size: 15px; color: var(--nb-muted); text-align: center; }
 .nb-mark-text { font-size: 13px; }
+/* Notes on charts: handwriting in ink, with a halo of paper; they never take the pointer from the marks. */
+.nb-notes { pointer-events: none; }
+.nb-note-text { fill: currentColor; font-size: 14px; paint-order: stroke; stroke: var(--nb-bg); stroke-width: 3.5px; stroke-linejoin: round; }
+/* Rules and bands: muted ink behind the data. A spec's color: sets `color` on the group. */
+.nb-ref { color: var(--nb-muted); }
+.nb-ref-label { fill: currentColor; font-size: 13px; pointer-events: none;
+  /* A halo of paper, so a label stays readable over hatching. */
+  paint-order: stroke; stroke: var(--nb-bg); stroke-width: 3px; stroke-linejoin: round; }
 .nb-node-label { fill: var(--nb-fg); font-size: 13px; }
 .nb-on-color { fill: var(--nb-fg); }
 .nb-map-bg { fill: rgba(241, 239, 232, .7); }
@@ -268,12 +279,47 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
 /* Exported page */
 .nb-viewer { max-width: 1000px; margin: 0 auto; padding: 24px 24px 60px; }
 .nb-viewer-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--nb-muted); font-size: 15px; margin-bottom: 12px; }
+/* A narrow window wraps the header rather than scrolling sideways: a long source path breaks anywhere. */
+.nb-viewer-header { flex-wrap: wrap; }
+.nb-viewer-header > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .nb-viewer pre.nb-source { margin: 2px 0 6px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; color: #343a40; }
 .nb-viewer .nb-code-label { color: var(--nb-faint); font-size: 14px; }
 .nb-frozen { color: var(--nb-muted); font-size: 14px; margin-bottom: 8px; }
 
+/* Presenting (render-present.js): one screen of the reading layout, centred in the window and scaled
+   as a whole by a transform that Present sets on the grid. Nothing else is on the page but its number. */
+body.presenting { overflow: hidden; }
+.presenting .nb-toolbar, .presenting .nb-toolbar-rule, .presenting .nb-sidebar, .presenting #graph,
+.presenting .nb-viewer-header, .presenting .nb-frozen { display: none !important; }
+.presenting .nb-main, .presenting .nb-viewer { padding: 0; overflow: hidden auto; }
+.presenting .nb-main { grid-column: 1 / 3; grid-row: 1 / 4; }
+.presenting .nb-viewer { max-width: none; height: 100vh; }
+.nb-cells.nb-screen { max-width: none; margin: 0; transform-origin: 0 0; }
+/* While Present measures how wide a screen's content is: outputs do not hide their width, and a table
+   counts every column, not only those that fit the width it had. */
+.nb-cells.nb-measure .nb-output { container-type: normal; }
+.nb-cells.nb-measure table.nb-grid .nb-col-off { display: table-cell; }
+.nb-cells.nb-measure table.nb-grid.nb-grid-narrow { width: max-content; table-layout: auto; }
+.nb-cells.nb-measure .nb-col-pages { display: none; }
+.nb-present-empty { grid-column: 1 / -1; text-align: center; color: var(--nb-muted); font-size: 20px; }
+.nb-present-mark { position: fixed; right: 26px; bottom: 16px; z-index: 40; display: flex; gap: .7em; align-items: baseline;
+  color: var(--nb-muted); font-size: clamp(15px, 1.25vw, 24px); line-height: 1; user-select: none; }
+button.nb-present-leave, button.nb-present-leave:hover:not(:disabled) { background: none; border: none; box-shadow: none; padding: 0 2px; font-size: .8em; color: var(--nb-faint); }
+button.nb-present-leave:hover:not(:disabled) { color: var(--nb-fg); }
+button.nb-present-start { font-size: 15px; margin-left: 14px; }
+
+/* Wide (NB.width): the column, tables and charts take the window's width, less a gutter. Prose keeps
+   its line length (.nb-md p is 760px at most, and lists and quotes follow it): a line of 200
+   characters is hard to read and the eye loses its way back to the next one. Presenting and print set
+   their own widths, and NB.width puts the page back to normal for both. */
+button.nb-width-toggle { font-size: 15px; margin-left: 14px; }
+:root[data-width="wide"] :is(.nb-cells, .nb-banner, .nb-graph, .nb-viewer) { max-width: none; }
+:root[data-width="wide"] .nb-viewer { padding-left: clamp(16px, 3vw, 48px); padding-right: clamp(16px, 3vw, 48px); }
+:root[data-width="wide"] .nb-md :is(ul, ol, blockquote) { max-width: 760px; }
+
 @media print {
   @page { size: A4; margin: 14mm; }
+  .nb-present-start, .nb-present-mark { display: none !important; }
   .nb-toolbar, .nb-sidebar, .nb-add, .nb-cell-head, .nb-margin, .nb-tools, .nb-menu, .nb-grid-footer button, .nb-page-size, .nb-banner, .nb-stub { display: none !important; }
   .nb-app { display: block; height: auto; }
   .nb-main { overflow: visible; padding: 0; }
@@ -292,6 +338,25 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
 .nb-hover-band { pointer-events: none; fill: var(--nb-mark); opacity: .35; }
 @media print { .nb-tip { display: none !important; } }
 
+/* Peek under the pen (app-peek.js): the first rows of the CTE or sub-query under the caret, on a paper
+   note fixed beside the code. Its box is drawn by Sketch.outline; it takes no part in the layout. */
+.nb-peek { position: fixed; z-index: 15; left: 0; top: 0; pointer-events: none; padding: 7px 12px 8px; font-size: 14px; line-height: 1.3;
+  color: var(--nb-fg); filter: drop-shadow(2px 3px 0 rgba(30, 30, 30, .1)); }
+.nb-peek-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+.nb-peek-name { font: 12.5px/1.3 var(--nb-mono); color: #c2255c; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nb-peek-kind, .nb-peek-foot { color: var(--nb-faint); font-size: 12.5px; }
+.nb-peek-foot { margin-top: 3px; white-space: nowrap; }
+table.nb-peek-grid { border-collapse: collapse; font-size: 14px; }
+table.nb-peek-grid th, table.nb-peek-grid td { padding: 0 12px 0 0; text-align: left; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-weight: normal; }
+table.nb-peek-grid th { color: var(--nb-muted); border-bottom: 1px solid var(--nb-border); }
+table.nb-peek-grid th:last-child, table.nb-peek-grid td:last-child { padding-right: 0; }
+table.nb-peek-grid td.nb-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The part a note describes, marked in the code behind the text. */
+.nb-peek-marks { position: absolute; inset: 0; pointer-events: none; }
+.nb-peek-marks i { position: absolute; background: linear-gradient(transparent 58%, var(--nb-mark) 58%, var(--nb-mark) 94%, transparent 94%); opacity: .7; }
+body.presenting .nb-peek, body.presenting .nb-peek-marks { display: none !important; }
+@media print { .nb-peek, .nb-peek-marks { display: none !important; } }
+
 /* Handwriting (render-ink.js). While a piece is being written its glyphs are transparent and a canvas
    over it writes them; controls keep their own text, as they fade in whole. Nothing here applies once
    the piece is finished: Ink removes the class and the canvases. */
@@ -300,7 +365,30 @@ button.nb-tab-add { font-size: 14px; color: var(--nb-faint); }
 canvas.ink-layer { position: absolute; pointer-events: none; z-index: 3; }
 /* A heading's underline (a ::after background) is wiped in after its text. */
 [style*="--ink-wipe"]::after { clip-path: inset(-4px calc(100% - var(--ink-wipe)) -4px -4px); }
+/* Watch mode: the pen's nib, and its controls in the corner. Both live on <html>, outside the page,
+   only while the pen has work; dark mode inverts them as it inverts the body. */
+.ink-nib { position: fixed; left: 0; top: 0; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
+  background: var(--nb-ink); box-shadow: 0 0 0 2px rgba(252, 250, 245, .7); pointer-events: none; z-index: 45; will-change: transform; }
+.ink-watch { position: fixed; left: 22px; bottom: 14px; z-index: 45; display: flex; gap: .3em; align-items: baseline;
+  font: 16px/1 var(--nb-hand); color: var(--nb-muted); user-select: none; }
+.ink-watch button, .ink-watch button:hover:not(:disabled) { background: none; border: none; box-shadow: none; padding: 0 4px;
+  font: inherit; color: var(--nb-faint); min-width: 1.2em; }
+.ink-watch button:hover:not(:disabled), .ink-watch button:focus-visible { color: var(--nb-fg); }
+.ink-watch button[data-ink-act="pause"] { color: var(--nb-muted); }
+.ink-watch.ink-held button[data-ink-act="pause"] { color: var(--nb-accent); }
+.ink-watch .ink-speed { min-width: 2.4em; text-align: center; }
+.ink-watch button[data-ink-act="follow"] { display: none; }
+.ink-watch.ink-lost button[data-ink-act="follow"] { display: inline; color: var(--nb-accent); }
+button.ink-watch-start, button.ink-watch-start:hover:not(:disabled) { background: none; border: none; box-shadow: none; padding: 0 2px;
+  margin-left: 12px; font-size: 14px; color: var(--nb-faint); }
+button.ink-watch-start:hover:not(:disabled) { color: var(--nb-fg); }
+/* Where the page is never written (reduced motion, a page marked not to animate) there is nothing to watch. */
+:root[data-ink="off"] .ink-watch-start { display: none; }
+@media (prefers-reduced-motion: reduce) { .ink-watch-start { display: none; } }
+.ink-watch::before { content: '✎'; margin-right: .35em; color: var(--nb-muted); }
+:root[data-theme="dark"] .ink-nib, :root[data-theme="dark"] .ink-watch { filter: invert(93%) hue-rotate(180deg); }
 @media print {
+  .ink-nib, .ink-watch, .ink-watch-start { display: none !important; }
   .ink-hide { -webkit-text-fill-color: currentcolor !important; }
   canvas.ink-layer { display: none !important; }
 }

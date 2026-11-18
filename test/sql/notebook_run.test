@@ -95,7 +95,13 @@ SELECT count(*) FROM notebook_run('examples/revenue.sql') WHERE status = 'error'
 query II
 SELECT count(*) FILTER (status = 'error'), count(*) FILTER (kind = 'chart' AND status = 'ok') FROM notebook_run('examples/charts.sql')
 ----
-0	27
+0	29
+
+# So does the template every new sketchbook starts from (it creates orders, dropped below)
+query I
+SELECT count(*) FROM notebook_run('.github/skills/sketchbook-authoring/assets/template.sql') WHERE status = 'error'
+----
+0
 
 # The [notebook] cell's attach: databases are attached before the first cell
 query II

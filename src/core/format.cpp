@@ -2,6 +2,7 @@
 
 #include "notebook/sql_lexer.hpp"
 #include "notebook/yaml.hpp"
+#include "notebook/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -24,17 +25,6 @@ bool IsValidName(const std::string &name) {
 		}
 	}
 	return true;
-}
-
-std::string TrimBlankLines(const std::string &s) {
-	size_t b = 0, e = s.size();
-	while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) {
-		b++;
-	}
-	while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) {
-		e--;
-	}
-	return s.substr(b, e - b);
 }
 
 //! Splits a marker head on whitespace, keeping double-quoted sections together:
@@ -130,7 +120,9 @@ void CheckOptions(Cell &cell) {
 		auto &key = option.first;
 		auto &value = option.second;
 		if (key == "hide" && value != "code" && value != "output" && value != "all" && value != "none") {
-			cell.errors.push_back("hide=" + value + " is not valid; use hide=code, hide=output or hide=all");
+			cell.errors.push_back("hide=" + value + " is not valid; use hide=code, hide=output, hide=all or hide=none");
+		} else if (key == "screen" && value != "new" && value != "join" && value != "skip") {
+			cell.errors.push_back("screen=" + value + " is not valid; use screen=new, screen=join or screen=skip");
 		} else if (key == "rows") {
 			bool digits = !value.empty() && value.size() <= 5;
 			for (char c : value) {
@@ -211,7 +203,7 @@ void SplitCharts(Cell &cell) {
 		copied = comment.end;
 	}
 	sql += body.substr(copied);
-	cell.sql = TrimBlankLines(sql);
+	cell.sql = Trim(sql);
 	if (misplaced) {
 		cell.warnings.push_back("a /* chart */ comment draws a chart only at the end of the cell, after its query");
 	}
@@ -233,9 +225,7 @@ void CheckBody(Cell &cell) {
 			}
 			for (auto &expression : cell.expressions) {
 				for (auto &name : ReferencedVariables(expression.sql)) {
-					if (std::find(cell.variables.begin(), cell.variables.end(), name) == cell.variables.end()) {
-						cell.variables.push_back(name);
-					}
+					AddUnique(cell.variables, name);
 				}
 			}
 		}
@@ -251,6 +241,14 @@ void CheckBody(Cell &cell) {
 			auto timing = meta.Get("timing");
 			if (timing && (!timing->IsScalar() || (timing->scalar != "true" && timing->scalar != "false"))) {
 				cell.errors.push_back("timing: " + timing->scalar + " is not valid; use timing: true or timing: false");
+			}
+			auto cache = meta.Get("cache");
+			if (cache && (!cache->IsScalar() || (cache->scalar != "true" && cache->scalar != "false"))) {
+				cell.errors.push_back("cache: " + cache->scalar + " is not valid; use cache: true or cache: false");
+			}
+			auto width = meta.Get("width");
+			if (width && (!width->IsScalar() || (width->scalar != "normal" && width->scalar != "wide"))) {
+				cell.errors.push_back("width: " + width->scalar + " is not valid; use width: normal or width: wide");
 			}
 		}
 		break;
@@ -307,6 +305,17 @@ std::string Cell::Option(const std::string &key, const std::string &fallback) co
 	return fallback;
 }
 
+bool Cell::InputFrom(std::string &relation, std::string &column) const {
+	auto from = Option("from");
+	auto dot = from.rfind('.');
+	if (dot == std::string::npos) {
+		return false;
+	}
+	relation = from.substr(0, dot);
+	column = from.substr(dot + 1);
+	return true;
+}
+
 bool Notebook::HasErrors() const {
 	for (auto &cell : cells) {
 		if (!cell.errors.empty()) {
@@ -352,7 +361,7 @@ std::vector<Expression> FindExpressions(const std::string &markdown, std::string
 		Expression expression;
 		expression.begin = open;
 		expression.end = open + 2 + close + 2;
-		expression.sql = TrimBlankLines(rest.substr(0, close));
+		expression.sql = Trim(rest.substr(0, close));
 		if (expression.sql.empty()) {
 			error = "empty {{ }} in markdown";
 			return expressions;
@@ -401,12 +410,12 @@ Notebook ParseNotebook(const std::string &text) {
 		cell.start_line = markers[m].line;
 		cell.end_line = m + 1 < markers.size() ? markers[m + 1].line - 1 : total_lines;
 		size_t head_start = markers[m].line_start + 5;
-		cell.head = TrimBlankLines(text.substr(head_start, markers[m].line_end - head_start));
+		cell.head = Trim(text.substr(head_start, markers[m].line_end - head_start));
 		ParseHead(cell.head, cell);
 
 		size_t body_start = markers[m].line_end;
 		size_t body_end = m + 1 < markers.size() ? markers[m + 1].line_start : text.size();
-		cell.body = TrimBlankLines(text.substr(body_start, body_end - body_start));
+		cell.body = Trim(text.substr(body_start, body_end - body_start));
 		CheckBody(cell);
 		CheckOptions(cell);
 

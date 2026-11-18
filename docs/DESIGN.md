@@ -119,7 +119,7 @@ the extension writes an expanded script with the wrappers spelled out
 | Query cell | Its own name; its charts' selection variables | Tables, views and variables in its SQL; its charts' `filter` selections (no dependency) |
 | Effect cell | Objects it creates or attaches; variables it sets | Same |
 | Input | Its variable | The `from=` cell, if any |
-| Chart | Its selection variable, if any | `from`, `filter`, fields |
+| Chart | Its selection variable, if any | `from`, `filter` |
 | Markdown | Nothing | Names inside `{{ }}` |
 
 Reads come from DuckDB's parser, not from regular expressions. The extension walks the parsed
@@ -129,8 +129,9 @@ calls. Names that match no cell are assumed to be catalog objects and are left a
 **Rules**
 
 - One definition per name. A second cell defining the same name is an error on both.
-- SQL and input cells read only cells above them, so the graph cannot contain a cycle and the file
-  reads top to bottom.
+- SQL and input cells read only cells above them, so the file reads top to bottom. The one exception is
+  a chart's selection: a query cell's chart filters are read but add no edge, so charts of one query can
+  select and filter each other (§14).
 - A cell is `fresh`, `stale`, `running` or `failed`. When a cell's source or anything it reads changes,
   it and everything downstream become stale.
 
@@ -140,7 +141,8 @@ are only marked stale and wait for a click, which is how marimo's lazy mode and 
 
 **Effect cells run only when asked.** Automatically replaying `INSERT`, `COPY … TO` or `ATTACH` would
 be surprising and sometimes destructive. Editing or running an effect cell marks its dependents stale.
-"Run all" executes every cell in file order, which is also what the headless runner does.
+"Run all" executes every cell in run order, which is also what the headless runner does: file order,
+except that a markdown or chart cell waits for the cells it reads (§11).
 
 **Inputs and selections** set a variable in the session and trigger the same staleness propagation. To
 the graph, a slider and a chart brush are the same thing.
@@ -195,9 +197,9 @@ or CI job with no browser.
 | `notebook_run(path, params := {…})` | Run every cell in order in a session of its own; per-cell status, row count, timing and rendered markdown | Built |
 | `notebook_start([path or name], port := …, open := true)` | Start the server, optionally opening a notebook | Built |
 | `notebook_stop()` | Stop it | Built |
-| `notebook_export(path, file := 'out.html', format := …, params := {…})` | Export (see §7) | Built |
-| `notebook_save(path, name := …, message := …, force := …)` | Store a file in the current database as a new version | Built |
-| `notebook_checkout(name, file := 'x.sql', version := …, force := …)` | Write a stored version to a file | Built |
+| `notebook_export(path, file := 'out.html', format := …, params := {…}, interactive := …, hide := …, page_rows := …, budget := …, data_format := …, chrome := …, wasm_runtime := …)` | Export (see §7) | Built |
+| `notebook_save(path, name := …, message := …, database := …, force := …)` | Store a file in the current database as a new version | Built |
+| `notebook_checkout(name, file := 'x.sql', version := …, database := …, force := …)` | Write a stored version to a file | Built |
 | `notebook_chart_query(spec, from)` | The SQL a chart spec compiles to, for inspection | Built |
 
 The output file parameter is `file :=` rather than `to :=`: `to` is a reserved word in DuckDB's
@@ -282,7 +284,8 @@ drawn in Excalidraw (see Themes, §6): handwriting, paper, and hand-drawn boxes,
 - Live preview while typing is a later addition. MotherDuck's Instant SQL does this by parsing the
   query locally, caching the data it depends on and rewriting it to run fast, and lets the user click
   into any CTE to see its rows. Here a named cell is already a view, so a preview is a `LIMIT` over
-  it and stepping through intermediate results is stepping through cells.
+  it and stepping through intermediate results is stepping through cells. Inside a cell, "peek under
+  the pen" (§19) shows the rows of the CTE or sub-query under the caret.
 
 ## 5. Notebooks inside the database
 
@@ -319,7 +322,7 @@ QUALIFY version = max(version) OVER (PARTITION BY name);
 - **A database carries its own analysis.** Send someone `sales.duckdb` and they get the data and the
   notebooks that explain it. `CALL notebook_start('db:revenue')` opens a stored notebook.
 - **Result cache.** For a database-backed notebook the cache goes in `_notebook.cache(name, cell,
-  hash, data BLOB)` in place of the sidecar directory. (Not built yet: neither cache exists.)
+  format, key, data, saved_at, result)` in place of the sidecar directory (FORMAT.md §8, and §17 below).
 
 **File and database together.** A notebook session has one source of truth: the place it was opened
 from. `notebook_save` and `notebook_checkout` copy between the two explicitly. There is no automatic
@@ -429,7 +432,7 @@ The page decompresses with the browser's built-in `DecompressionStream` and draw
 opened. It works from a `file://` path, as an email attachment or on any static host; nothing needs a
 server. The fonts travel inside the page as data URIs, so it looks the same offline. Measured: the
 viewer and renderers are about 35 KB gzip-compressed and the two fonts 90 KB; the revenue example
-exports to 252 KB and the 27-chart gallery to 425 KB.
+exports to 252 KB and the 29-chart gallery to 425 KB.
 
 `hide := 'code'`, `'output'` or `'all'` leaves that part of every cell out of any export, on top of
 each cell's own `hide=`; prose and inputs always stay. The gear menu offers the same as two
@@ -491,9 +494,9 @@ a browser to produce the SVG.
 |---|---|---|
 | S1 | ~~Can the extension walk a parsed statement for table and parameter references across all statement kinds?~~ | **Done: yes, with the C++ parser and no binding.** See §11 |
 | S2 | ~~Arrow IPC from inside the extension, or DuckDB's own serialisation plus the MIT TypeScript decoder?~~ | **Done: neither; JSON.** Pages and chart data are small after aggregation. See §11 |
-| S3 | ~~Size of the extension with the frontend embedded; lazy loading of heavy renderers~~ | **Done: 132 KB of frontend source, 30 KB compressed**, negligible next to the extension itself |
+| S3 | ~~Size of the extension with the frontend embedded; lazy loading of heavy renderers~~ | **Done: about 350 KB of frontend source and 90 KB of fonts (2026-11-17; the pen strokes are 89 KB of that)**, small next to the extension itself |
 | S4 | ~~DuckDB-WASM inlined in a single HTML file, opened from `file://`~~ | **Done: it works in Chromium.** See [the spike](../spikes/wasm-single-file/README.md). Firefox, Safari and inlined extensions are untested |
-| S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Not needed**: `html-wasm` ships precompiled chart SQL (§7). Still untried |
+| S5 | ~~Does the extension build for DuckDB-WASM with the server parts left out?~~ | **Done: yes** (§21). `html-wasm` does not need it yet: it ships precompiled chart SQL (§7) |
 | S6 | Will the community repository accept an extension that embeds an HTTP server and a multi-megabyte asset bundle? | Distribution. The process itself is documented: a pull request with a descriptor file, after which DuckDB's CI builds for Linux, macOS, Windows and Wasm |
 | S7 | ~~Chart compiler coverage: how much of the grammar compiles cleanly to one query~~ | **Done: all of FORMAT.md §5** compiles, with layers and sparklines as one query each. See `examples/charts.sql` |
 
@@ -524,7 +527,9 @@ Other risks:
 6. **More chart types.** Maps, hierarchies, flows, networks, pivot. **Done.**
 7. **Interactive WASM export.** Resolves S5. **Done.**
 
-Next, in rough order: the result cache (FORMAT.md §8), a bundled CodeMirror editor, tracking macro
+8. **Result cache.** FORMAT.md §8; see §17. **Done.**
+
+Next, in rough order: a bundled CodeMirror editor, tracking macro
 calls in the graph, Firefox and Safari checks for the exports, building every platform in CI, and the
 community-repository submission (S6).
 
@@ -646,8 +651,9 @@ variables that live in one. The first idea, holding the connection and releasing
 own connections close, does not work: DuckDB calls `OnConnectionClosed` with its connection-manager
 lock held, so releasing a connection there deadlocks. Instead a session is data: its variables, read
 back from the connection after each request, and per cell the statements that rebuild what a fresh
-connection lacks (the temporary view of a query cell, `CREATE TEMP`, `SET`, `USE`). Each request
-opens a connection, replays that, runs, and closes it. Replaying views is cheap because they are lazy;
+connection lacks (the temporary view of a query cell, `CREATE TEMP`, `SET`, `USE`), from
+`notebook::ReplaySql` in `src/core/script.cpp` (unit-tested without a database). Each request opens a
+connection, replays that, runs, and closes it. Replaying views is cheap because they are lazy;
 `materialize=table` cells recompute, which is the cost of this model.
 
 The server object lives in the database's object cache as a non-evictable entry. The cache is
@@ -765,3 +771,422 @@ what was built). It is a renderer concern like the look itself: nothing in the f
   everything; content below the fold waits until it is scrolled to.
 - **Off when it should be.** Reduced motion, print, PDF export, the gear menu's setting and `ink=off`
   all give the plain page. The existing browser tests run with `ink=off`.
+- **Watching is a policy, not a second animator.** Watch mode (`ink=watch`, the gear menu's "watch", an
+  export's "✎ watch") uses the same pen with another scheduler: one piece at a time in reading order, one
+  stroke or letter at a time, at a human pace on a clock the reader can pause and speed up, nothing
+  swept or faded to save time except where a person would hurry too (the 61st bar, the 7th table row).
+  The page follows the pen until the reader scrolls. HANDWRITING.md, "Watch mode", has the pace and
+  what is approximated.
+
+## 16. Charts that say "compared with what"
+
+Two additions to grammar charts, kept inside the sketchbook: nothing here added a toolbar, a panel or
+a library.
+
+### Rules and bands
+
+A reference line used to be a second layer with a `rule` mark. `rules:` and `bands:` make it one line
+of the spec (FORMAT §5.1).
+
+- **An aggregate is of what the chart draws.** `y: avg` on a chart of monthly sums means the average
+  month, not the average row. The compiler keeps each layer's query before downsampling and takes the
+  aggregate over it, as scalar subqueries in one extra query that returns one row. A line drawn with M4
+  or points binned to pixels are still averaged over the rows.
+- **Still the extension's query, the browser's drawing.** The browser gets a value per rule and never
+  aggregates. An export, a PDF and DuckDB-WASM therefore needed no new code: the reference query is one
+  more dataset.
+- **Behind the data, labels in front.** Lines and hatched bands are drawn after the axes and before the
+  marks, in muted ink. Their labels are short handwriting that hatching would hide, so they are written
+  after the marks with a halo of paper.
+- **They are part of the picture.** The axis grows to include a rule or band outside the data: a target
+  nobody reached is the point of drawing it.
+
+### Notes
+
+`notes:` lets an author point at something: a few handwritten words, a curved arrow, optionally a ring
+or a bracket (FORMAT §5.1).
+
+- **Data coordinates, pixel placement.** A note names a position in the values of the axes, which is
+  what survives a resize, a different page width in a PDF, and a query that returns other rows. Where
+  the text goes is decided at draw time, in pixels, by the renderer: the compiler only checks the note
+  and types its values by the axis.
+- **Finding room is cheap because hover already knew the geometry.** The marks leave their points and
+  bars behind for hover values. The same lists, plus points along each line, the rules and their
+  labels, and the notes already placed, are what a note must keep clear of. Eight directions at three
+  distances are scored by how much they cover and the cheapest wins; outside the plot costs most. It
+  is not a layout engine, and `side`, `dx` and `dy` are the escape hatch.
+- **Half a position is the common case.** "The bar for Hardware" or "February" names one axis; the note
+  then points at the mark there (the top of the bar, the highest line). This is positioning, done in
+  the browser from the rows the chart already has, not aggregation.
+- **Text width is estimated, not measured.** Measuring needs the font to have loaded, and a detached
+  SVG cannot be measured at all; an estimate per character places a note the same way in the editor,
+  an export and a PDF.
+- **The pen needed nothing.** Notes are `Sketch` shapes and SVG text appended after the marks, so they
+  are written after the marks with no animation code. A note in a query cell whose answer depends on
+  an input can point at the wrong thing; that is the author's to judge, and the skill says so.
+
+## 17. What the result cache taught us
+
+FORMAT.md §8 specifies it. The code is `src/core/cache.cpp` (keys, entries, fresh or stale, unit
+tested) and `src/functions/result_cache.cpp` (where entries live, and the session's copy).
+
+- **The result the editor is sent is the thing to cache.** The draft said Parquet for grids and Arrow
+  for charts. The editor holds JSON (§12), so caching anything else would mean a conversion on the way
+  in and out and a second shape to keep in step. An entry is the `/api/run` result for the cell, byte for
+  byte, and a reopened page goes through exactly the renderers a run does: fresh output looks identical
+  because it is identical (the browser test compares the markup).
+- **Two keys per cell.** A key that covered chart specs and chart-only selections would make every cell
+  below a chart stale when the chart was restyled or brushed. The key is therefore in two layers: what
+  the cell computes (chained into its readers' keys) and what it shows on top.
+- **Variables are part of the key, so the cache records them.** Freshness is judged with the variables
+  as they were last set, kept in `@state` with the value the browser showed. A reopened notebook shows
+  its inputs at those values and the session starts with them (values are cast from text to their
+  recorded type, no SQL runs), so the first Run all reproduces what is on the page.
+- **Until something runs, the page is a picture.** Paging a grid, brushing a chart or redrawing need the
+  session's views, and a session that has not run has none. Rather than run behind the reader's back,
+  which the trust rule forbids, these say "press Run all", and an input change marks its readers stale.
+  After the first run everything is live as before.
+- **`notebook_run` writes only when asked, exports never touch it.** A headless run is the source of
+  truth for "what does the data say now", so reading the cache would only hide work; writing by default
+  would give every scripted run a side effect in the working directory. `cache := true` covers the case
+  of a job that prepares a notebook for readers. An export is a document of the data at export time, and
+  a stale entry must never leak into one.
+- **Unnamed cells hash their text.** A position would hand a moved cell another cell's result. A hash of
+  the text means an edited unnamed cell loses its result, which is the honest outcome; named cells keep
+  theirs and go stale.
+- **Size is bounded per result (4 MiB of JSON),** checked when written and when read, so a hand-edited
+  or foreign entry cannot make the editor parse something huge. Grids already keep one page, so the limit
+  is rarely reached.
+- **Not done:** entries are not shared between notebooks that compute the same thing, there is no
+  total size limit across notebooks, and the html-wasm export does not start from cached data.
+
+## 18. Presenting
+
+A notebook can be shown to a room: one screen at a time, large and centred, with nothing else on the
+page but a page number. It is the reading view taken a row at a time, in the editor (gear menu,
+**Present**) and in every HTML export (a faint `present` control, or `#present` in the address).
+`frontend/render-present.js` (`Present`) holds everything the two share; `app.js` and `viewer.js` still
+draw the cells and only ask it which ones.
+
+- **A screen is a row of the reading layout.** One cell, or the consecutive cells whose `span`s share a
+  row; an input goes with the row after it, so the audience sees what it changes. An author who laid a
+  notebook out for reading has already laid it out for presenting, and `screen=new`, `screen=join` and
+  `screen=skip` on a cell cover the rest (FORMAT §1). The obvious alternative, a new screen at each
+  heading, fails on both examples: `revenue.sql` has one heading and `charts.sql` one heading
+  over thirty charts, so each would be a single screen. Rows need no headings and give `charts.sql` two
+  charts to a screen, as its author arranged them.
+- **The screen is the reading layout, scaled.** The row is laid out as in the reading view, in a grid
+  no wider than what it holds (a title, a 640px chart or three KPIs do not need 1000px), and the whole
+  grid is scaled with one CSS transform and centred. Nothing about a cell changes: the same fonts, the
+  same charts, the same wobble, only larger. Scaling by font size instead would have meant a second
+  set of sizes for every piece.
+- **Too tall: shrink a little, then scroll.** A screen that fits is scaled up, to at most 2.5 times.
+  One taller than the window is scaled back down so it can be seen whole, but to no less than four
+  fifths of the reading view: text smaller than that cannot be read from the back of a room, and a
+  table shrunk to fit is worse than a table that scrolls. Past that the screen scrolls (wheel, or the
+  up and down arrows, which presenting leaves alone).
+- **Moving.** Right arrow, Space, Page Down or a click move on; Left arrow, Page Up or Shift+Space go
+  back; Home and End jump; Escape leaves, landing on the cell that was showing; F is full screen.
+  Clicks on controls, links, tabs, table paging and charts act on them instead. A picked value gives up
+  the keyboard focus so the arrows move between screens again.
+- **The pen writes each screen once.** Pieces of a presentation are keyed to it (`Present.prefix`), so
+  a screen is written when it first arrives even if the editor had already written the cell. Going
+  back, or forward again, to a screen already shown puts it on the page at once: the audience has seen
+  it written, and a presenter going back is looking for something. This needs no code: Ink never
+  writes the same key and signature twice. Moving on calls `Ink.fresh`, or the key press would make
+  the new screen a "quick" update. A key or click still finishes whatever is being written, and the
+  same press moves on: one press per screen, however fast the presenter goes.
+- **Live.** Presenting changes which cells are built, not how: inputs, brushing, tabs and paging go
+  through the same code as the reading view, in the editor and in precomputed and html-wasm exports.
+  Cells off screen are re-run all the same and show their new results when their screen comes.
+- **State is the address.** `#present=3` is written with `history.replaceState` as the presenter moves,
+  so a reload, a restored tab or a shared link opens the same screen, and Back is not filled with
+  screens. In the editor a reload keeps the server's session for that notebook: the result cache (§17)
+  puts the last results on screen at once, and a session that has run stays live. A page opened at
+  `#present` runs nothing until the reader asks (§17); pressing Present runs a notebook that has not
+  run, so its inputs and brushes are live.
+- **Print is unchanged.** `beforeprint` leaves presenting before the browser lays out the page, so paper
+  and PDF get the whole notebook.
+
+What building it taught us:
+
+- **The pen assumed nothing was scaled.** Its canvases are positioned from `getBoundingClientRect`,
+  which reports the scaled size, but they live inside the scaled grid and so were scaled a second
+  time. `layers()` now measures the scale of the canvas's host and works in the host's own px, with
+  the backing store that much denser so the writing stays sharp. At scale 1 the arithmetic is
+  unchanged. Shapes needed nothing: they are drawn inside their own SVG.
+- **Hidden pieces count as written.** Ink finishes a piece with no size at once, so cells kept in the
+  page but hidden would have appeared unwritten when their screen came. Presenting therefore builds
+  only the cells of the current screen, which also keeps a screen with thirty charts behind it cheap.
+- **"As wide as what it holds" had to be measured.** The first version scaled the 1000px reading
+  column, and a title or a chart sat small at the left of a centred, mostly empty box. The grid is now
+  measured at its `max-content` width before it is scaled. Outputs are size containers (KPI values are
+  sized in `cqw`), which by definition hides their content's width from layout, so containment is
+  lifted for the moment of measuring (`.nb-measure`). Tables were the other trap: a table shows the
+  columns that fit the width it has, so a screen measured narrow once dropped a column and then
+  measured narrower still. While measuring, every column counts.
+- **`position: fixed` is not fixed in dark mode.** The dark theme is a filter on `body`, and a filtered
+  element becomes the containing block of its fixed descendants. The page number stays in the corner
+  only because the presenting page does not scroll: the screen scrolls inside its own box.
+
+## 19. Peek under the pen
+
+While a query cell is being edited, the first rows of the CTE or sub-query the caret is in appear in a
+small paper note beside the code, and the part is marked in the code with the highlighter. The cell is
+not run and its result does not change. It is the cell-sized half of Instant SQL (§4): cells already
+show their own results, so what was missing was a look inside one.
+
+**How it works.**
+
+- **Finding the part** (`src/functions/peek.cpp`, `FindPeekTarget`, also `notebook_peek(sql, cursor)`).
+  DuckDB's parser gives the parts: every CTE (with the CTEs it can see, scope by scope) and every
+  sub-query in `FROM`, in an expression or under a set operation. The parse tree records where
+  expressions and table references are but not where a CTE or a sub-query begins and ends, so each
+  part is matched to a pair of parentheses: the innermost pair (from `SqlScanner`, so strings and
+  comments are skipped) around something the part contains, whose text parses to the same query.
+  A CTE also starts at its name, found with DuckDB's tokenizer, so the caret on `name AS (` counts.
+  The innermost part around the caret wins; in the main query there is nothing to show.
+- **Building the statement.** A CTE becomes `WITH <the CTEs it reads> SELECT * FROM name`; a sub-query
+  becomes `SELECT * FROM (<it>)` with the CTEs it reads. Scopes are kept nested as they were, so a name
+  means what it meant in the cell, and a CTE that is not read is left out. It is printed from the parse
+  tree (`ToString`), not cut out of the text.
+- **Running it** (`Runner::Peek`, `POST /api/peek`). On a copy of the session's state, so the views and
+  variables of the cells above are there and nothing is recorded; in `BEGIN TRANSACTION READ ONLY`,
+  rolled back; with `max_execution_time` of 1.5 s on that connection. It fetches six rows to show five,
+  and counts the rest only if that is quick (a third of the limit).
+- **Safety.** Only a plain `SELECT` statement is looked into: `INSERT ... SELECT`, `CREATE TABLE AS`, a
+  CTE holding `INSERT ... RETURNING` are refused wherever the caret is. A part that calls a volatile
+  scalar function (`nextval`, `setval`, `write_log`...; `random()` and `uuid()` are allowed), or a table
+  function on a short list of ones that change something (`checkpoint`, `copy_database`, the
+  `notebook_*` functions that write, `enable_*`/`disable_*`), is refused before it runs. Anything the list misses
+  in the local database is stopped by the read-only transaction: a macro that hides `nextval` fails with
+  "cannot write". Effects outside it (an extension's function that writes to a remote system) are not.
+- **Trust.** Opening a notebook does not run it (§3), so the server refuses to peek in a session until
+  the reader has run something, and again after the text has been replaced from the file on disk. Its
+  own flag (`Session::trusted`) is separate from the result cache's `ran` (§17): a notebook reopened
+  showing its cached results has not been run, so nothing is peeked at until it is.
+- **Quiet.** The editor asks 320 ms after the caret stops; a newer peek interrupts the one running on
+  the server, and a run interrupts any peek. An answer for a caret or a text that has since moved is
+  dropped. Errors, SQL that does not parse and "nothing here" all show nothing. Escape puts the note
+  away until the caret is in another part; leaving the cell takes it away; the gear menu's "peek"
+  switch turns it off, remembered per browser (`localStorage`, `nb.peek`).
+- **Look** (`frontend/app-peek.js`, `.nb-peek` in `style.css`). A note like the hover tip, drawn by
+  `Sketch.outline`: the part's name (the CTE's, or the sub-query's alias), up to six columns that fit
+  in 340 px, five rows, and "first 5 of 320 rows" when the count was cheap. It is `position: fixed` on
+  `<body>`, so it never moves the page. It goes in the right margin when the window has room, else at
+  the cell's right beside lines of code short enough to leave room, nearest the caret, else under the
+  code. It is handed to the pen (`Ink.present(note, 'peek', ...)`); typing never writes anything else.
+  Exports and presenting (§18) do not have it.
+
+**What building it taught us.**
+
+- **The parse tree has no spans for query nodes.** DuckDB 2.0's PEG transformer gives expressions and
+  table references a location, but a `QueryNode` or a CTE has none. Matching parentheses by
+  re-parsing their contents and comparing the result to the node is exact and stays clear of text
+  search; it costs a parse per candidate pair, which is fine for a cell.
+- **Read-only transactions are the real guard.** Function stability catches the obvious cases with a
+  clear message; `BEGIN TRANSACTION READ ONLY` catches the rest (macros, extension functions) without
+  a list to maintain. `max_execution_time` is a per-connection setting, so the limit dies with the
+  peek's connection.
+- **A peek must not disturb the session.** Runner records variables into the state it is given when it
+  goes away; peeking on a copy keeps the session exactly as it was.
+
+**Not done.** A part of a recursive CTE that reads the CTE itself (its rows depend on the iteration);
+table functions from other extensions cannot be judged, so one that acts on a remote system (for
+example `postgres_execute`) inside a CTE could run during a peek: the read-only transaction protects
+only the local database; the note can
+cover part of the cell's (stale) result in a narrow window when the code leaves no room beside it.
+Only Chromium was available for testing.
+
+## 20. Building for every platform
+
+The extension is built by DuckDB's shared pipeline (`extension-ci-tools`) for every native platform
+DuckDB distributes for: Linux amd64 and arm64 (glibc and musl), macOS amd64 and arm64, Windows amd64
+and arm64 (MSVC) and amd64 with MinGW. The community extension repository requires all of them. The
+WebAssembly builds are covered in §21.
+
+### What the binary is made of
+
+The loadable extension on linux_amd64 was 49.2 MB (on the tree with the result cache). Measured, not
+guessed, with the link map (`-Wl,-Map`), `nm --size-sort` and test links:
+
+- **DuckDB is about 95% of it, and has to be.** DuckDB 2.0 distributes C++ extensions with
+  `EXTENSION_STATIC_BUILD` (the default in `extension-ci-tools`): each `.duckdb_extension` links
+  `libduckdb_static.a` with `--gc-sections` and `--exclude-libs,ALL`. The link map puts 39.5 MB of the
+  43 MB of mapped sections in objects from that archive: casts 2.2 MB, the PEG transformer 1.8 MB,
+  the expression executor 1.7 MB, the optimizer 1.4 MB, and so on through the engine.
+- **It is not a linking accident.** `--gc-sections` keeps only what the extension can reach, and an
+  extension that runs SQL through a `Connection` reaches the parser, binder, optimizer, every operator
+  and every built-in function. A minimal extension whose only code is
+  `Connection(db).Query("SELECT 42")`, linked the same way and stripped, is **38.9 MB**. DuckDB's own
+  extensions built here agree: `json` 48.8 MB and `loadable_extension_demo` (which opens a
+  `Connection`) 47.5 MB unstripped; demos that only register functions are about 13 MB.
+- **Leaving DuckDB out does not load.** Linked without `libduckdb_static.a` the extension is 1.8 MB,
+  about what the first versions measured, with 132 undefined DuckDB symbols. The released DuckDB 2.0.0
+  Python package refuses it (`undefined symbol: _ZTIN6duckdb14SimpleFunctionE`): a host that loads
+  DuckDB as a library with `RTLD_LOCAL` leaves no DuckDB symbols to resolve against, which is the
+  reason DuckDB's build gives for linking itself into every extension.
+- **Our code is about 1.8 MB** at `-O3`: the frontend assets 0.46 MB, the HTTP server (cpp-httplib)
+  0.37 MB, the chart compiler 0.19 MB, the rest smaller.
+- **The symbol table was 8.6 MB** (`.symtab` and `.strtab`): the binary was not stripped. Release
+  builds have no debug information.
+
+What was changed, linux_amd64, bytes (gzip -9, which is how extensions are downloaded):
+
+| Step | Size | gzip |
+|---|--:|--:|
+| Before | 49,219,368 | 16,925,258 |
+| Strip at link time (`-s`; `-Wl,-x` on macOS; MSVC keeps symbols in a PDB) | 40,642,310 | 15,284,437 |
+| Our sources at `-Os` (GCC and Clang) | 40,021,158 | 15,009,028 |
+
+The floor is the 38.9 MB minimal extension; ours is 1.1 MB above it. The CI job "Extension sizes"
+reports every platform.
+
+Considered and not done, with numbers:
+
+- **Identical code folding** (`--icf` in gold or lld) saved another 1–2 MB, but needs a linker that
+  DuckDB's toolchains do not promise on every platform, and folding is only safe when nothing compares
+  function addresses, which DuckDB does (casts, table functions).
+- **Compressing the frontend** would save about 250 KB: the fonts are already woff2, and the
+  JavaScript and CSS gzip from 360 KB to 110 KB. Not worth a decompressor in the server and exports.
+- **Building DuckDB for size.** CI links DuckDB's prebuilt `duckdb_static` for each platform, so its
+  flags are DuckDB's, not ours.
+- **Not linking DuckDB.** The way to a small binary is an extension against DuckDB's C API, which
+  links nothing (`cpp_api_demo` here is 0.5 MB). This extension walks DuckDB's parse tree and uses
+  `ClientContext`, the object cache and C++ table functions, so that is a rewrite, not a build flag.
+
+### Platform notes
+
+- **No POSIX in portable code.** `unistd.h`, `getcwd` and `/tmp` broke the MSVC build; DuckDB's
+  `FileSystem` has what is needed (`GetWorkingDirectory`, `IsPathAbsolute`, `JoinPath`,
+  `GetEnvVariable`).
+- **PDF export runs a browser through the shell**, so quoting differs: single quotes for `sh`, double
+  quotes for `cmd.exe`, which also strips the outer pair of a command line that starts with a quote.
+  Chrome and Edge are looked for on `PATH` and in their usual install places on Windows and macOS.
+- **Error messages differ by platform.** A test that expected Linux's "No such file or directory"
+  failed on Windows ("The system cannot find the file specified"). Match the part DuckDB writes.
+- **The pipeline does not test everywhere it builds**: it runs `test/sql` on linux_amd64 (and musl),
+  linux_arm64_musl, osx_arm64 and Windows, not on linux_arm64 or osx_amd64.
+
+## 21. The extension in DuckDB-WASM
+
+The extension builds for WebAssembly and loads into DuckDB-WASM 2.0. This answers S5, which §7 had
+set aside as not needed.
+
+### Which DuckDB-WASM
+
+- **2.0 is on npm under `next`, not `latest`.** `@duckdb/duckdb-wasm` `1.33.1-dev110.0` and later are
+  built with DuckDB at the `v2.0.0` tag, the same commit as our submodule (the npm `gitHead` of each
+  release pins `submodules/duckdb` at `d54cbbe3`). `latest` (`1.33.1-dev57.0`) is still engine 1.5.
+  The npm version number says nothing about the engine.
+- **An extension must match the engine exactly.** Its footer records the DuckDB version and platform,
+  and DuckDB-WASM refuses a mismatch. A local build is stamped with a commit hash unless built with
+  `OVERRIDE_GIT_DESCRIBE=v2.0.0`.
+- **Two bundles, two platforms.** DuckDB-WASM 2.0 ships `base`, whose platform is `wasm_eh`, and
+  `threads` (`wasm_threads`, which needs a cross-origin isolated page). There is no `wasm_mvp`
+  bundle any more. CI still builds `wasm_mvp`, because the community repository does, but nothing
+  can load that build.
+- **Unsigned builds load for testing.** `db.open({allowUnsignedExtensions: true})`, then
+  `LOAD '<url of notebook.duckdb_extension.wasm>'`. DuckDB-WASM fetches extensions by URL. Without
+  the flag, only extensions signed with DuckDB's core or community keys load, which a build from the
+  community repository would be.
+
+### The boundary
+
+The server needs sockets and threads, and opening a browser or printing a PDF needs processes.
+DuckDB-WASM has none of these. One CMake option, `NOTEBOOK_HOST_FEATURES` (off under Emscripten),
+draws the line:
+
+| SQL function | In DuckDB-WASM |
+|---|---|
+| `notebook_cells`, `notebook_sql`, `notebook_chart_query`, `notebook_peek` | Work |
+| `notebook_run` | Works. Each run opens its own `Connection`, as natively |
+| `notebook_save`, `notebook_checkout` | Built; not exercised by the test |
+| `notebook_export` html, md, sql, data | Built; md tested, writing to DuckDB-WASM's virtual file system |
+| `notebook_cache`, `notebook_cache_clear`, `notebook_run(cache := true)` | Work, but find no cache: see below |
+| `notebook_export` pdf | Fails: "runs a local Chrome, which this build … cannot do" |
+| `notebook_start`, `notebook_stop` | Registered with the same signatures; fail: "the notebook server is not available in this build" |
+
+With the option off, `src/functions/server_unavailable.cpp` replaces `server.cpp`, and `export.cpp`
+has one `#ifdef` for pdf. `src/core` has no platform conditionals. Paths go through DuckDB's file
+system as natively (`ReadNotebook`), so files registered with `registerFileText` and URLs work.
+
+**The result cache needs directories, and DuckDB-WASM's in-memory file system has none.** Creating
+a directory there does nothing, and no directory exists. Before the change, `cache := true` wrote
+entries that could never be listed back. Now the cache checks that its directory exists after creating
+it and is otherwise off: nothing is written, and `notebook_cache` lists nothing. The check is not
+specific to WebAssembly. A notebook on `opfs://` paths should have a working cache, since DuckDB-WASM's
+OPFS support has directories, but that is untested.
+
+**`wasm_threads` needed a build fix, and loading into the threads bundle is not reliable.**
+extension-ci-tools' release branch (`v2.0-cyanoptera`) leaves out two flags when it builds
+`wasm_threads`. The first is `-fwasm-exceptions`, lost to a misnamed variable. The second is
+`-DUSE_WASM_THREADS=ON`, DuckDB's switch that links a side module against shared memory. Without them
+`LOAD` fails with an empty `dlopen` error, and DuckDB's own `icu` extension built the same way fails
+too. Its `main` branch has both. Our `Makefile` sets them after including its Makefile. With them,
+everything works in the threads bundle as in the base one, except that `LOAD` hangs about one time in
+eight. The `icu` extension hangs at the same rate, so this is a race in DuckDB-WASM's threaded
+extension loading, not in this extension. The test retries a hung `LOAD` in a fresh page, for
+`wasm_threads` only, and reports each retry. A page using the threads bundle would need a timeout
+around `LOAD` as well, or should use the base bundle.
+
+`test/wasm/run.cjs` loads the build into DuckDB-WASM in headless Chromium and runs the functions on
+`examples/revenue.sql`. CI runs it on the artifacts of the extension pipeline, which itself does not
+test wasm builds. The extension is 1.2 MB, or 400 KB gzip-compressed (CI's "Extension sizes" job; against 31 to 48 MB
+for the native builds, which link DuckDB in). It loads in about 0.1 to 0.2
+seconds once DuckDB-WASM has started (about 1.6 seconds).
+
+### What it means for the html-wasm export
+
+Nothing in the export changed yet. Two separate steps are open:
+
+1. **Move the runtime to DuckDB-WASM 2.0** (`wasm/package.json` to `1.33.1-dev118.0` or later; the
+   bundle files are now `duckdb-base.wasm` and `duckdb-browser-base.worker.js`). This removes the 1.5
+   workarounds of §12:
+   - the `$name` to `getvariable('name')` rewrite (the test checks `$name` works);
+   - the typed `NULL::STRUCT(lo T, hi T)` selections (the test checks `.lo` of an untyped `NULL`
+     variable returns NULL);
+   - writing data with `STORAGE_VERSION 'v1.5.0'` (follows from the engine reading its own default
+     storage version; not tested in the browser).
+2. **Inline the extension** (about 400 KB compressed, against 12 MB for DuckDB-WASM) and `LOAD` it
+   through the same worker shim that serves the module from memory under `file://`. The page could
+   then compile chart specs and run notebooks the way the server does, instead of replaying SQL that
+   was compiled in advance. That makes an exported page editable: change a spec or a cell and see
+   the result. A local build needs `allowUnsignedExtensions`, which a page should not set for SQL it
+   did not write. A build signed by the community repository needs no such flag.
+
+Precompiled charts stay right for a read-only export. Inlining is worth doing when the export is
+meant to be edited.
+
+## 22. Wide pages
+
+The reading column is 1000px, which suits prose and a 640px chart but wastes most of a large monitor
+on a notebook of wide tables and time series. **Wide** lets the page use the window's width. It is a
+reader's setting first: the editor's gear menu (*wide*), a quiet *wide* control in every HTML export,
+or `?width=wide` / `?width=normal` in the address, remembered in the browser (`nb.width`). An author
+can make it the default for readers who have not chosen with `width: wide` in the `[notebook]` cell
+(FORMAT §6). `NB.width` in `frontend/render-core.js` holds all of it for the editor and the viewer.
+
+- **What widens.** The cell column, banners and the graph lose their `max-width`; the page keeps its
+  gutters (the editor's margins, the viewer's padding of 16 to 48px). Tables show the columns that now
+  fit. Spans keep their meaning: `span=6` is half of whatever the row is.
+- **Charts are drawn for their width, not stretched.** A chart is compiled for its cell's `width`
+  (640px by default) and its SVG scales down to fit a narrower box. Scaling it up would make the
+  handwriting and the wobble huge. A wide page instead draws a chart again at the width its box has,
+  with the same height, so the axes get more ticks and the marks more room. Cells are built detached,
+  so `NB.chart` draws at the compiled width and `NB.width.fit` draws again once the cell is in the page
+  and before the pen is handed the piece; the pen only ever sees the final drawing. A window resized
+  while wide renders again. A chart never gets narrower than it was compiled for, so a phone sees what
+  it always saw, and a cell with `width=` keeps it: the author asked for that size. Downsampling (§16)
+  still targets the compiled width; a line of up to 2,560 points is fine at any screen width.
+- **Prose keeps its measure.** Paragraphs were already at most 760px; lists and quotes follow them on
+  a wide page. Lines much longer than 80 characters are hard to read and the eye loses its way back to
+  the start of the next one, and headings, tables and charts beside the prose still use the width.
+- **Presenting and paper ignore it.** A screen is already sized by what it holds and scaled to the
+  window (§18), so presenting draws the normal page whatever the setting and comes back wide. Paper has
+  its own width: `beforeprint` draws the normal page and `afterprint` puts the wide one back, and the
+  PDF export marks its page `data-width-fixed="normal"`, as it marks it `data-ink="off"`.
+- **The pen needs nothing.** Switching redraws the page through the usual render; a chart drawn at
+  a new width has a new signature and is written again, and a written wide page is identical to it
+  drawn with `ink=off` (tested, also when the switch comes mid-way and in watch mode). The export's
+  header is keyed by its text, so marking the control does not write the header again.

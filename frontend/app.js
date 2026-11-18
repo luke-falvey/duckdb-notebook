@@ -5,7 +5,7 @@ var App = (function () {
   var params = new URLSearchParams(location.search);
   var A = {
     token: params.get('token') || '', source: params.get('nb') || '', preamble: '', cells: [],
-    dirty: false, autorun: true, reading: false, graph: false, selected: {}, running: false, lastText: '',
+    dirty: false, autorun: true, live: false, reading: false, graph: false, selected: {}, running: false, lastText: '',
     // Rows per page for tables whose cell has no rows= option; remembered in this browser.
     pageSize: +(localStorage.getItem('nb.pageSize') || 25)
   };
@@ -24,7 +24,7 @@ var App = (function () {
   A.status = function (text) {
     $('status').textContent = text || '';
     $('status').title = text || '';
-    if (window.Ink) Ink.present($('status'), 'toolbar/status', text || '');
+    if (window.Ink) Ink.present($('status'), 'toolbar/status', text || '', { update: 'now' });
   };
   // A problem the reader must see in full (the status line is cut short): a banner above the cells.
   A.problem = function (text) {
@@ -62,6 +62,9 @@ var App = (function () {
     A.preamble = data.preamble || '';
     A.cells = [];
     A.merge(data.cells);
+    A.kept(data);
+    // Whether the server will answer peeks: a cached result shown on opening is not a run.
+    A.trusted = !!data.trusted;
     A.lastText = data.text;
     A.dirty = false;
     // Code is written when a notebook is opened or reloaded from disk, never while it is typed.
@@ -71,6 +74,53 @@ var App = (function () {
     if (window.Ink) { Ink.present($('title'), 'toolbar/title'); Ink.present($('source'), 'toolbar/source'); }
     document.title = (data.title || A.source) + ' · DuckDB Notebook';
     A.render();
+  };
+
+  // The result cache (FORMAT §8): the last result of each cell, sent when a notebook is opened so the
+  // page shows what it showed last time without running anything. A result made from inputs that
+  // have changed since is stale. Until something runs in this session the page is a picture of the
+  // last run (A.live is false): inputs and brushes do not run cells on their own.
+  // A result arrives for a cell: kept (remembered from an earlier run, with when it was saved) or null.
+  function show(c, result, kept) {
+    c.result = result;
+    c.kept = kept;
+    c.offset = 0;
+    if (result.choices) c.choices = result.choices;
+    c.state = result.status === 'error' ? 'failed' : 'fresh';
+  }
+  // A remembered result goes: the cell waits to run again.
+  function dropKept(c) { c.result = null; c.kept = null; c.state = 'stale'; }
+  A.kept = function (data) {
+    A.live = !!data.ran;
+    (data.cached || []).forEach(function (item) {
+      var c = A.cells[item.idx];
+      if (!c || !item.result) return;
+      show(c, item.result, item.saved_at || true);
+      if (item.stale) c.state = 'stale';
+    });
+    var shown = data.variables || {};
+    A.cells.forEach(function (c) {
+      if (c.kind !== 'input' || !(c.name in shown)) return;
+      c.value = shown[c.name];
+      if (c.result) c.result.value = shown[c.name];
+      delete shown[c.name];
+    });
+    // What is left are chart selections: the brush or the picked marks are drawn again.
+    Object.keys(shown).forEach(function (name) { A.selected[name] = shown[name]; });
+    return (data.cached || []).length;
+  };
+  // A stale result that is still on the page: drawn fainter, with a note, until the cell runs.
+  A.outdated = function (cell) {
+    var r = cell.result;
+    return cell.state === 'stale' && !!r && !!r.status && r.status !== 'skipped';
+  };
+  A.forget = function () {
+    return A.api('POST', '/api/cache/clear', {}).then(function (r) {
+      // Results this session computed stay on the page; ones only remembered go.
+      A.cells.forEach(function (c) { if (c.kept) dropKept(c); });
+      A.status(r.removed ? 'Forgot the results of ' + r.removed + ' cell' + (r.removed === 1 ? '' : 's') : 'No results were kept');
+      A.render();
+    }).catch(function (e) { A.status(e.message); });
   };
 
   // A query cell's body: its SQL, then one /* chart */ comment per chart.
@@ -85,12 +135,16 @@ var App = (function () {
     return A.api('POST', '/api/notebook', { text: text }).then(function (r) { A.merge(r.cells); A.render(); });
   };
   var analyseTimer = null;
-  A.edited = function (cell) {
+  // The text changed: mark it unsaved and parse it again once typing pauses for `ms`.
+  function unsaved(ms) {
     A.dirty = true;
-    A.markStale(cell);
     clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 500);
+    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, ms);
     A.status('Unsaved changes');
+  }
+  A.edited = function (cell) {
+    A.markStale(cell);
+    unsaved(500);
   };
 
   // ---- Graph helpers ------------------------------------------------------------------------
@@ -120,6 +174,8 @@ var App = (function () {
   A.run = function (indexes, redraw) {
     if (A.running) return Promise.resolve();
     A.running = true;
+    A.live = true;
+    A.trusted = true;
     $('interrupt').hidden = false;
     (indexes || A.cells.map(function (_, i) { return i; })).concat(redraw || []).forEach(function (i) { if (A.cells[i]) A.cells[i].state = 'running'; });
     A.render();
@@ -135,15 +191,12 @@ var App = (function () {
           c.state = res.status === 'error' ? 'failed' : 'fresh';
           return;
         }
-        c.result = res;
-        c.offset = 0;
-        if (res.choices) c.choices = res.choices;
-        c.state = res.status === 'error' ? 'failed' : 'fresh';
+        show(c, res, null);
       });
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'stale'; });
       if ($('banner').querySelector('.nb-problem')) $('banner').innerHTML = '';
       A.status('Ran ' + r.results.length + ' cell' + (r.results.length === 1 ? '' : 's') + ' in ' + Math.round(performance.now() - started) + ' ms');
-      if (window.AppExtra) AppExtra.catalog();
+      AppExtra.catalog();
     }).catch(function (e) {
       A.cells.forEach(function (c) { if (c.state === 'running') c.state = 'failed'; });
       A.status('Run failed: see the message above the cells');
@@ -179,12 +232,31 @@ var App = (function () {
       var full = readers.filter(function (j) { return redraw.indexOf(j) < 0; });
       var list = full.concat(A.downstream(full));
       list.forEach(function (j) { A.cells[j].state = 'stale'; });
+      if (!A.live) {
+        // Nothing has run in this session: the cells that read the value wait for a run.
+        redraw.forEach(function (j) { A.cells[j].state = 'stale'; });
+        A.status('Set ' + name + '. Nothing has run yet: press Run all.');
+        A.render();
+        return;
+      }
       redraw = redraw.filter(function (j) { return list.indexOf(j) < 0 && A.cells[j].result && A.cells[j].result.data; });
       var auto = list.filter(function (j) { return A.isAuto(A.cells[j]); });
       auto = auto.filter(function (j, k) { return auto.indexOf(j) === k; }).sort(function (a, b) { return a - b; });
       if (A.autorun && (auto.length || redraw.length)) return A.run(auto, redraw);
       A.render();
     }).catch(function (e) { A.status(e.message); });
+  };
+
+  // A brush or a click on a chart. On a page that only shows the last run's results there is nothing
+  // to filter yet.
+  A.select = function (name, value, cell) {
+    if (!A.live) {
+      A.status('These are the last run\'s results: press Run all, then select.');
+      A.render();
+      return;
+    }
+    A.selected[name] = value;
+    A.setVariable(name, value, cell);
   };
 
   A.save = function () {
@@ -206,16 +278,13 @@ var App = (function () {
     cell.head = tokens.join(' ');
     cell.options = Object.assign({}, cell.options);
     if (value == null || value === '') delete cell.options[key]; else cell.options[key] = String(value);
-    A.dirty = true;
-    clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 300);
-    A.status('Unsaved changes');
+    unsaved(300);
   };
 
   // hide= as two switches.
   A.hidden = function (cell) {
     var h = (cell.options && cell.options.hide) || '';
-    return { code: h === 'code' || h === 'all', output: h === 'output' || h === 'all' };
+    return { code: NB.hides(h, 'code'), output: NB.hides(h, 'output') };
   };
   A.setHidden = function (cell, code, output) {
     A.setOption(cell, 'hide', code && output ? 'all' : code ? 'code' : output ? 'output' : null);
@@ -272,7 +341,7 @@ var App = (function () {
         var s0 = ta.selectionStart;
         ta.setRangeText('    ', s0, ta.selectionEnd, 'end');
         ta.dispatchEvent(new Event('input'));
-      } else if (e.ctrlKey && e.key === ' ' && window.AppExtra) { e.preventDefault(); AppExtra.complete(ta, cell); }
+      } else if (e.ctrlKey && e.key === ' ') { e.preventDefault(); AppExtra.complete(ta, cell); }
     });
     if (!part.sql) return ta;
     // Highlighting: the coloured text is a <pre> behind a transparent textarea with the same metrics.
@@ -294,10 +363,7 @@ var App = (function () {
   // A chart spec of a query cell was edited: only that cell's charts need drawing again.
   A.specEdited = function (cell) {
     A.compose(cell);
-    A.dirty = true;
-    clearTimeout(analyseTimer);
-    analyseTimer = setTimeout(function () { A.analyse().catch(function (e) { A.status(e.message); }); }, 500);
-    A.status('Unsaved changes');
+    unsaved(500);
   };
 
   A.addChart = function (cell, spec) {
@@ -323,20 +389,31 @@ var App = (function () {
   A.notebookCell = function () {
     return A.cells.find(function (c) { return c.kind === 'notebook'; });
   };
-  A.timing = function () {
-    var nb = A.notebookCell(), m = nb && /^timing:\s*(\S+)\s*$/m.exec(nb.content || '');
+  // cache: false in the [notebook] cell keeps no results for this notebook (FORMAT §8).
+  A.flag = function (key) {
+    var nb = A.notebookCell(), m = nb && new RegExp('^' + key + ':\\s*(\\S+)\\s*$', 'm').exec(nb.content || '');
     return !(m && m[1] === 'false');
   };
-  A.setTiming = function (on) {
+  A.timing = function () { return A.flag('timing'); };
+  A.caching = function () { return A.flag('cache'); };
+  A.setTiming = function (on) { A.setFlag('timing', on); };
+  A.setCaching = function (on) {
+    A.setFlag('cache', on);
+    // Switching it off forgets what was kept: the server does so when it reads the new text.
+    if (!on) A.cells.forEach(function (c) { if (c.kept) dropKept(c); });
+    A.status(on ? 'Results will be kept from the next run on' : 'Results are no longer kept for this notebook');
+    A.render();
+  };
+  A.setFlag = function (key, on) {
     var nb = A.notebookCell();
     if (!nb) {
       if (on) return;
       nb = { head: '[notebook]', body: '/*\n*/', kind: 'notebook', state: 'stale', options: {}, content: '' };
       A.cells.unshift(nb);
     }
-    var lines = (nb.content || '').split('\n').filter(function (l) { return !/^timing:/.test(l); });
+    var lines = (nb.content || '').split('\n').filter(function (l) { return l.indexOf(key + ':') !== 0; });
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (!on) lines.push('timing: false');
+    if (!on) lines.push(key + ': false');
     nb.content = lines.join('\n');
     nb.body = '/*\n' + nb.content + (nb.content ? '\n' : '') + '*/';
     A.edited(nb);
@@ -352,7 +429,7 @@ var App = (function () {
     query: ['▦', 'Query: its result is a table, with charts as tabs'], sql: ['✎', 'SQL that changes the database']
   };
   function kindMark(cell) {
-    var k = KINDS[cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind] || ['•', cell.kind];
+    var k = KINDS[NB.kindName(cell)] || ['•', cell.kind];
     return NB.el('span', { 'class': 'nb-kind', text: k[0], title: k[1], 'aria-label': k[1] });
   }
 
@@ -365,9 +442,13 @@ var App = (function () {
 
   // The bottom right corner of a cell: rows, what it defines, and how long it took.
   function footer(cell) {
-    var r = cell.result;
-    if (!r || r.status === 'skipped' || A.reading) return null;
-    var parts = [];
+    var r = cell.result, parts = [];
+    if (!r || r.status === 'skipped') return null;
+    if (A.outdated(cell)) {
+      parts.push(NB.el('span', { 'class': 'nb-outdated', text: 'from an earlier run',
+        title: 'This result is from an earlier run' + (cell.kept && cell.kept !== true ? ' (' + NB.formatValue(cell.kept) + ' UTC)' : '') + '. The cell, or something it reads, has changed since: run it to bring it up to date.' }));
+    }
+    if (A.reading) return parts.length ? NB.el('div', { 'class': 'nb-foot' }, parts) : null;
     if (r.row_count != null) parts.push(NB.el('span', { text: NB.formatNumber(r.row_count, ',') + (r.row_count === 1 ? ' row' : ' rows') }));
     if (cell.defines && cell.defines.length) parts.push(NB.el('span', { text: 'defines ' + cell.defines.join(', ') }));
     if (r.elapsed_ms != null && A.timing()) parts.push(NB.el('span', { 'class': 'nb-time', text: elapsed(r.elapsed_ms), title: 'Time this cell took to run' }));
@@ -376,6 +457,9 @@ var App = (function () {
     parts.forEach(function (p, k) { if (k) foot.appendChild(document.createTextNode(' · ')); foot.appendChild(p); });
     return foot;
   }
+
+  // A chart without width= on its cell takes the width of a wide page (NB.width).
+  A.fluid = function (cell) { return !(cell.options && cell.options.width); };
 
   function output(cell) {
     var out = NB.el('div', { 'class': 'nb-output' }), r = cell.result || {};
@@ -386,7 +470,7 @@ var App = (function () {
       var text = r.output != null ? r.output : (cell.content || '').replace(/\{\{([\s\S]*?)\}\}/g, function (_, e) { return '`' + e.trim() + '`'; });
       out.appendChild(NB.el('div', { 'class': 'nb-md', html: NB.markdown(text) }));
     } else if (cell.kind === 'chart' && r.data) {
-      NB.chart(out, r.data, { selected: A.selected, onSelect: function (name, value) { A.selected[name] = value; A.setVariable(name, value, cell); } });
+      NB.chart(out, r.data, { selected: A.selected, fluid: A.fluid(cell), onSelect: function (name, value) { A.select(name, value, cell); } });
     } else if (cell.kind === 'sql') {
       queryOutput(cell, out);
     }
@@ -399,10 +483,7 @@ var App = (function () {
     var r = cell.result || {}, specs = cell.specs || [];
     var tab = specs.length ? Math.min(cell.tab || 0, specs.length) : specs.length;
     if (specs.length) {
-      var items = specs.map(function (_, k) {
-        var chart = (r.charts || [])[k];
-        return { label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) };
-      }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+      var items = NB.queryTabItems(r.charts, specs.length);
       out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; A.render(); },
         [NB.el('button', { 'class': 'nb-tab nb-tab-add nb-hide-reading', text: '+ chart', title: 'Add a chart of this result', onclick: function () { cell.tab = specs.length; cell.picking = true; A.render(); } })]));
     }
@@ -410,7 +491,7 @@ var App = (function () {
       var holder = NB.el('div', { 'class': 'nb-tab-body' });
       out.appendChild(holder);
       var chart = (r.charts || [])[tab];
-      if (chart) NB.chart(holder, chart, { selected: A.selected, seed: 'cell' + cell.idx + '/' + tab, inTab: true, onSelect: function (name, value) { A.selected[name] = value; A.setVariable(name, value, cell); } });
+      if (chart) NB.chart(holder, chart, { selected: A.selected, fluid: A.fluid(cell), seed: 'cell' + cell.idx + '/' + tab, inTab: true, onSelect: function (name, value) { A.select(name, value, cell); } });
       else holder.appendChild(NB.el('div', { 'class': 'nb-stub', text: 'Not drawn yet: run the cell (Shift+Enter).' }));
       if (!A.reading) {
         out.appendChild(stub((cell.editingChart ? '▾ ' : '▸ edit ') + 'chart spec', function () { cell.editingChart = !cell.editingChart; A.render(); }));
@@ -430,6 +511,8 @@ var App = (function () {
     if (r.data) {
       var size = +((cell.options && cell.options.rows) || A.pageSize);
       var fetchPage = function (offset, limit) {
+        // A remembered result holds one page; the rest is in a session that has not run yet.
+        if (!A.live) { A.status('This is the first page of the last run: press Run all to see the rest.'); return Promise.resolve(); }
         return A.api('GET', '/api/page?cell=' + cell.idx + '&offset=' + offset + '&limit=' + limit).then(function (data) {
           cell.offset = offset; data.total = r.data.total; r.data = data; A.render();
         }).catch(function (e) { A.status(e.message); });
@@ -443,8 +526,8 @@ var App = (function () {
         onPageSize: function (next) { A.setOption(cell, 'rows', next); fetchPage(0, next); }
       });
       // The chart picker stays out of the way until asked for.
-      if (window.AppExtra && cell.picking) out.appendChild(AppExtra.switcher(cell, r.data.columns));
-      else if (window.AppExtra && !specs.length) {
+      if (cell.picking) out.appendChild(AppExtra.switcher(cell, r.data.columns));
+      else if (!specs.length) {
         out.appendChild(NB.el('button', { 'class': 'nb-tab nb-tab-add nb-pick-chart nb-hide-reading', text: '+ chart', title: 'Chart this result',
           onclick: function () { cell.picking = true; A.render(); } }));
       }
@@ -455,7 +538,7 @@ var App = (function () {
     var value = cell.result && cell.result.value !== undefined ? cell.result.value : cell.value;
     var view = Object.assign({}, cell, { value: value, choices: cell.choices });
     var box = NB.el('div');
-    var widget = A.inputWidget(view, function (c, v) { cell.value = v; if (cell.result) cell.result.value = v; A.setVariable(cell.name, v, cell); });
+    var widget = NB.inputWidget(view, function (c, v) { cell.value = v; if (cell.result) cell.result.value = v; A.setVariable(cell.name, v, cell); });
     box.appendChild(widget);
     if ((cell.widget === 'select' || cell.widget === 'multiselect') && !cell.choices && cell.name && !cell.fetching) {
       // Choices from a cell's column exist once that cell has run; /api/run refreshes them.
@@ -496,6 +579,32 @@ var App = (function () {
     return cell ? +cell.getAttribute('data-idx') : -1;
   }
 
+  // ---- Presenting (render-present.js) ---------------------------------------------------------
+  // What the reading view shows of a cell, as presenting needs to know it before the cell is built:
+  // prose, inputs, charts and query results, unless hidden. hide=all leaves a cell without a screen.
+  A.presentable = function (cell) {
+    var hidden = A.hidden(cell), r = cell.result;
+    if (cell.kind === 'notebook' || (hidden.code && hidden.output)) return false;
+    if (cell.kind === 'input') return true;
+    if (hidden.output) return false;
+    if (cell.kind === 'markdown') return true;
+    return !!(r && (r.data || r.status === 'error'));
+  };
+  var wasReading = false;
+  A.present = {
+    render: function () { A.render(); },
+    // Presenting is the reading view, a screen at a time. Asked for by the reader, a session that has not
+    // run yet runs first: cached results (FORMAT §8) show at once, but inputs and brushing need a live
+    // session. A page opened at #present runs nothing until the reader asks (FORMAT §8).
+    enter: function (asked) {
+      wasReading = A.reading;
+      A.reading = true;
+      A.menu(false);
+      if (asked && !A.running && !A.live) A.run(null);
+    },
+    leave: function () { A.reading = wasReading; }
+  };
+
   A.render = function () {
     var root = $('cells'), pointed = pointedIndex();
     // Rebuilding the cells empties the page for a moment; keep the reader where they were.
@@ -507,20 +616,28 @@ var App = (function () {
     }
     root.innerHTML = '';
     document.getElementById('app').classList.toggle('reading', A.reading);
+    NB.width.declare(NB.width.declared(A.cells));
+    var screen = null;
+    if (Present.on) {
+      screen = Present.begin(A.cells.map(function (c, i) {
+        return { id: i, span: c.options && c.options.span, kind: c.kind, screen: c.options && c.options.screen, visible: A.presentable(c) };
+      }), root, main);
+    } else Present.reset(root);
     A.cells.forEach(function (cell, i) {
+      if (screen && !screen[i]) return;
       if (!A.reading) root.appendChild(addBar(i));
       var hidden = A.hidden(cell);
       var hideCode = hidden.code && !(cell.peekCode && !A.reading);
       var hideOutput = hidden.output && !(cell.peekOutput && !A.reading);
       // Reading view shows results, not code; markdown and inputs have no code to show there.
       if (A.reading) hideCode = true;
-      var box = NB.el('div', { 'class': 'nb-cell' + (hideCode ? ' hide-code' : '') + (hideOutput ? ' hide-output' : ''), 'data-kind': cell.kind, 'data-idx': i, 'data-seed': 'cell' + i + (cell.name || '') });
+      var box = NB.el('div', { 'class': 'nb-cell' + (hideCode ? ' hide-code' : '') + (hideOutput ? ' hide-output' : '') + (A.outdated(cell) ? ' outdated' : ''), 'data-kind': cell.kind, 'data-idx': i, 'data-seed': 'cell' + i + (cell.name || '') });
       if (i === pointed) {
         box.classList.add('pointed');
         box.addEventListener('mouseleave', function () { box.classList.remove('pointed'); }, { once: true });
       }
       var span = cell.options && cell.options.span;
-      if (span && A.reading) box.style.gridColumn = 'span ' + Math.max(1, Math.min(12, +span));
+      if (span && A.reading) box.style.gridColumn = 'span ' + NB.span(span);
       // Left margin: the cell's kind and name. Clicking either opens its -- %% line (name and options)
       // for editing. Right margin: its state. Its buttons show while the pointer or caret is in it.
       var head = NB.el('input', { 'class': 'nb-head', value: cell.head || '', placeholder: 'name and options', title: 'The -- %% marker line' });
@@ -564,7 +681,15 @@ var App = (function () {
       if (hidden.output && !A.reading) {
         body.appendChild(stub(cell.peekOutput ? '▾ output (hidden when reading)' : '▸ output hidden', function () { cell.peekOutput = !cell.peekOutput; A.render(); }));
       }
-      body.appendChild(output(cell));
+      var out;
+      try { out = output(cell); } catch (e) {
+        // A remembered result that cannot be drawn is dropped, never an error.
+        if (!cell.kept) throw e;
+        dropKept(cell);
+        box.classList.remove('outdated');
+        out = output(cell);
+      }
+      body.appendChild(out);
       var foot = footer(cell);
       if (foot) body.appendChild(foot);
       box.appendChild(body);
@@ -572,6 +697,7 @@ var App = (function () {
       if (cell.kind === 'markdown') box.addEventListener('dblclick', function (e) { if (!cell.editing && !A.reading && e.target.closest('.nb-output')) { cell.editing = true; A.render(); } });
       box.addEventListener('focusin', function () { box.classList.add('focused'); });
       box.addEventListener('focusout', function () { box.classList.remove('focused'); });
+      NB.width.fit(box);
       Sketch.outline(box, { width: 1.5 });
       if (window.Ink) write(box, cell);
     });
@@ -580,10 +706,13 @@ var App = (function () {
       var t = root.querySelectorAll('textarea')[focusIndex];
       if (t) { t.focus({ preventScroll: true }); t.selectionStart = t.selectionEnd = caret; }
     }
-    if (window.AppExtra) AppExtra.graph();
+    AppExtra.graph();
     main.scrollTop = scrollTop;
+    if (Present.on) Present.finish(main, root, A.running ? 'Running…' : 'Nothing to show yet: leave (Esc) and run the notebook.');
     var timing = $('show-timing');
     if (timing) timing.checked = A.timing();
+    if ($('keep-results')) $('keep-results').checked = A.caching();
+    if ($('wide')) $('wide').checked = NB.width.mode() === 'wide';
   };
 
   // Hands each piece of a cell to the pen (render-ink.js): its bracket, margin, state, and each part
@@ -593,7 +722,8 @@ var App = (function () {
   function write(box, cell) {
     // Keyed by the cell itself, not its position: moving or inserting a cell does not rewrite the others.
     if (!cellIds.has(cell)) cellIds.set(cell, ++nextCellId);
-    var id = 'cell' + cellIds.get(cell) + '/';
+    // A presentation writes its screens afresh, whatever the editor has already written.
+    var id = Present.prefix() + 'cell' + cellIds.get(cell) + '/';
     Array.prototype.forEach.call(box.children, function (part) {
       var c = part.getAttribute('class') || '';
       if (c.indexOf('sk-outline') >= 0) Ink.present(part, id + 'outline', cell.kind + (cell.name || ''), Ink.bracket(box));
@@ -609,41 +739,6 @@ var App = (function () {
   }
 
   // Input widgets, shared with the exported viewer's look.
-  A.inputWidget = function (cell, onChange) {
-    var o = cell.options || {}, v = cell.value, w = cell.widget, box = NB.el('div', { 'class': 'nb-input' }), control;
-    box.appendChild(NB.el('label', { text: o.label || cell.name }));
-    var fire = function (value) { onChange(cell, value); };
-    if (w === 'select' || w === 'multiselect') {
-      var choices = cell.choices || (o.options ? o.options.split(',') : []);
-      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
-        var picked = Array.prototype.filter.call(control.options, function (x) { return x.selected; }).map(function (x) { return choices[+x.value]; });
-        fire(w === 'multiselect' ? picked : picked[0]);
-      } });
-      choices.forEach(function (x, i) {
-        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
-        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
-      });
-    } else if (w === 'checkbox') {
-      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
-    } else if (w === 'slider' || w === 'number') {
-      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : String(v) });
-      var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: o.min, max: o.max, step: o.step || 'any', value: v == null ? '' : v,
-        oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
-      box.appendChild(input);
-      box.appendChild(shown);
-    } else if (w === 'date') {
-      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: o.min, max: o.max, onchange: function () { fire(control.value); } });
-    } else if (w === 'daterange') {
-      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
-      a.onchange = b.onchange = function () { fire({ lo: a.value, hi: b.value }); };
-      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
-    } else {
-      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: o.placeholder, onchange: function () { fire(control.value); } });
-    }
-    if (control) box.appendChild(control);
-    return box;
-  };
-
   // ---- File sync ----------------------------------------------------------------------------
   A.watch = function () {
     if (!window.EventSource) return;
@@ -662,7 +757,7 @@ var App = (function () {
     });
   };
 
-  // ---- Start --------------------------------------------------------------------------------
+  // ---- Export and menu ----------------------------------------------------------------------
   A.exportUrl = function () {
     var f = $('export-format').value, code = $('export-code').checked, out = $('export-output').checked;
     var hide = !code && !out ? 'all' : !code ? 'code' : !out ? 'output' : 'none';
@@ -690,6 +785,7 @@ var App = (function () {
     $('autorun').onchange = function (e) { A.autorun = e.target.checked; };
     $('save').onclick = A.save;
     $('view-reading').onclick = function () { A.reading = !A.reading; $('view-reading').classList.toggle('primary', A.reading); A.render(); };
+    $('view-present').onclick = function () { Present.enter(0); };
     $('view-graph').onclick = function () { A.graph = !A.graph; $('view-graph').classList.toggle('primary', A.graph); A.render(); };
     $('view-sidebar').onclick = function () { $('app').classList.toggle('with-sidebar'); $('view-sidebar').classList.toggle('primary'); };
     var theme = localStorage.getItem('nb.theme');
@@ -700,6 +796,9 @@ var App = (function () {
       localStorage.setItem('nb.theme', next);
     };
     $('show-timing').onchange = function (e) { A.setTiming(e.target.checked); };
+    $('wide').onchange = function (e) { NB.width.set(e.target.checked ? 'wide' : 'normal'); };
+    $('keep-results').onchange = function (e) { A.setCaching(e.target.checked); };
+    $('forget-results').onclick = function () { A.forget(); };
     NB.pageSizes.forEach(function (n) { $('page-size').appendChild(NB.el('option', { value: n, text: n, selected: n === A.pageSize ? 'selected' : null })); });
     $('page-size').onchange = function (e) {
       A.pageSize = +e.target.value;
@@ -730,14 +829,20 @@ var App = (function () {
     });
     if (window.Ink) {
       ['run-all', 'gear'].forEach(function (id) { Ink.present($(id), 'toolbar/' + id); });
-      $('ink').value = Ink.setting();
+      $('ink').value = Ink.mode();
       $('ink').onchange = function (e) { Ink.setSetting(e.target.value); };
+      // Watching starts by writing the whole page again; leaving it (Esc) puts the menu back.
+      Ink.onrewrite = function () { A.render(); };
+      window.addEventListener('inkmode', function () { $('ink').value = Ink.mode(); });
     } else $('ink').disabled = true;
     A.api('GET', '/api/notebook').then(function (data) {
       A.load(data);
+      NB.width.start({ render: function () { A.render(); } });
+      Present.start(A.present);
       A.watch();
-      if (window.AppExtra) { AppExtra.catalog(); AppExtra.picker(); }
-      A.status('Opened. Nothing has run yet: press Run all.');
+      AppExtra.catalog(); AppExtra.picker();
+      var kept = (data.cached || []).length;
+      A.status(!kept ? 'Opened. Nothing has run yet: press Run all.' : A.live ? 'Showing the last results.' : 'Showing the last results. Nothing has run yet: press Run all.');
     }).catch(function (e) { A.status(e.message); $('cells').appendChild(NB.el('div', { 'class': 'nb-error', text: e.message })); });
   };
 

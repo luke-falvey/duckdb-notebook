@@ -1,0 +1,268 @@
+# name: test/sql/notebook_peek.test
+# description: notebook_peek finds the CTE or sub-query under a cursor position and the query that selects from it
+# group: [notebook]
+
+require notebook
+
+# The cursor is where `needle` starts in the SQL, plus `skip` bytes.
+statement ok
+CREATE MACRO nb_peek_at(s, needle, skip := 0) AS TABLE
+SELECT kind, name, query, substr(s, "start" + 1, "end" - "start") AS part, reason
+FROM notebook_peek(s, strpos(s, needle) - 1 + skip);
+
+statement ok
+SET VARIABLE nb_peek_sql = 'WITH a AS (SELECT 1 AS x), b AS (SELECT x + 1 AS y FROM a WHERE x IN (SELECT x FROM a)) SELECT * FROM b JOIN (SELECT 2 AS z) s ON true';
+
+# A CTE: inside its parentheses, on its name, and just after its closing parenthesis
+query IIIII
+SELECT p.* FROM nb_peek_at(getvariable('nb_peek_sql'), 'SELECT 1') p
+----
+cte	a	WITH a AS (SELECT 1 AS x) SELECT * FROM a	a AS (SELECT 1 AS x)	NULL
+
+query II
+SELECT p.kind, p.name FROM nb_peek_at(getvariable('nb_peek_sql'), 'a AS') p
+----
+cte	a
+
+query II
+SELECT p.kind, p.name FROM nb_peek_at(getvariable('nb_peek_sql'), ', b AS') p
+----
+cte	a
+
+# A CTE comes with the CTEs it reads, and only those
+query IIIII
+SELECT p.* FROM nb_peek_at(getvariable('nb_peek_sql'), 'x + 1') p
+----
+cte	b	WITH a AS (SELECT 1 AS x), b AS (SELECT (x + 1) AS y FROM a WHERE (x = ANY(SELECT x FROM a))) SELECT * FROM b	b AS (SELECT x + 1 AS y FROM a WHERE x IN (SELECT x FROM a))	NULL
+
+query I
+SELECT p.query FROM nb_peek_at('WITH a AS (SELECT 1 AS x), b AS (SELECT 2 AS y), c AS (SELECT y FROM b) SELECT * FROM a, c', 'SELECT y') p
+----
+WITH b AS (SELECT 2 AS y), c AS (SELECT y FROM b) SELECT * FROM c
+
+# The innermost part wins: a sub-query in an expression, inside a CTE
+query IIIII
+SELECT p.* FROM nb_peek_at(getvariable('nb_peek_sql'), 'SELECT x FROM a') p
+----
+subquery	NULL	WITH a AS (SELECT 1 AS x) SELECT * FROM (SELECT x FROM a)	(SELECT x FROM a)	NULL
+
+# A sub-query in FROM is named by its alias
+query IIIII
+SELECT p.* FROM nb_peek_at(getvariable('nb_peek_sql'), 'SELECT 2') p
+----
+subquery	s	SELECT * FROM (SELECT 2 AS z)	(SELECT 2 AS z)	NULL
+
+# The main query is not a part: before the CTEs, between them and after them
+query III
+SELECT p.kind, p.query, p.reason FROM nb_peek_at(getvariable('nb_peek_sql'), 'WITH') p
+----
+NULL	NULL	the cursor is in the main query
+
+query I
+SELECT p.reason FROM nb_peek_at(getvariable('nb_peek_sql'), 'SELECT * FROM b') p
+----
+the cursor is in the main query
+
+query I
+SELECT p.reason FROM nb_peek_at(getvariable('nb_peek_sql'), 'ON true') p
+----
+the cursor is in the main query
+
+# The statements it builds run
+query I
+WITH a AS (SELECT 1 AS x), b AS (SELECT (x + 1) AS y FROM a WHERE (x = ANY(SELECT x FROM a))) SELECT * FROM b
+----
+2
+
+# Nested WITH: scopes nest in the built statement as they did in the query
+query III
+SELECT p.kind, p.name, p.query FROM nb_peek_at('WITH a AS (SELECT 1 AS x), b AS (WITH c AS (SELECT x * 2 AS d FROM a) SELECT * FROM c) SELECT * FROM b', 'x * 2') p
+----
+cte	c	WITH a AS (SELECT 1 AS x) SELECT * FROM (WITH c AS (SELECT (x * 2) AS d FROM a) SELECT * FROM c)
+
+query I
+WITH a AS (SELECT 1 AS x) SELECT * FROM (WITH c AS (SELECT (x * 2) AS d FROM a) SELECT * FROM c)
+----
+2
+
+query II
+SELECT p.kind, p.name FROM nb_peek_at('WITH a AS (SELECT 1 AS x), b AS (WITH c AS (SELECT x * 2 AS d FROM a) SELECT * FROM c) SELECT * FROM b', 'FROM c)') p
+----
+cte	b
+
+# A CTE in one branch of a set operation
+query III
+SELECT p.kind, p.name, p.part FROM nb_peek_at('(SELECT 1) UNION (WITH z AS (SELECT 2 AS q) SELECT q FROM z)', 'SELECT 2') p
+----
+cte	z	z AS (SELECT 2 AS q)
+
+# Column lists, MATERIALIZED, comments and strings holding parentheses
+query III
+SELECT p.kind, p.name, p.part FROM nb_peek_at('WITH a(x, y) AS MATERIALIZED (SELECT '')'' AS x, 2 /* ( */), b AS NOT MATERIALIZED (FROM a) SELECT * FROM b', 'FROM a)') p
+----
+cte	b	b AS NOT MATERIALIZED (FROM a)
+
+query III
+SELECT p.kind, p.name, p.part FROM nb_peek_at('WITH a(x, y) AS MATERIALIZED (SELECT '')'' AS x, 2 /* ( */), b AS NOT MATERIALIZED (FROM a) SELECT * FROM b', 'MATERIALIZED (S') p
+----
+cte	a	a(x, y) AS MATERIALIZED (SELECT ')' AS x, 2 /* ( */)
+
+# Scalar and EXISTS sub-queries, FROM-first, doubled parentheses
+query II
+SELECT p.kind, p.query FROM nb_peek_at('SELECT (SELECT max(x) FROM t) AS m, EXISTS (FROM t WHERE x > 1) FROM t', 'max') p
+----
+subquery	SELECT * FROM (SELECT max(x) FROM t)
+
+query II
+SELECT p.kind, p.query FROM nb_peek_at('SELECT (SELECT max(x) FROM t) AS m, EXISTS (FROM t WHERE x > 1) FROM t', 'x > 1') p
+----
+subquery	SELECT * FROM (SELECT * FROM t WHERE (x > 1))
+
+query III
+SELECT p.kind, p.name, p.part FROM nb_peek_at('SELECT * FROM ((SELECT 1 AS a)) q', 'SELECT 1') p
+----
+subquery	q	(SELECT 1 AS a)
+
+# Parentheses that are not a query are not a part
+query I
+SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT 1 UNION ALL SELECT 2) u WHERE 1 IN (1, 2)', '(1, 2)', 2) p
+----
+the cursor is in the main query
+
+query III
+SELECT p.kind, p.name, p.part FROM nb_peek_at('SELECT (a + (b)) FROM (SELECT ((1)) AS a, 2 AS b) q', '((1))', 1) p
+----
+subquery	q	(SELECT ((1)) AS a, 2 AS b)
+
+# A recursive CTE can be peeked at whole, but not a part of it that reads the CTE itself
+query III
+SELECT p.kind, p.name, p.query FROM nb_peek_at('WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 5) SELECT * FROM t', 'UNION') p
+----
+cte	t	WITH RECURSIVE t (n) AS ((SELECT 1) UNION ALL (SELECT (n + 1) FROM t WHERE (n < 5))) SELECT * FROM t
+
+query II
+SELECT p.kind, p.reason FROM nb_peek_at('WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM (SELECT n FROM t WHERE n < 5) q) SELECT * FROM t', 'n < 5') p
+----
+NULL	it reads the recursive CTE it is part of
+
+# Several statements: the one the cursor is in. Positions are byte offsets, variables stay as written
+query III
+SELECT p.kind, p.name, p.query FROM nb_peek_at('SET VARIABLE v = ''é'';' || chr(10) || 'SELECT * FROM (SELECT ''日本'' AS s, $v AS v) q', '日本') p
+----
+subquery	q	SELECT * FROM (SELECT '日本' AS s, $v AS v)
+
+query I
+SELECT p.reason FROM nb_peek_at('SET VARIABLE v = (SELECT 1);' || chr(10) || 'SELECT 2', 'SELECT 1') p
+----
+the statement is not a query
+
+# SQL that does not parse
+query II
+SELECT p.kind, p.reason FROM nb_peek_at('WITH a AS (SELECT 1 AS x SELECT * FROM a', 'SELECT 1') p
+----
+NULL	the SQL does not parse
+
+query I
+SELECT reason FROM notebook_peek('', 0)
+----
+the cursor is not in a statement
+
+# Statements that change data are never peeked at, wherever the cursor is
+query I
+SELECT p.reason FROM nb_peek_at('CREATE TABLE t2 AS WITH a AS (SELECT 1) SELECT * FROM a', 'SELECT 1') p
+----
+the statement is not a query
+
+query I
+SELECT p.reason FROM nb_peek_at('INSERT INTO t SELECT * FROM (SELECT 1) z', 'SELECT 1') p
+----
+the statement is not a query
+
+query I
+SELECT p.reason FROM nb_peek_at('DELETE FROM t WHERE x IN (SELECT 1)', 'SELECT 1') p
+----
+the statement is not a query
+
+query I
+SELECT p.reason FROM nb_peek_at('WITH i AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM (SELECT 1) z', 'SELECT 1') p
+----
+the statement changes data
+
+# Nor is a part whose evaluation has side effects: volatile functions (random() and uuid() only
+# compute a value), and table functions that change something
+statement ok
+CREATE SEQUENCE nb_peek_seq;
+
+query I
+SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT nextval(''nb_peek_seq'') AS n) q', 'nextval') p
+----
+it calls nextval(), which may have side effects
+
+query I
+SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT * FROM notebook_run(''x.sql'')) q', 'notebook_run') p
+----
+it calls notebook_run(), which may have side effects
+
+# B23: every notebook_* function that changes something is refused, notebook_cache_clear included; the
+# read-only ones are not
+query I
+SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT * FROM notebook_cache_clear(''x.sql'')) q', 'notebook_cache_clear') p
+----
+it calls notebook_cache_clear(), which may have side effects
+
+query I
+SELECT p.reason IS NULL OR p.reason NOT LIKE '%side effects%' FROM nb_peek_at('SELECT * FROM (SELECT * FROM notebook_cells(''x.sql'')) q', 'notebook_cells') p
+----
+true
+
+query I
+SELECT p.reason FROM nb_peek_at('SELECT * FROM (SELECT * FROM checkpoint()) q', 'checkpoint') p
+----
+it calls checkpoint(), which may have side effects
+
+query I
+SELECT p.kind FROM nb_peek_at('SELECT * FROM (SELECT random() AS n) q', 'random') p
+----
+subquery
+
+# A CTE with side effects blocks the parts that read it, not the others
+query I
+SELECT p.reason FROM nb_peek_at('WITH a AS (SELECT nextval(''nb_peek_seq'') AS n), b AS (SELECT n FROM a) SELECT * FROM a, b', 'SELECT n FROM') p
+----
+it calls nextval(), which may have side effects
+
+query I
+SELECT p.query FROM nb_peek_at('WITH a AS (SELECT nextval(''nb_peek_seq'') AS n), b AS (SELECT 1 AS k) SELECT * FROM a, b', 'SELECT 1 AS k') p
+----
+WITH b AS (SELECT 1 AS k) SELECT * FROM b
+
+# Finding a part runs nothing: the sequence has never been used
+statement error
+SELECT currval('nb_peek_seq')
+----
+not yet defined
+
+statement error
+SELECT * FROM notebook_peek('SELECT 1', -1)
+----
+byte offset
+
+# The notebook the browser tests peek into runs
+query II
+SELECT name, status FROM notebook_run('test/notebooks/peek.sql') WHERE kind = 'sql' ORDER BY idx
+----
+nb_peek_sales	ok
+by_region	ok
+best_days	ok
+
+statement ok
+DROP TABLE nb_peek_sales;
+
+statement ok
+DROP SEQUENCE nb_peek_seq;
+
+statement ok
+RESET VARIABLE nb_peek_sql;
+
+statement ok
+DROP MACRO TABLE nb_peek_at;

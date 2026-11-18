@@ -10,10 +10,7 @@
   var payload, current, wasm = null, variables = {}, selected = {};
 
   function bytes(id) {
-    var text = document.getElementById(id).textContent.trim();
-    var bin = atob(text), out = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    return b64bytes(document.getElementById(id).textContent.trim());
   }
   function gunzip(u8) {
     return new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer().then(function (b) { return new Uint8Array(b); });
@@ -24,69 +21,53 @@
     return out;
   }
 
-  // A SQL literal for a value set by a widget or a chart selection.
+  // A SQL literal for a value set by a widget or a chart selection, of the variable's SQL type as the export
+  // recorded it (payload.wasm.types). The same literal the server makes: JsonToSqlLiteral in script.cpp.
+  function quote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
+  // `DATE[]` -> `DATE`; any other type is its own element type.
+  function elementType(type) { return /\[\]$/.test(type) ? type.slice(0, -2) : type; }
+  // The type of one field of `STRUCT(lo DATE, hi DATE)`; any other type applies to every field.
+  function fieldType(type, field) {
+    var open = type.indexOf('(');
+    if (type.slice(0, 6) !== 'STRUCT' || open < 0) return type;
+    for (var i = open + 1, depth = 0, start = i; i < type.length; i++) {
+      var c = type[i];
+      if (c === '(') depth++;
+      else if ((c === ',' || c === ')') && depth === 0) {
+        var part = type.slice(start, i).replace(/^ +/, ''), space = part.indexOf(' ');
+        var name = part.slice(0, space);
+        if (name.length >= 2 && name[0] === '"') name = name.slice(1, -1);
+        if (space >= 0 && name === field) return part.slice(space + 1);
+        start = i + 1;
+      } else if (c === ')') depth--;
+    }
+    return '';
+  }
   function literal(v, type) {
-    if (v === null || v === undefined) return 'NULL';
-    if (Array.isArray(v)) return '[' + v.map(function (x) { return literal(x, type); }).join(', ') + ']';
-    if (typeof v === 'object') return '{' + Object.keys(v).map(function (k) { return "'" + k.replace(/'/g, "''") + "': " + literal(v[k], type); }).join(', ') + '}';
+    type = type || '';
+    var cast = type ? '::' + type : '';
+    if (v === null || v === undefined) return 'NULL' + cast;
     if (typeof v === 'boolean') return v ? 'true' : 'false';
-    if (typeof v === 'number') return String(v);
-    var s = "'" + String(v).replace(/'/g, "''") + "'";
-    return type ? s + '::' + type : s;
+    if (Array.isArray(v)) return '[' + v.map(function (x) { return literal(x, elementType(type)); }).join(', ') + ']';
+    if (typeof v === 'object') return '{' + Object.keys(v).map(function (k) { return quote(k) + ': ' + literal(v[k], fieldType(type, k)); }).join(', ') + '}';
+    return (typeof v === 'number' ? String(v) : quote(v)) + cast;
+  }
+  function setVariable(name, value) {
+    var types = payload.wasm.types || {};
+    return wasm.query('SET VARIABLE "' + name.replace(/"/g, '""') + '" = ' + literal(value, types[name])).then(refresh);
   }
 
   function option(cell, key, fallback) { return cell.options && cell.options[key] != null ? cell.options[key] : fallback; }
 
-  function inputWidget(cell, onChange, enabled, values) {
-    var box = NB.el('div', { 'class': 'nb-input' });
-    box.appendChild(NB.el('label', { text: option(cell, 'label', cell.name) }));
-    var w = cell.widget, v = cell.value, control;
-    var fire = function (value) { onChange(cell, value); };
-    if (values) {
-      control = NB.el('select', { onchange: function () { fire(values[+control.value]); } });
-      values.forEach(function (x, i) { control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: NB.key(x) === NB.key(v) ? 'selected' : null })); });
-    } else if (w === 'select' || w === 'multiselect') {
-      var choices = cell.choices || (option(cell, 'options', '') ? option(cell, 'options', '').split(',') : []);
-      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
-        var picked = Array.prototype.filter.call(control.options, function (o) { return o.selected; }).map(function (o) { return choices[+o.value]; });
-        fire(w === 'multiselect' ? picked : picked[0]);
-      } });
-      choices.forEach(function (x, i) {
-        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
-        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
-      });
-    } else if (w === 'checkbox') {
-      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
-    } else if (w === 'slider' || w === 'number') {
-      var out = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : NB.formatNumber(v) });
-      control = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option(cell, 'min'), max: option(cell, 'max'), step: option(cell, 'step', 'any'), value: v, oninput: function () { out.textContent = control.value; }, onchange: function () { fire(Number(control.value)); } });
-      box.appendChild(control);
-      box.appendChild(out);
-      control = null;
-    } else if (w === 'date') {
-      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: option(cell, 'min'), max: option(cell, 'max'), onchange: function () { fire(control.value); } });
-    } else if (w === 'daterange') {
-      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
-      var both = function () { fire({ lo: a.value, hi: b.value }); };
-      a.onchange = both; b.onchange = both;
-      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
-    } else {
-      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: option(cell, 'placeholder'), onchange: function () { fire(control.value); } });
-    }
-    if (control) box.appendChild(control);
-    if (!enabled) box.querySelectorAll('input,select').forEach(function (e) { e.disabled = true; });
-    return box;
-  }
-
   // A query cell's charts as tabs, with its table last. The first chart shows until another is picked.
   function queryTabs(cell, out) {
     var charts = cell.charts, tab = Math.min(cell.tab || 0, charts.length);
-    var items = charts.map(function (c, k) { return { label: (c && c.error ? '⚠ ' : '') + NB.chartLabel(c, k) }; }).concat([{ label: 'table', title: 'The query\'s rows' }]);
+    var items = NB.queryTabItems(charts, charts.length);
     out.appendChild(NB.tabs(items, tab, function (k) { cell.tab = k; render(); }));
     var holder = NB.el('div', { 'class': 'nb-tab-body' });
     out.appendChild(holder);
     if (tab < charts.length) {
-      NB.chart(holder, charts[tab], { selected: selected, onSelect: wasm ? onSelect : null, seed: 'cell' + cell.idx + '/' + tab, inTab: true });
+      NB.chart(holder, charts[tab], { selected: selected, onSelect: wasm ? onSelect : null, fluid: !option(cell, 'width'), seed: 'cell' + cell.idx + '/' + tab, inTab: true });
     } else if (cell.table) {
       NB.table(holder, cell.table, { pageSize: +option(cell, 'rows', 25) });
     } else if (cell.error) {
@@ -94,33 +75,52 @@
     }
   }
 
-  function widgetType(cell) {
-    return { date: 'DATE', daterange: 'DATE', number: 'DOUBLE', slider: 'DOUBLE' }[cell.widget] || '';
+  // What a cell shows: its code (never while presenting, as in the editor's reading view) and its
+  // output, when it has any. The export's hide= applies to code and results; prose and inputs are what
+  // a reader came for.
+  function parts(cell) {
+    var own = option(cell, 'hide', ''), global = payload.hide || '';
+    var code = !Present.on && cell.kind === 'sql' && !!cell.sql && !NB.hides(own, 'code') && !NB.hides(global, 'code');
+    var output = cell.kind !== 'notebook' && !NB.hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !NB.hides(global, 'output'));
+    if (output && cell.kind === 'sql') output = !!((cell.charts && cell.charts.length) || cell.error || cell.table);
+    return { code: code, output: output };
   }
 
   function render() {
     root.innerHTML = '';
+    NB.width.apply();
     var head = NB.el('div', { 'class': 'nb-viewer-header' }, [
       NB.el('span', { text: payload.source || '' }),
-      NB.el('span', { id: 'nb-mode', text: wasm ? 'Live: queries run in this page with DuckDB-WASM' : payload.precomputed ? 'Inputs switch between precomputed results' : 'Static export' })
+      NB.el('span', {}, [
+        NB.el('span', { id: 'nb-mode', text: wasm ? 'Live: queries run in this page with DuckDB-WASM' : payload.precomputed ? 'Inputs switch between precomputed results' : 'Static export' }),
+        NB.el('button', { 'class': 'nb-tab nb-width-toggle' + (NB.width.mode() === 'wide' ? ' on' : ''), type: 'button', text: 'wide',
+          title: 'Use the whole width of the window (remembered in this browser; or open with ?width=wide)', onclick: function () { NB.width.toggle(); } }),
+        NB.el('button', { 'class': 'nb-tab nb-present-start', text: 'present', title: 'Present: one screen at a time. Arrows, Space or a click move; Esc leaves; F for full screen',
+          onclick: function () { Present.enter(0); } })
+      ])
     ]);
+    // Watch the page being written again, slowly, by one pen (render-ink.js, watch mode).
+    if (window.Ink) {
+      head.lastChild.appendChild(NB.el('button', { 'class': 'ink-watch-start', type: 'button', text: '✎ watch', title: 'Watch this page being written by hand (or open it with ?ink=watch)', onclick: function () { Ink.watch(); } }));
+    }
     root.appendChild(head);
     if (payload.frozen && payload.frozen.length) root.appendChild(NB.el('div', { 'class': 'nb-frozen', text: 'Fixed at their current value in this export: ' + payload.frozen.join(', ') }));
     var grid = NB.el('div', { 'class': 'nb-cells' });
     var pre = {};
     if (payload.precomputed && !wasm) payload.precomputed.inputs.forEach(function (i) { pre[i.name] = i.values; });
-    var global = payload.hide || '';
-    var hides = function (h, what) { return h === 'all' || h === what; };
-    current.forEach(function (cell) {
-      if (cell.kind === 'notebook') return;
-      var own = option(cell, 'hide', '');
-      // The export's hide= applies to code and results; prose and inputs are what a reader came for.
-      var showCode = !hides(own, 'code') && !hides(global, 'code');
-      var showOutput = !hides(own, 'output') && (cell.kind === 'markdown' || cell.kind === 'input' || !hides(global, 'output'));
-      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + Math.max(1, Math.min(12, +option(cell, 'span', 12))) });
+    var shows = current.map(parts), screen = null;
+    if (Present.on) {
+      screen = Present.begin(current.map(function (cell, i) {
+        return { id: cell.idx, span: option(cell, 'span'), kind: cell.kind, screen: option(cell, 'screen'), visible: shows[i].code || shows[i].output };
+      }), grid, root);
+    }
+    current.forEach(function (cell, i) {
+      var showCode = shows[i].code, showOutput = shows[i].output;
+      if ((!showCode && !showOutput) || (screen && !screen[i])) return;
+      var box = NB.el('div', { 'class': 'nb-cell', 'data-kind': cell.kind, 'data-idx': cell.idx, 'data-seed': 'cell' + cell.idx + (cell.name || ''), style: 'grid-column: span ' + NB.span(option(cell, 'span', 12)) });
       var out = NB.el('div', { 'class': 'nb-output' }), shown = 0;
-      if (cell.kind === 'sql' && showCode && cell.sql) {
-        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: (cell.is_query ? 'query' : 'sql') + (cell.name ? ' · ' + cell.name : '') }));
+      if (showCode) {
+        box.appendChild(NB.el('div', { 'class': 'nb-code-label', text: NB.kindName(cell) + (cell.name ? ' · ' + cell.name : '') }));
         box.appendChild(NB.el('pre', { 'class': 'nb-source', html: NB.highlightSql(cell.sql) }));
         shown++;
       }
@@ -133,15 +133,16 @@
           queryTabs(cell, out);
           shown++;
         } else if (cell.kind === 'sql') {
-          if (cell.error) { out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error })); shown++; }
-          else if (cell.table) { NB.table(out, cell.table, { pageSize: +option(cell, 'rows', 25) }); shown++; }
+          if (cell.error) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
+          else NB.table(out, cell.table, { pageSize: +option(cell, 'rows', 25) });
+          shown++;
         } else if (cell.kind === 'input') {
           var enabled = !!wasm || !!pre[cell.name];
-          box.appendChild(inputWidget(cell, onInput, enabled, wasm ? null : pre[cell.name]));
+          box.appendChild(NB.inputWidget(cell, onInput, { enabled: enabled, values: wasm ? null : pre[cell.name] }));
           shown++;
         } else if (cell.kind === 'chart') {
           if (cell.error && !cell.chart) out.appendChild(NB.el('div', { 'class': 'nb-error', text: cell.error }));
-          else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null, seed: 'chart' + cell.idx });
+          else NB.chart(out, cell.chart, { selected: selected, onSelect: wasm ? onSelect : null, fluid: !option(cell, 'width'), seed: 'chart' + cell.idx });
           shown++;
         }
       }
@@ -150,19 +151,22 @@
       grid.appendChild(box);
     });
     root.appendChild(grid);
+    NB.width.fit(grid);
     // Outlines are drawn once the cells are laid out, and follow their size from then on.
     Array.prototype.forEach.call(grid.children, function (box) { Sketch.outline(box, { width: 1.5 }); });
-    if (window.Ink) write(head, grid);
+    if (window.Ink) { Ink.onrewrite = render; write(head, grid); }
+    if (Present.on) Present.finish(root, grid);
     window.__NB_READY = true;
   }
 
   // Hands each piece of the page to the pen (render-ink.js). A piece already written, with the same
   // content, is left as it is; one that changed is written again.
   function write(head, grid) {
-    Ink.present(head, 'header');
+    // Keyed by its text: switching the page's width marks the toggle, and that is not new writing.
+    Ink.present(head, 'header', head.textContent);
     if (head.nextSibling && head.nextSibling.classList.contains('nb-frozen')) Ink.present(head.nextSibling, 'frozen');
     Array.prototype.forEach.call(grid.children, function (box) {
-      var id = 'cell' + box.getAttribute('data-idx') + '/';
+      var id = Present.prefix() + 'cell' + box.getAttribute('data-idx') + '/';
       Array.prototype.forEach.call(box.children, function (part, k) {
         if (part.classList.contains('sk-outline')) Ink.present(part, id + 'outline', box.getAttribute('data-seed'), Ink.bracket(box));
         else Ink.present(part, id + k + (part.getAttribute('class') || part.tagName));
@@ -174,7 +178,7 @@
   function onInput(cell, value) {
     if (wasm) {
       cell.value = value;
-      wasm.query('SET VARIABLE "' + cell.name.replace(/"/g, '""') + '" = ' + literal(value, widgetType(cell))).then(refresh);
+      setVariable(cell.name, value);
       return;
     }
     var p = payload.precomputed;
@@ -190,20 +194,8 @@
 
   // ---- html-wasm ----
   function onSelect(name, value) {
-    var type = '';
-    current.forEach(function (c) {
-      (c.chart ? [c.chart] : []).concat(c.charts || []).forEach(function (chart) {
-        var r = chart && chart.render;
-        if (r && r.selection && r.selection.as === name) {
-          (r.layers || []).forEach(function (l) {
-            var e = l.encoding[(r.selection.channels || ['x'])[0]];
-            if (e && e.type === 'temporal') type = 'TIMESTAMP';
-          });
-        }
-      });
-    });
     selected[name] = value;
-    wasm.query('SET VARIABLE "' + name.replace(/"/g, '""') + '" = ' + literal(value, type)).then(refresh);
+    setVariable(name, value);
   }
 
   function refresh() {
@@ -213,11 +205,12 @@
         return Promise.all([table].concat((cell.charts || []).map(redrawChart)));
       }
       if (cell.kind === 'markdown' && cell.expressions && cell.expressions.length) {
-        return Promise.all(cell.expressions.map(function (x) { return wasm.query('SELECT (' + x.sql + ')'); })).then(function (results) {
+        // DuckDB writes the value as text, as the server does (Value::ToString).
+        return Promise.all(cell.expressions.map(function (x) { return wasm.query('SELECT CAST((' + x.sql + ') AS VARCHAR)'); })).then(function (results) {
           var text = '', at = 0;
           cell.expressions.forEach(function (x, i) {
             var v = results[i].rows[0] ? results[i].rows[0][0] : null;
-            text += cell.content.slice(at, x.begin) + '\uE000' + (v === null ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v)) + '\uE001';
+            text += cell.content.slice(at, x.begin) + '\uE000' + (v === null ? 'NULL' : String(v)) + '\uE001';
             at = x.end;
           });
           cell.output = text + cell.content.slice(at);
@@ -262,7 +255,10 @@
     window.__NB_PAYLOAD = payload;
     current = payload.cells;
     document.title = payload.title || document.title;
+    NB.width.declare(NB.width.declared(payload.cells));
+    NB.width.start({ render: render });
     render();
+    Present.start({ render: render });
     if (payload.wasm && window.NotebookWasm) return bootWasm();
   }).catch(function (e) {
     root.appendChild(NB.el('div', { 'class': 'nb-error', text: 'Could not read this notebook: ' + (e.message || e) }));

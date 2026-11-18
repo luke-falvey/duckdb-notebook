@@ -106,8 +106,19 @@ var NB = (function () {
     return String(v);
   };
 
-  NB.isNumericType = function (t) { return /INT|FLOAT|DOUBLE|DECIMAL|REAL|NUMERIC/i.test(t || ''); };
-  NB.isTemporalType = function (t) { return /^(DATE|TIME|TIMESTAMP)/i.test(t || ''); };
+  // A DuckDB type's class, as TypeClass in src/core/chart.cpp decides it: numbers by their whole name
+  // (so INTERVAL and POINT are not numbers), date and time types by prefix, lists never.
+  var NUMERIC_TYPES = ['tinyint', 'smallint', 'integer', 'bigint', 'hugeint', 'utinyint', 'usmallint', 'uinteger', 'ubigint',
+    'uhugeint', 'float', 'double', 'decimal', 'real', 'int', 'numeric', 'int1', 'int2', 'int4', 'int8', 'float4', 'float8',
+    'varint', 'bignum'];
+  NB.typeClass = function (t) {
+    t = String(t || '').toLowerCase();
+    if (t.indexOf('[') >= 0) return 'nominal';
+    if (t.slice(0, 4) === 'date' || t.slice(0, 4) === 'time') return 'temporal';
+    return NUMERIC_TYPES.indexOf(t.split('(')[0].trim()) >= 0 ? 'quantitative' : 'nominal';
+  };
+  NB.isNumericType = function (t) { return NB.typeClass(t) === 'quantitative'; };
+  NB.isTemporalType = function (t) { return NB.typeClass(t) === 'temporal'; };
 
   // ---- Markdown -----------------------------------------------------------------------------
   // CommonMark-ish: headings, paragraphs, emphasis, code, links, lists, quotes, rules, tables and
@@ -293,6 +304,9 @@ var NB = (function () {
     function fitColumns() {
       var avail = wrap.clientWidth, heads = table.querySelectorAll('thead th');
       if (!avail || heads.length < 2) return;
+      // Everything fits when the table is no wider than its box. Adding up the columns' rounded widths
+      // can say otherwise by a pixel when the table fills its box exactly (a presented screen does).
+      if (!data.__nbColumn && table.offsetWidth <= avail) return;
       var first = Math.min(data.__nbColumn || 0, cols.length - 1), used = heads[0].offsetWidth, last = first;
       for (var k = first; k < cols.length; k++) {
         var w = heads[k + 1].offsetWidth;
@@ -378,6 +392,74 @@ var NB = (function () {
     return r.kind || 'chart ' + (k + 1);
   };
 
+  // An input cell's widget, the same in the editor and an export. onChange(cell, value) fires when the
+  // reader changes it. opts.values: the only values offered (a precomputed export's select);
+  // opts.enabled === false disables it.
+  NB.inputWidget = function (cell, onChange, opts) {
+    opts = opts || {};
+    var values = opts.values;
+    // An option given empty (label=, step=) is not set.
+    var option = function (key, fallback) {
+      var o = (cell.options || {})[key];
+      return o == null || o === '' ? fallback : o;
+    };
+    var box = NB.el('div', { 'class': 'nb-input' });
+    box.appendChild(NB.el('label', { text: option('label', cell.name) }));
+    var w = cell.widget, v = cell.value, control;
+    var fire = function (value) { onChange(cell, value); };
+    if (values) {
+      control = NB.el('select', { onchange: function () { fire(values[+control.value]); } });
+      values.forEach(function (x, i) { control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: NB.key(x) === NB.key(v) ? 'selected' : null })); });
+    } else if (w === 'select' || w === 'multiselect') {
+      var choices = cell.choices || (option('options', '') ? option('options', '').split(',') : []);
+      control = NB.el('select', { multiple: w === 'multiselect' ? 'multiple' : null, onchange: function () {
+        var picked = Array.prototype.filter.call(control.options, function (x) { return x.selected; }).map(function (x) { return choices[+x.value]; });
+        fire(w === 'multiselect' ? picked : picked[0]);
+      } });
+      choices.forEach(function (x, i) {
+        var on = w === 'multiselect' ? (v || []).some(function (y) { return NB.key(y) === NB.key(x); }) : NB.key(x) === NB.key(v);
+        control.appendChild(NB.el('option', { value: i, text: NB.formatValue(x), selected: on ? 'selected' : null }));
+      });
+    } else if (w === 'checkbox') {
+      control = NB.el('input', { type: 'checkbox', checked: v ? 'checked' : null, onchange: function () { fire(control.checked); } });
+    } else if (w === 'slider' || w === 'number') {
+      // The exact value: a year is 2026, not 2,026, and 123.45 is not rounded.
+      var shown = NB.el('span', { 'class': 'nb-input-value', text: v == null ? '' : String(v) });
+      var input = NB.el('input', { type: w === 'slider' ? 'range' : 'number', min: option('min'), max: option('max'), step: option('step', 'any'),
+        value: v, oninput: function () { shown.textContent = input.value; }, onchange: function () { fire(Number(input.value)); } });
+      box.appendChild(input);
+      box.appendChild(shown);
+    } else if (w === 'date') {
+      control = NB.el('input', { type: 'date', value: v ? String(v).slice(0, 10) : '', min: option('min'), max: option('max'), onchange: function () { fire(control.value); } });
+    } else if (w === 'daterange') {
+      var a = NB.el('input', { type: 'date', value: v && v.lo ? String(v.lo).slice(0, 10) : '' }), b = NB.el('input', { type: 'date', value: v && v.hi ? String(v.hi).slice(0, 10) : '' });
+      a.onchange = b.onchange = function () { fire({ lo: a.value, hi: b.value }); };
+      box.appendChild(a); box.appendChild(NB.el('span', { text: '–' })); box.appendChild(b);
+    } else {
+      control = NB.el('input', { type: 'text', value: v == null ? '' : v, placeholder: option('placeholder'), onchange: function () { fire(control.value); } });
+    }
+    if (control) box.appendChild(control);
+    if (opts.enabled === false) box.querySelectorAll('input,select').forEach(function (e) { e.disabled = true; });
+    return box;
+  };
+
+  // ---- Cell framing, shared by the editor and the export viewer ------------------------------
+  // `query` for a SQL cell that is a query, `sql` for one that changes the database, else the cell's kind.
+  NB.kindName = function (cell) { return cell.kind === 'sql' ? (cell.is_query ? 'query' : 'sql') : cell.kind; };
+  // Whether a hide= value hides `what` (code or output).
+  NB.hides = function (hide, what) { return hide === 'all' || hide === what; };
+  // The columns of 12 a cell spans in reading view (span=).
+  NB.span = function (span) { return Math.max(1, Math.min(12, +span)); };
+  // The tabs over a query cell's result: one per chart (marked when it failed), then the table.
+  NB.queryTabItems = function (charts, count) {
+    var items = [];
+    for (var k = 0; k < count; k++) {
+      var chart = (charts || [])[k];
+      items.push({ label: (chart && chart.error ? '⚠ ' : '') + NB.chartLabel(chart, k) });
+    }
+    return items.concat([{ label: 'table', title: 'The query\'s rows' }]);
+  };
+
   // A row of tabs. items: [{label, title}]; extra: elements appended after the tabs.
   NB.tabs = function (items, active, onPick, extra) {
     var bar = NB.el('div', { 'class': 'nb-tabs', role: 'tablist' });
@@ -433,6 +515,98 @@ var NB = (function () {
     document.addEventListener('mouseleave', hide);
     window.addEventListener('scroll', hide, true);
     return { show: show, hide: hide };
+  })();
+
+  // ---- Width: the reading column or the whole window ----------------------------------------
+  // "normal" keeps the cells in their 1000px column; "wide" lets the column, tables and charts use
+  // the window's width. Shared by the editor and exports. The page's choice comes from, in order:
+  // a page that fixes it (data-width-fixed on <html>, the PDF export), a toggle on this page, the
+  // URL (width=wide or width=normal), the reader's saved choice (nb.width), the notebook's
+  // `width:` (FORMAT §6), and then normal. It shows as data-width on <html>, which style.css reads.
+  // Presenting and print ignore it: a screen is sized by Present, paper by the page.
+  NB.width = (function () {
+    var W = {}, picked = null, declared = 'normal', printing = false, page = null;
+    var charts = new WeakMap();
+    var OVERHANG = 32;
+    function valid(v) { return v === 'wide' || v === 'normal' ? v : null; }
+    function saved() { try { return valid(localStorage.getItem('nb.width')); } catch (e) { return null; } }
+    W.mode = function () {
+      var fixed = valid(document.documentElement.getAttribute('data-width-fixed'));
+      if (fixed) return fixed;
+      if (picked) return picked;
+      var m = /[?&#]width=(wide|normal)\b/.exec(location.search + location.hash);
+      return m ? m[1] : saved() || declared;
+    };
+    // Whether the page is drawn wide now (not while presenting or printing).
+    W.wide = function () { return W.mode() === 'wide' && !printing && !(window.Present && Present.on); };
+    // The notebook's own default, from its [notebook] cell: `width: wide` or `width: normal`.
+    W.declared = function (cells) {
+      var nb = (cells || []).filter(function (c) { return c && c.kind === 'notebook'; })[0];
+      var m = nb && /^width:\s*['"]?(wide|normal)['"]?\s*$/m.exec(nb.content || '');
+      return m ? m[1] : 'normal';
+    };
+    W.declare = function (value) { declared = valid(value) || 'normal'; W.apply(); };
+    W.apply = function () {
+      var root = document.documentElement, wide = W.wide() ? 'wide' : 'normal';
+      if (root.getAttribute('data-width') !== wide) root.setAttribute('data-width', wide);
+    };
+    // The reader's toggle: remembered in this browser, and it wins over the URL from now on.
+    W.set = function (value) {
+      picked = valid(value) || 'normal';
+      try { localStorage.setItem('nb.width', picked); } catch (e) { /* private window */ }
+      W.apply();
+      if (page) page.render();
+    };
+    W.toggle = function () { W.set(W.mode() === 'wide' ? 'normal' : 'wide'); };
+
+    // A chart whose cell sets no width= is drawn at the width its box has when the page is wide,
+    // never narrower than the width it was compiled for (a phone keeps the scaled-down chart). The
+    // page builds a cell detached, so NB.chart draws it at its compiled width and fit() draws it again
+    // once it is in the page, before the pen is handed the piece.
+    W.track = function (container, chart, opts) {
+      if (!W.wide() || !opts || !opts.fluid || !chart || chart.error) return;
+      // Values, tables and round charts look the same at any width.
+      if (['kpi', 'gauge', 'table', 'pivot', 'chord', 'sunburst'].indexOf((chart.render || {}).kind) >= 0) return;
+      charts.set(container, { chart: chart, opts: opts });
+      container.setAttribute('data-nb-fluid', '');
+    };
+    W.fit = function (scope) {
+      if (!W.wide() || !scope) return;
+      var list = scope.matches && scope.matches('[data-nb-fluid]') ? [scope] : [];
+      list = list.concat(Array.prototype.slice.call(scope.querySelectorAll('[data-nb-fluid]')));
+      list.forEach(function (box) {
+        // Less room for the last tick's label, which hangs past the plot (outputs clip overflow).
+        var entry = charts.get(box), w = Math.floor(box.clientWidth) - OVERHANG;
+        if (!entry || !w) return;
+        var base = (entry.chart.render && entry.chart.render.width) || 640;
+        if (w <= base) return;
+        NB.chart(box, entry.chart, Object.assign({}, entry.opts, { width: w }));
+      });
+    };
+    // The page's render function, redrawn when the setting changes, when a wide window is resized
+    // (charts take the new width) and around printing (paper gets the normal page).
+    W.start = function (p) {
+      page = p;
+      W.apply();
+      var timer = null, last = window.innerWidth;
+      window.addEventListener('resize', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () {
+          if (window.innerWidth === last) return;
+          last = window.innerWidth;
+          if (W.wide() && page) page.render();
+        }, 200);
+      });
+      window.addEventListener('beforeprint', function () {
+        printing = true;
+        if (document.documentElement.getAttribute('data-width') === 'wide') { W.apply(); if (page) page.render(); }
+      });
+      window.addEventListener('afterprint', function () {
+        printing = false;
+        if (W.mode() === 'wide') { W.apply(); if (page) page.render(); }
+      });
+    };
+    return W;
   })();
 
   return NB;

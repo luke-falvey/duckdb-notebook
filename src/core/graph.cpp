@@ -2,6 +2,7 @@
 
 #include "notebook/chart.hpp"
 #include "notebook/yaml.hpp"
+#include "notebook/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -12,19 +13,6 @@
 namespace notebook {
 
 namespace {
-
-std::string Lower(std::string s) {
-	for (auto &c : s) {
-		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	}
-	return s;
-}
-
-void AddUnique(std::vector<std::string> &values, const std::string &value) {
-	if (std::find(values.begin(), values.end(), value) == values.end()) {
-		values.push_back(value);
-	}
-}
 
 //! How a name from `defines` or `reads` is shown in a message.
 std::string Describe(const std::string &name) {
@@ -114,10 +102,9 @@ std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &ex
 		}
 		analyse(cell.body, "this input's default");
 		// from=<cell>.<column>: the input reads the cell.
-		auto from = cell.Option("from");
-		auto dot = from.rfind('.');
-		if (dot != std::string::npos && dot > 0) {
-			AddUnique(cell.reads, Lower(from.substr(0, dot)));
+		std::string relation, column;
+		if (cell.InputFrom(relation, column) && !relation.empty()) {
+			AddUnique(cell.reads, RelationName(relation));
 		}
 		break;
 	}
@@ -129,7 +116,7 @@ std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &ex
 	case CellKind::CHART: {
 		auto from = cell.Option("from");
 		if (!from.empty()) {
-			AddUnique(cell.reads, Lower(from));
+			AddUnique(cell.reads, RelationName(from));
 		}
 		break;
 	}
@@ -177,6 +164,30 @@ std::vector<std::string> ChartFilters(const std::string &spec) {
 	auto yaml = ParseYaml(spec, error);
 	auto filter = yaml.Get("filter");
 	return filter ? filter->Strings() : std::vector<std::string>();
+}
+
+std::string RelationName(const std::string &dotted) {
+	std::vector<std::string> parts;
+	size_t start = 0;
+	while (true) {
+		auto dot = dotted.find('.', start);
+		parts.push_back(Lower(dotted.substr(start, dot == std::string::npos ? std::string::npos : dot - start)));
+		if (dot == std::string::npos) {
+			break;
+		}
+		start = dot + 1;
+	}
+	if (parts.size() >= 2 && parts[0] == "temp") {
+		parts.erase(parts.begin());
+	}
+	if (parts.size() >= 2 && parts[parts.size() - 2] == "main") {
+		parts.erase(parts.end() - 2);
+	}
+	std::string name;
+	for (auto &part : parts) {
+		name += (name.empty() ? "" : ".") + part;
+	}
+	return name;
 }
 
 void AnalyzeNotebook(Notebook &notebook, const ReferenceExtractor &extract) {
