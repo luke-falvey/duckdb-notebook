@@ -77,40 +77,79 @@
   };
 
   // tip: {column: source or [sources]}: hovering a cell of the column shows the sources' values in its row,
-  // one 'source: value' line each. Sources are left out of the table unless columns: lists them.
-  function tableTips(ds, spec, formats) {
-    var tip = spec.tip;
-    if (!ds || !ds.columns || !tip || typeof tip !== 'object' || Array.isArray(tip)) return { data: ds };
-    var key = JSON.stringify([tip, spec.columns || null]);
-    if (ds.__nbTips && ds.__nbTips.key === key) return ds.__nbTips;
+  // one 'source: value' line each.
+  // link: {column: url column or 'https://...{column}...'}: the cell's value links to the row's URL, or to the
+  // template with each {column} filled in from the row (URL-encoded). A list value links each item, and
+  // {column} of the linked column itself is the item. Only http(s) and mailto URLs are linked.
+  // Columns that only feed tips and links are left out of the table unless columns: lists them.
+  function placeholders(template) {
+    var names = [];
+    template.replace(/\{([^{}]+)\}/g, function (m, name) { names.push(name); return m; });
+    return names;
+  }
+  function tableView(ds, spec, formats) {
+    var tip = spec.tip, link = spec.link;
+    var isMap = function (m) { return m && typeof m === 'object' && !Array.isArray(m); };
+    if (!ds || !ds.columns || (!isMap(tip) && !isMap(link))) return { data: ds };
+    tip = isMap(tip) ? tip : {}; link = isMap(link) ? link : {};
+    var key = JSON.stringify([tip, link, spec.columns || null]);
+    if (ds.__nbView && ds.__nbView.key === key) return ds.__nbView;
     var names = ds.columns.map(function (c) { return c.name; }), listed = [].concat(spec.columns || []);
+    var at = function (name) { return names.indexOf(name); };
     var sources = {}, hidden = {};
+    var feeds = function (name) { if (at(name) >= 0 && listed.indexOf(name) < 0 && !tip.hasOwnProperty(name) && !link.hasOwnProperty(name)) hidden[name] = true; };
     Object.keys(tip).forEach(function (shown) {
-      sources[shown] = [].concat(tip[shown]).map(String).filter(function (s) { return names.indexOf(s) >= 0; });
-      sources[shown].forEach(function (s) { if (listed.indexOf(s) < 0 && !tip.hasOwnProperty(s)) hidden[s] = true; });
+      sources[shown] = [].concat(tip[shown]).map(String).filter(function (s) { return at(s) >= 0; });
+      sources[shown].forEach(feeds);
+    });
+    Object.keys(link).forEach(function (shown) {
+      var target = String(link[shown]);
+      (target.indexOf('{') >= 0 ? placeholders(target) : [target]).forEach(feeds);
     });
     var keep = names.map(function (n, k) { return hidden[n] ? -1 : k; }).filter(function (k) { return k >= 0; });
-    var columns = keep.map(function (k) { return ds.columns[k]; });
-    var tips = (ds.rows || []).map(function (r) {
-      return keep.map(function (k) {
+    var safe = function (href) { return /^(https?:|mailto:)/i.test(href) ? href : null; };
+    var linksOf = function (r, shown) {
+      var target = link.hasOwnProperty(shown) ? String(link[shown]) : null, v = r[at(shown)];
+      if (target === null || v == null) return null;
+      var items = Array.isArray(v) ? v : [v], template = target.indexOf('{') >= 0, urls = template ? null : r[at(target)];
+      return items.map(function (item, i) {
+        var href = null;
+        if (template) {
+          var missing = false;
+          href = target.replace(/\{([^{}]+)\}/g, function (m, name) {
+            var x = name === shown ? item : (at(name) >= 0 ? r[at(name)] : null);
+            if (x == null || x === '') { missing = true; return ''; }
+            return encodeURIComponent(Array.isArray(x) ? x.join(',') : String(x));
+          });
+          if (missing) href = null;
+        } else if (urls != null) {
+          href = Array.isArray(urls) ? (Array.isArray(v) && urls.length === items.length ? urls[i] : null) : urls;
+        }
+        return { text: NB.formatValue(item, Array.isArray(v) ? '' : ds.columns[at(shown)].type, formats[shown]), href: href == null ? null : safe(String(href)) };
+      });
+    };
+    var tips = [], links = [];
+    (ds.rows || []).forEach(function (r) {
+      tips.push(keep.map(function (k) {
         var lines = (sources[names[k]] || []).map(function (s) {
-          var v = r[names.indexOf(s)];
-          return v == null || v === '' ? null : s + ': ' + NB.formatValue(v, ds.columns[names.indexOf(s)].type, formats[s]);
+          var v = r[at(s)];
+          return v == null || v === '' ? null : s + ': ' + NB.formatValue(v, ds.columns[at(s)].type, formats[s]);
         }).filter(function (line) { return line; });
         return lines.length ? lines.join('\n') : null;
-      });
+      }));
+      links.push(keep.map(function (k) { return linksOf(r, names[k]); }));
     });
-    var view = { columns: columns, rows: (ds.rows || []).map(function (r) { return keep.map(function (k) { return r[k]; }); }), total: ds.total };
-    ds.__nbTips = { key: key, data: view, tips: tips };
-    return ds.__nbTips;
+    var view = { columns: keep.map(function (k) { return ds.columns[k]; }), rows: (ds.rows || []).map(function (r) { return keep.map(function (k) { return r[k]; }); }), total: ds.total };
+    ds.__nbView = { key: key, data: view, tips: tips, links: links };
+    return ds.__nbView;
   }
 
   T.table = function (c, render, data, opts, chart) {
     var spec = render.spec || {}, formats = spec.format || {}, bars = [], heat = [];
     if (spec.bar) bars = [].concat(spec.bar);
     if (spec.heat) heat = [].concat(spec.heat);
-    var shown = tableTips(chart.datasets[0], spec, formats);
-    NB.table(c, shown.data, { formats: formats, bars: bars, heat: heat, tips: shown.tips });
+    var shown = tableView(chart.datasets[0], spec, formats);
+    NB.table(c, shown.data, { formats: formats, bars: bars, heat: heat, tips: shown.tips, links: shown.links });
   };
 
   T.pivot = function (c, render, data, opts, chart) {

@@ -516,6 +516,20 @@ static void TestChartErrors() {
 	      "table tip: needs a mapping such as {name: description}");
 	CHECK(CompileChart("type: table\ntip: {region: {a: b}}\n", "t", sales).error ==
 	      "table tip: 'region' needs a column name or a list of them");
+
+	// link: a URL template reads its {column} placeholders; a plain value is a column holding the URL.
+	plan = CompileChart("type: table\ncolumns: [region]\nlink: {region: \"https://x.test/{category}/{region}\"}\n", "t",
+	                    sales);
+	CHECK(plan.error.empty() && plan.queries.at(0).find("\"region\", \"category\"\nFROM") != std::string::npos);
+	plan = CompileChart("type: table\ncolumns: [region]\nlink: {region: category}\ntip: {region: category}\n", "t",
+	                    sales);
+	CHECK(plan.error.empty() && plan.queries.at(0).find("\"region\", \"category\"\nFROM") != std::string::npos);
+	CHECK(CompileChart("type: table\nlink: {region: \"https://x.test/{nope}\"}\n", "t", sales).error ==
+	      "table link: column 'nope' is not in t");
+	CHECK(CompileChart("type: table\nlink: {region: [a, b]}\n", "t", sales).error ==
+	      "table link: 'region' needs a URL column or a URL with {column} in it");
+	CHECK(CompileChart("type: table\nlink: https://x.test\n", "t", sales).error ==
+	      "table link: needs a mapping such as {key: \"https://example.com/{key}\"}");
 }
 
 static void TestChartReferences() {

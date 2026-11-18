@@ -821,6 +821,12 @@ def test_exports(browser, work, chromium):
     check("category" in tip_text and "orders" in tip_text and tipped.locator("td.nb-has-tip").count() == tipped.locator("tbody tr").count(),
           f"hovering a table cell with tip: shows that row's values of the tip columns ({tip_text!r})")
     page.mouse.move(0, 0)
+    link = tipped.locator("td a.nb-link").first
+    href, region = link.get_attribute("href"), link.text_content()
+    colours = link.evaluate("a => [getComputedStyle(a).color, getComputedStyle(a.closest('td')).color, getComputedStyle(a).textDecorationLine]")
+    check(href == "https://example.com/regions/" + region and link.get_attribute("target") == "_blank",
+          f"link: makes a table cell a link to its URL template, filled in from the row ({href})")
+    check(colours[0] == colours[1] and "underline" in colours[2], f"in an export a table link keeps the text's colour and is underlined ({colours})")
     widths = page.locator(".nb-cell[data-idx='15'] svg.nb-chart-svg [data-tip] > .sk-hit").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
     check(len(widths) == 48 and min(widths) > 0.9 * max(widths),
           f"bars on a date axis fill their slot, the first and last as wide as the rest ({min(widths or [0]):.1f}-{max(widths or [0]):.1f}px)")

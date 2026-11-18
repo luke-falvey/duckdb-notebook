@@ -144,5 +144,13 @@ tip: {g: nope}', 'nb_chart_t')
 ----
 table tip: column 'nope' is not in
 
+# A link template's {column} placeholders are selected too
+query I
+SELECT replace(queries[1], chr(10), ' ') FROM notebook_chart_query('type: table
+columns: [g]
+link: {g: "https://example.com/{i}?d={d}"}', 'nb_chart_t')
+----
+WITH __src AS (SELECT * FROM "nb_chart_t") SELECT "g", "i", "d" FROM __src LIMIT 1000
+
 statement ok
 DROP TABLE nb_chart_t

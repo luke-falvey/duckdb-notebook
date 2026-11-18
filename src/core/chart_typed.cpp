@@ -14,6 +14,28 @@
 
 namespace notebook {
 
+// The columns a table link: reads: the {column} placeholders of a URL template, or the whole value when it is
+// a column holding the URL.
+static std::vector<std::string> LinkColumns(const std::string &link) {
+	std::vector<std::string> result;
+	if (link.find('{') == std::string::npos) {
+		result.push_back(link);
+		return result;
+	}
+	size_t at = 0;
+	while ((at = link.find('{', at)) != std::string::npos) {
+		auto close = link.find('}', at + 1);
+		if (close == std::string::npos) {
+			break;
+		}
+		if (close > at + 1) {
+			AddUnique(result, link.substr(at + 1, close - at - 1));
+		}
+		at = close + 1;
+	}
+	return result;
+}
+
 void Compiler::Typed(const Yaml &spec, Json &render) {
 	auto type = Lower(spec.Str("type"));
 	chart_type = spec.Str("type");
@@ -59,32 +81,46 @@ void Compiler::Typed(const Yaml &spec, Json &render) {
 			}
 			items.push_back(QuoteIdentifier(column));
 		}
-		// tip: {shown column: source or [sources]}: hovering a cell of the shown column shows the sources' values
-		// in that row. The browser leaves sources out of the table unless columns: lists them, so they are
-		// selected here even when columns: does not name them.
-		if (auto tip = spec.Get("tip")) {
-			if (!tip->IsMap() || tip->entries.empty()) {
-				Fail("table tip: needs a mapping such as {name: description}");
-				return;
+		// tip: {shown column: source or [sources]} and link: {shown column: url column or "https://...{column}..."}
+		// read other columns of the row. The browser leaves those out of the table unless columns: lists them, so
+		// they are selected here even when columns: does not name them.
+		auto decorate = [&](const std::string &key, const std::string &example) -> bool {
+			auto node = spec.Get(key);
+			if (!node) {
+				return true;
 			}
-			for (auto &entry : tip->entries) {
+			auto what = "table " + key + ": ";
+			if (!node->IsMap() || node->entries.empty()) {
+				Fail(what + "needs a mapping such as " + example);
+				return false;
+			}
+			for (auto &entry : node->entries) {
 				if (!IsField(entry.first)) {
-					Fail("table tip: column '" + entry.first + "' is not in " + from);
-					return;
+					Fail(what + "column '" + entry.first + "' is not in " + from);
+					return false;
 				}
 				if (!columns.empty() && std::find(columns.begin(), columns.end(), entry.first) == columns.end()) {
-					Fail("table tip: column '" + entry.first + "' is not one of columns:");
-					return;
+					Fail(what + "column '" + entry.first + "' is not one of columns:");
+					return false;
 				}
-				auto sources = entry.second.Strings();
-				if (sources.empty() || sources.size() != (entry.second.IsList() ? entry.second.items.size() : 1)) {
-					Fail("table tip: '" + entry.first + "' needs a column name or a list of them");
-					return;
+				std::vector<std::string> sources;
+				if (key == "link") {
+					if (!entry.second.IsScalar() || entry.second.scalar.empty()) {
+						Fail(what + "'" + entry.first + "' needs a URL column or a URL with {column} in it");
+						return false;
+					}
+					sources = LinkColumns(entry.second.scalar);
+				} else {
+					sources = entry.second.Strings();
+					if (sources.empty() || sources.size() != (entry.second.IsList() ? entry.second.items.size() : 1)) {
+						Fail(what + "'" + entry.first + "' needs a column name or a list of them");
+						return false;
+					}
 				}
 				for (auto &source : sources) {
 					if (!IsField(source)) {
-						Fail("table tip: column '" + source + "' is not in " + from);
-						return;
+						Fail(what + "column '" + source + "' is not in " + from);
+						return false;
 					}
 					if (!columns.empty() && std::find(columns.begin(), columns.end(), source) == columns.end()) {
 						AddUnique(columns, source);
@@ -92,6 +128,10 @@ void Compiler::Typed(const Yaml &spec, Json &render) {
 					}
 				}
 			}
+			return true;
+		};
+		if (!decorate("tip", "{name: description}") || !decorate("link", "{key: \"https://example.com/{key}\"}")) {
+			return;
 		}
 		if (items.empty()) {
 			items.push_back("*");

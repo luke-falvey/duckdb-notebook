@@ -57,7 +57,7 @@ when a chart reads a table that is already in the database, or to put charts sid
 | Steps, schedules, prices | `type: funnel`, `type: gantt`, `type: candlestick` |
 | Days of the year | `type: calendar` |
 | Places | `type: map` with `lat`/`lon`, or `geometry` with the spatial extension |
-| A styled table | `type: table` with `columns`, `format`, `bar`, `heat`, `tip` |
+| A styled table | `type: table` with `columns`, `format`, `bar`, `heat`, `tip`, `link` |
 | The same chart per group | add `facet: {col: region}` (or `row`) |
 | A reference line or target range | `rules:` (`{y: avg}`, `{y: 150000}`) and `bands:` (`{y: [p25, p75]}`) |
 | A remark about one point or period | `notes:` (`{x: 2026-02-01, text: short month}`) |
