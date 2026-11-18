@@ -52,11 +52,46 @@ void Compiler::Typed(const Yaml &spec, Json &render) {
 		}
 	} else if (type == "table") {
 		std::vector<std::string> items;
-		for (auto &column : spec.Get("columns") ? spec.Get("columns")->Strings() : std::vector<std::string>()) {
+		auto columns = spec.Get("columns") ? spec.Get("columns")->Strings() : std::vector<std::string>();
+		for (auto &column : columns) {
 			if (!IsField(column)) {
 				Fail("table column '" + column + "' is not in " + from);
 			}
 			items.push_back(QuoteIdentifier(column));
+		}
+		// tip: {shown column: source or [sources]}: hovering a cell of the shown column shows the sources' values
+		// in that row. The browser leaves sources out of the table unless columns: lists them, so they are
+		// selected here even when columns: does not name them.
+		if (auto tip = spec.Get("tip")) {
+			if (!tip->IsMap() || tip->entries.empty()) {
+				Fail("table tip: needs a mapping such as {name: description}");
+				return;
+			}
+			for (auto &entry : tip->entries) {
+				if (!IsField(entry.first)) {
+					Fail("table tip: column '" + entry.first + "' is not in " + from);
+					return;
+				}
+				if (!columns.empty() && std::find(columns.begin(), columns.end(), entry.first) == columns.end()) {
+					Fail("table tip: column '" + entry.first + "' is not one of columns:");
+					return;
+				}
+				auto sources = entry.second.Strings();
+				if (sources.empty() || sources.size() != (entry.second.IsList() ? entry.second.items.size() : 1)) {
+					Fail("table tip: '" + entry.first + "' needs a column name or a list of them");
+					return;
+				}
+				for (auto &source : sources) {
+					if (!IsField(source)) {
+						Fail("table tip: column '" + source + "' is not in " + from);
+						return;
+					}
+					if (!columns.empty() && std::find(columns.begin(), columns.end(), source) == columns.end()) {
+						AddUnique(columns, source);
+						items.push_back(QuoteIdentifier(source));
+					}
+				}
+			}
 		}
 		if (items.empty()) {
 			items.push_back("*");

@@ -130,5 +130,19 @@ notes:
 ----
 notes: a note needs text:
 
+# A table's tip: sources are selected even when columns: leaves them out; the browser hides them
+query I
+SELECT replace(queries[1], chr(10), ' ') FROM notebook_chart_query('type: table
+columns: [g, i]
+tip: {g: d}', 'nb_chart_t')
+----
+WITH __src AS (SELECT * FROM "nb_chart_t") SELECT "g", "i", "d" FROM __src LIMIT 1000
+
+statement error
+FROM notebook_chart_query('type: table
+tip: {g: nope}', 'nb_chart_t')
+----
+table tip: column 'nope' is not in
+
 statement ok
 DROP TABLE nb_chart_t

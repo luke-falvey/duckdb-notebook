@@ -204,6 +204,7 @@ table.nb-grid tbody tr:hover td { background: rgba(255, 236, 153, .45); }
 .nb-colname { font-size: 17px; } .nb-coltype { color: var(--nb-faint); font-size: 12px; font-family: var(--nb-mono); }
 td.nb-num { text-align: right; font-variant-numeric: tabular-nums; }
 td.nb-null { color: var(--nb-faint); }
+td.nb-has-tip { cursor: help; text-decoration: underline dotted var(--nb-muted); text-underline-offset: 3px; }
 .nb-rownum { color: var(--nb-faint); text-align: right !important; font-size: 13px; width: 1%; }
 .nb-grid-footer { display: flex; gap: 8px; align-items: center; color: var(--nb-muted); font-size: 14px; padding: 6px 2px 0; flex-wrap: wrap; }
 .nb-grid-footer .nb-spacer { flex: 1; }
@@ -336,7 +337,7 @@ button.nb-width-toggle { font-size: 15px; margin-left: 14px; }
 .nb-tip-key::after { content: ':'; }
 .nb-hover-dot { pointer-events: none; }
 .nb-hover-band { pointer-events: none; fill: var(--nb-mark); opacity: .35; }
-@media print { .nb-tip { display: none !important; } }
+@media print { .nb-tip { display: none !important; } td.nb-has-tip { text-decoration: none; } }
 
 /* Peek under the pen (app-peek.js): the first rows of the CTE or sub-query under the caret, on a paper
    note fixed beside the code. Its box is drawn by Sketch.outline; it takes no part in the layout. */

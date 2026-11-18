@@ -77,7 +77,7 @@ A chart cell's body must be exactly one block comment: no `--` lines.
 | Steps, schedules, prices | `type: funnel`, `type: gantt`, `type: candlestick` |
 | Days of the year | `type: calendar` |
 | Places | `type: map` with `lat`/`lon` (or `geometry` with the spatial extension); no basemap offline |
-| A styled table | `type: table` with `columns`, `format`, `bar`, `heat`, `limit` |
+| A styled table | `type: table` with `columns`, `format`, `bar`, `heat`, `limit`; `tip: {col: [a, b]}` for detail on hover |
 | Point at something | `notes: [{x: 2026-02-01, text: "a short month", circle: true}]` (below) |
 | Same chart per group | add `facet: {col: region}` (or `row`) |
 | A reference line or band | `rules: [{y: avg, label: Average}]`, `bands: [{y: [100, 200], label: Target}]` (below) |

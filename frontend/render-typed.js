@@ -76,11 +76,41 @@
     cap.textContent = spec.label || '';
   };
 
+  // tip: {column: source or [sources]}: hovering a cell of the column shows the sources' values in its row,
+  // one 'source: value' line each. Sources are left out of the table unless columns: lists them.
+  function tableTips(ds, spec, formats) {
+    var tip = spec.tip;
+    if (!ds || !ds.columns || !tip || typeof tip !== 'object' || Array.isArray(tip)) return { data: ds };
+    var key = JSON.stringify([tip, spec.columns || null]);
+    if (ds.__nbTips && ds.__nbTips.key === key) return ds.__nbTips;
+    var names = ds.columns.map(function (c) { return c.name; }), listed = [].concat(spec.columns || []);
+    var sources = {}, hidden = {};
+    Object.keys(tip).forEach(function (shown) {
+      sources[shown] = [].concat(tip[shown]).map(String).filter(function (s) { return names.indexOf(s) >= 0; });
+      sources[shown].forEach(function (s) { if (listed.indexOf(s) < 0 && !tip.hasOwnProperty(s)) hidden[s] = true; });
+    });
+    var keep = names.map(function (n, k) { return hidden[n] ? -1 : k; }).filter(function (k) { return k >= 0; });
+    var columns = keep.map(function (k) { return ds.columns[k]; });
+    var tips = (ds.rows || []).map(function (r) {
+      return keep.map(function (k) {
+        var lines = (sources[names[k]] || []).map(function (s) {
+          var v = r[names.indexOf(s)];
+          return v == null || v === '' ? null : s + ': ' + NB.formatValue(v, ds.columns[names.indexOf(s)].type, formats[s]);
+        }).filter(function (line) { return line; });
+        return lines.length ? lines.join('\n') : null;
+      });
+    });
+    var view = { columns: columns, rows: (ds.rows || []).map(function (r) { return keep.map(function (k) { return r[k]; }); }), total: ds.total };
+    ds.__nbTips = { key: key, data: view, tips: tips };
+    return ds.__nbTips;
+  }
+
   T.table = function (c, render, data, opts, chart) {
     var spec = render.spec || {}, formats = spec.format || {}, bars = [], heat = [];
     if (spec.bar) bars = [].concat(spec.bar);
     if (spec.heat) heat = [].concat(spec.heat);
-    NB.table(c, chart.datasets[0], { formats: formats, bars: bars, heat: heat });
+    var shown = tableTips(chart.datasets[0], spec, formats);
+    NB.table(c, shown.data, { formats: formats, bars: bars, heat: heat, tips: shown.tips });
   };
 
   T.pivot = function (c, render, data, opts, chart) {

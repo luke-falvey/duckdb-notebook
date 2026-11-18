@@ -208,7 +208,9 @@ left out).
 ### Styled table
 
 `columns` picks and orders columns, `format: {col: spec}` formats them, `bar: col` draws in-cell bars,
-`heat: col` shades cells.
+`heat: col` shades cells. `tip: {col: source}` shows the row's `source` value when the reader points at a cell
+of `col` (a list, `{col: [a, b]}`, shows several, one per line); those cells are underlined with dots, and the
+sources are not shown as columns of their own unless `columns` lists them.
 
 <!-- cell table -->
 
