@@ -2,7 +2,7 @@
 # description: the notebooks the documentation site shows (site/notebooks) parse and run without errors
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 # A new notebook in site/notebooks must be added below.
 query I

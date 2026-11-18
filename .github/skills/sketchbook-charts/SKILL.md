@@ -1,6 +1,6 @@
 ---
 name: sketchbook-charts
-description: 'Write chart specs for duckdb-notebook sketchbooks: /* chart */ comments on query cells (shown as tabs) and -- %% chart cells. Use when asked to chart, plot, visualise or graph a result; pick a chart type (line, bar, area, scatter, histogram, heatmap, pie, boxplot, KPI, gauge, pivot, map, sankey, treemap, gantt, candlestick and more); add brushing, click selection or cross-filtering; fix chart errors; or tune axes, formats, colours, layers and facets.'
+description: 'Write chart specs for duckdb-sketchbook sketchbooks: /* chart */ comments on query cells (shown as tabs) and -- %% chart cells. Use when asked to chart, plot, visualise or graph a result; pick a chart type (line, bar, area, scatter, histogram, heatmap, pie, boxplot, KPI, gauge, pivot, map, sankey, treemap, gantt, candlestick and more); add brushing, click selection or cross-filtering; fix chart errors; or tune axes, formats, colours, layers and facets.'
 argument-hint: 'The result to chart and the question the chart should answer'
 ---
 

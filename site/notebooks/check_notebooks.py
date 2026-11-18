@@ -1,6 +1,6 @@
 """Checks notebooks and exports them to HTML; exits 1 if any cell has an error or fails to run.
 
-    python check_notebooks.py notebook.duckdb_extension out/ notebooks/*.sql
+    python check_notebooks.py sketchbook.duckdb_extension out/ notebooks/*.sql
 """
 import os
 import sys
@@ -10,7 +10,7 @@ import duckdb
 extension, out, notebooks = sys.argv[1], sys.argv[2], sys.argv[3:]
 con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 con.execute("FORCE INSTALL '%s'" % extension.replace("'", "''"))
-con.execute("LOAD notebook")
+con.execute("LOAD sketchbook")
 os.makedirs(out, exist_ok=True)
 
 failed = False

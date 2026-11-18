@@ -2,7 +2,7 @@
 # description: notebook_sql expands a notebook into a plain SQL script
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 # Named query cells become temp views (or temp tables); display-only cells are dropped;
 # variables that only a chart selection sets start as NULL

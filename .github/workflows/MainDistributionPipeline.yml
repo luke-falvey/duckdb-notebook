@@ -34,7 +34,7 @@ jobs:
     with:
       duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
-      extension_name: notebook
+      extension_name: sketchbook
       opt_in_archs: "linux_amd64_musl;linux_arm64_musl;osx_amd64;windows_arm64"
       reduced_ci_mode: disabled
 
@@ -56,7 +56,7 @@ jobs:
           {
             echo "| Platform | Extension (bytes) | gzip -9 (bytes) |"
             echo "|---|--:|--:|"
-            find artifacts -name 'notebook.duckdb_extension*' -type f | sort | while read -r file; do
+            find artifacts -name 'sketchbook.duckdb_extension*' -type f | sort | while read -r file; do
               platform=$(basename "$(dirname "$file")" | sed 's/^notebook-[^-]*-extension-//')
               echo "| $platform | $(stat -c %s "$file") | $(gzip -9c "$file" | wc -c) |"
             done
@@ -72,12 +72,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: notebook-v2.0.0-extension-wasm_eh
-          path: build/wasm_eh/extension/notebook
+          name: sketchbook-v2.0.0-extension-wasm_eh
+          path: build/wasm_eh/extension/sketchbook
       - uses: actions/download-artifact@v4
         with:
-          name: notebook-v2.0.0-extension-wasm_threads
-          path: build/wasm_threads/extension/notebook
+          name: sketchbook-v2.0.0-extension-wasm_threads
+          path: build/wasm_threads/extension/sketchbook
       - uses: actions/setup-node@v4
         with:
           node-version: 22

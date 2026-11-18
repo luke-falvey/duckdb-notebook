@@ -2,7 +2,7 @@
 # description: notebook_peek finds the CTE or sub-query under a cursor position and the query that selects from it
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 # The cursor is where `needle` starts in the SQL, plus `skip` bytes.
 statement ok

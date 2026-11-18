@@ -585,7 +585,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		        "FROM duckdb_tables() WHERE NOT internal UNION ALL SELECT database_name, schema_name, view_name, "
 		        "'view' FROM "
 		        "duckdb_views() WHERE NOT internal) t LEFT JOIN duckdb_columns() c USING (database_name, schema_name, "
-		        "table_name) WHERE t.schema_name <> '_notebook' GROUP BY ALL ORDER BY ALL");
+		        "table_name) WHERE t.schema_name NOT IN ('_sketchbook', '_notebook') GROUP BY ALL ORDER BY ALL");
 		    if (result->HasError()) {
 			    throw InvalidInputException("%s", result->GetError());
 		    }
@@ -619,7 +619,8 @@ void Routes(shared_ptr<ServerState> &shared) {
 			           files.Push(Json::String(file.path));
 		           }
 		           Connection connection(*db);
-		           auto result = connection.Query("SELECT DISTINCT name FROM _notebook.versions ORDER BY name");
+		           auto result = connection.Query("SELECT DISTINCT name FROM " + StorageSchema(connection, string()) +
+		                                          ".versions ORDER BY name");
 		           if (!result->HasError()) {
 			           while (auto chunk = result->Fetch()) {
 				           for (idx_t r = 0; r < chunk->size(); r++) {
@@ -838,7 +839,7 @@ private:
 	std::mutex lock;
 };
 
-const char *const CACHE_KEY = "duckdb_notebook_server";
+const char *const CACHE_KEY = "duckdb_sketchbook_server";
 
 struct StartBindData : public TableFunctionData {
 	string source;

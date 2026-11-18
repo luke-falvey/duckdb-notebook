@@ -2631,7 +2631,8 @@ var NB = (function () {
       else { opts.pageSize = next; container.__nbOffset = 0; NB.table(container, data, opts); }
     };
     footer.appendChild(NB.el('span', { 'class': 'nb-spacer' }));
-    footer.appendChild(picker);
+    // A table that every page size shows whole needs no picker.
+    if (available > sizes[0]) footer.appendChild(picker);
     container.appendChild(footer);
   };
 

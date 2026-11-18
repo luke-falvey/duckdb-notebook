@@ -1,12 +1,12 @@
 ---
 name: sketchbook-authoring
-description: 'Write, edit or fix a duckdb-notebook "sketchbook": a plain .sql file with -- %% cells (SQL, query charts, markdown with {{ }} values, inputs, chart cells, [notebook] metadata). Use when asked to create a notebook or sketchbook, add cells, wire inputs to queries, add prose or {{ }} values, organise cells, fix notebook errors or warnings from notebook_cells/notebook_run, or start from a template. Covers the cell format, naming, dependency rules, run options and validation.'
+description: 'Write, edit or fix a duckdb-sketchbook "sketchbook": a plain .sql file with -- %% cells (SQL, query charts, markdown with {{ }} values, inputs, chart cells, [notebook] metadata). Use when asked to create a notebook or sketchbook, add cells, wire inputs to queries, add prose or {{ }} values, organise cells, fix notebook errors or warnings from notebook_cells/notebook_run, or start from a template. Covers the cell format, naming, dependency rules, run options and validation.'
 argument-hint: 'What the sketchbook should show, and where its data comes from'
 ---
 
 # Writing a sketchbook
 
-A sketchbook is a duckdb-notebook: a UTF-8 `.sql` file whose cells start with `-- %%`. Every byte is
+A sketchbook is a duckdb-sketchbook notebook: a UTF-8 `.sql` file whose cells start with `-- %%`. Every byte is
 DuckDB SQL or a SQL comment, so the file runs, diffs and lints like any script. The spec is
 [docs/FORMAT.md](../../../docs/FORMAT.md); this skill is the working summary.
 

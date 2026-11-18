@@ -560,12 +560,12 @@ The editor keeps the last result of every cell, so a notebook reopens showing it
 without running anything. The cache is disposable: deleting it loses nothing but time, and the
 notebook file is never touched by it.
 
-**Where it lives.** For a notebook file, in `.duckdb-notebook/` beside it, one directory per notebook
+**Where it lives.** For a notebook file, in `.duckdb-sketchbook/` beside it, one directory per notebook
 (the file name without its extension). The extension writes a `.gitignore` there that ignores the
 whole directory, so it never needs adding to a project's own:
 
 ```
-.duckdb-notebook/
+.duckdb-sketchbook/
   .gitignore                     *
   revenue/
     monthly.json                 a named cell's result
@@ -573,10 +573,14 @@ whole directory, so it never needs adding to a project's own:
     @state.json                  the variables the results were made with
 ```
 
-For a notebook stored in a database (`db:<name>`), in that database's `_notebook.cache` table,
+For a notebook stored in a database (`db:<name>`), in that database's `_sketchbook.cache` table,
 `(name, cell, format, key, data, saved_at, result)` with one row per cell and one for `@state`. A remote
 notebook (a URL, an object store) and a notebook not saved yet have no cache. A location that cannot be
 written means no cache, quietly; a run never fails because of it.
+
+**Caches from before the rename.** The extension was called `notebook` before it became `sketchbook`,
+and kept its cache in `.duckdb-notebook/` and `_notebook.cache`. When the new place has nothing for a
+notebook, those are read instead; `notebook_cache_clear` clears both. Nothing is written there.
 
 **An entry** is JSON: `{format, cell, key, data, saved_at, result}`. `key` and `data` are the cell's keys when the
 result was made (a redraw of its charts may refresh it only while `data` still matches). `result` is exactly

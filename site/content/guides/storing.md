@@ -50,7 +50,7 @@ pass `force := true` to overwrite anyway. Without `file :=` it only returns the 
 
 ## Another attached database
 
-Both functions take `database :=` to use the `_notebook` schema of another attached database:
+Both functions take `database :=` to use the `_sketchbook` schema of another attached database:
 
 ```sql
 ATTACH 'reports.duckdb' AS reports;
@@ -60,18 +60,23 @@ FROM notebook_checkout('revenue', database := 'reports', file := 'revenue.sql');
 
 ## The tables
 
-The first save creates a `_notebook` schema:
+The first save creates a `_sketchbook` schema:
 
 | Object | Columns |
 |---|---|
-| `_notebook.notebooks` | `name` (primary key), `created_at` |
-| `_notebook.versions` | `name`, `version`, `content`, `content_hash` (sha256), `saved_at`, `message`; primary key `(name, version)` |
-| `_notebook.current` | A view: the latest version of each notebook |
-| `_notebook.cache` | Results the editor keeps for stored notebooks: `name`, `cell`, `format`, `key`, `saved_at`, `result`. Created on first use; see [keeping results](cache.md) |
+| `_sketchbook.notebooks` | `name` (primary key), `created_at` |
+| `_sketchbook.versions` | `name`, `version`, `content`, `content_hash` (sha256), `saved_at`, `message`; primary key `(name, version)` |
+| `_sketchbook.current` | A view: the latest version of each notebook |
+| `_sketchbook.cache` | Results the editor keeps for stored notebooks: `name`, `cell`, `format`, `key`, `saved_at`, `result`. Created on first use; see [keeping results](cache.md) |
+
+A database saved to before the extension was renamed from `notebook` to `sketchbook` has its
+notebooks in a `_notebook` schema instead. They are read from there, and the first save copies their
+history into `_sketchbook`, so version numbers carry on. The `_notebook` schema is left as it was; drop
+it once you no longer need it.
 
 They are ordinary tables, so you can query history with SQL:
 
 ```sql
 SELECT name, max(version) AS versions, max(saved_at) AS last_saved
-FROM _notebook.versions GROUP BY name;
+FROM _sketchbook.versions GROUP BY name;
 ```

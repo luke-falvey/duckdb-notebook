@@ -1,4 +1,4 @@
-// Loads the notebook extension's WebAssembly build into DuckDB-WASM in headless Chromium and runs
+// Loads the sketchbook extension's WebAssembly build into DuckDB-WASM in headless Chromium and runs
 // notebook_cells, notebook_sql, notebook_chart_query and notebook_run on examples/revenue.sql.
 // See test/wasm/README.md. The files are served by an HTTP server inside this process, on
 // 127.0.0.1 and a free port, closed when the run ends. (Playwright's request routing cannot answer
@@ -26,7 +26,7 @@ const ARCHS = {
 };
 
 function extensionPath(arch) {
-  return path.join(ROOT, 'build', arch, 'extension', 'notebook', 'notebook.duckdb_extension.wasm');
+  return path.join(ROOT, 'build', arch, 'extension', 'sketchbook', 'sketchbook.duckdb_extension.wasm');
 }
 
 const LOAD_ATTEMPTS = 3;
@@ -53,7 +53,7 @@ function serve(pageScript) {
   for (const name of fs.readdirSync(DIST)) {
     if (/\.(wasm|worker\.js)$/.test(name)) files['/' + name] = path.join(DIST, name);
   }
-  for (const arch of Object.keys(ARCHS)) files[`/${arch}/notebook.duckdb_extension.wasm`] = extensionPath(arch);
+  for (const arch of Object.keys(ARCHS)) files[`/${arch}/sketchbook.duckdb_extension.wasm`] = extensionPath(arch);
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
     const file = files[pathname];
@@ -97,7 +97,7 @@ async function testArch(browser, arch, origin) {
     sql = (text, ms) => withTimeout(p.evaluate((t) => window.notebookTest.sql(t), text), text, ms);
     const t1 = Date.now();
     try {
-      load = await sql(`LOAD '${origin}/${arch}/notebook.duckdb_extension.wasm'`, 20000);
+      load = await sql(`LOAD '${origin}/${arch}/sketchbook.duckdb_extension.wasm'`, 20000);
       console.log(`  extension loaded in ${Date.now() - t1} ms`);
       break;
     } catch (e) {
@@ -106,7 +106,7 @@ async function testArch(browser, arch, origin) {
       await context.close();
     }
   }
-  check('LOAD notebook', !load.error, load.error);
+  check('LOAD sketchbook', !load.error, load.error);
   if (load.error) {
     return failures;
   }
@@ -169,7 +169,7 @@ async function testArch(browser, arch, origin) {
   check('notebook_run(cache := true) runs', cached.rows && cached.rows[0].n > 0, cached);
   const entries = await sql("SELECT count(*) AS n FROM notebook_cache('revenue.sql')");
   check('notebook_cache: no entries in the in-memory file system', entries.rows && entries.rows[0].n === 0, entries);
-  const leftovers = await sql("SELECT count(*) AS n FROM glob('.duckdb-notebook/**')");
+  const leftovers = await sql("SELECT count(*) AS n FROM glob('.duckdb-sketchbook/**')");
   check('notebook_cache: nothing written', leftovers.rows && leftovers.rows[0].n === 0, leftovers);
   const cleared = await sql("SELECT * FROM notebook_cache_clear('revenue.sql')");
   check('notebook_cache_clear', !cleared.error, cleared);

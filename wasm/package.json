@@ -1,5 +1,5 @@
 {
-  "name": "duckdb-notebook-wasm-runtime",
+  "name": "duckdb-sketchbook-wasm-runtime",
   "private": true,
   "description": "DuckDB-WASM runtime that notebook_export(format := 'html-wasm') inlines into a page",
   "scripts": {

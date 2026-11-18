@@ -8,7 +8,7 @@
 
 // The SQL surface of the extension. One Register function per SQL function, each in
 // its own file under src/functions. To add a function: declare it here, implement it
-// in a new file, list the file in CMakeLists.txt, call it from notebook_extension.cpp,
+// in a new file, list the file in CMakeLists.txt, call it from sketchbook_extension.cpp,
 // and add a test under test/sql.
 namespace duckdb {
 
@@ -54,8 +54,14 @@ notebook::Notebook AnalyzeText(ClientContext &context, const string &text);
 //! Same, through a connection of its own, for code that has no ClientContext.
 notebook::Notebook AnalyzeText(DatabaseInstance &db, const string &text);
 
-//! Creates the `_notebook` schema, tables and view if they are missing.
+//! Where notebooks are stored in a database: `_sketchbook`. Databases written before the extension was
+//! renamed have them in `_notebook`; they are read from there until the first save copies them over.
+constexpr const char *STORAGE_SCHEMA = "_sketchbook";
+constexpr const char *LEGACY_STORAGE_SCHEMA = "_notebook";
+//! Creates the `_sketchbook` schema, tables and view if they are missing, copying a `_notebook` history.
 void EnsureStorage(Connection &connection, const string &database);
+//! The schema to read stored notebooks from: `_sketchbook`, or `_notebook` in a database not saved to since.
+string StorageSchema(Connection &connection, const string &database);
 //! Stores `content` as the next version of notebook `name`, unless it equals the newest version.
 //! Refuses (unless `force`) when it equals an older version. `origin` names the text in errors.
 int32_t SaveNotebookVersion(Connection &connection, const string &database, const string &name, const string &content,

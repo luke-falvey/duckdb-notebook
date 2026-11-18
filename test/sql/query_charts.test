@@ -2,7 +2,7 @@
 # description: charts written at the end of a query cell
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 # Trailing /* chart */ comments are the cell's charts; its SQL is the rest
 query IITTT

@@ -2,7 +2,7 @@
 # description: notebook_cells parses a notebook file into one row per cell
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 query IIIIIII
 SELECT idx, kind, name, widget, is_query, start_line, end_line FROM notebook_cells('test/notebooks/basic.sql') ORDER BY idx

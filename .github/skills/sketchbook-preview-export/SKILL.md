@@ -1,6 +1,6 @@
 ---
 name: sketchbook-preview-export
-description: 'Open, preview, screenshot, export and store duckdb-notebook sketchbooks. Use when asked to open a notebook or sketchbook in the browser, start or restart the notebook server (notebook_start/notebook_stop), check how it looks, take screenshots, export to HTML, HTML with DuckDB-WASM, PDF, Markdown, SQL or Parquet data (notebook_export, hide, interactive precomputed), save notebooks into the database with history (notebook_save, notebook_checkout, db:name), or troubleshoot a server that will not start or shows an old look.'
+description: 'Open, preview, screenshot, export and store duckdb-sketchbook sketchbooks. Use when asked to open a notebook or sketchbook in the browser, start or restart the notebook server (notebook_start/notebook_stop), check how it looks, take screenshots, export to HTML, HTML with DuckDB-WASM, PDF, Markdown, SQL or Parquet data (notebook_export, hide, interactive precomputed), save notebooks into the database with history (notebook_save, notebook_checkout, db:name), or troubleshoot a server that will not start or shows an old look.'
 argument-hint: 'The notebook path, and whether to open, export or store it'
 ---
 
@@ -134,7 +134,7 @@ and "output" boxes for `hide`.
 
 ```sql
 FROM notebook_save('nb.sql', message := 'first draft');        -- name defaults from the file
-SELECT name, version, saved_at FROM _notebook.versions;
+SELECT name, version, saved_at FROM _sketchbook.versions;
 FROM notebook_checkout('nb', file := 'nb_copy.sql');           -- version := N for an older one
 CALL notebook_start('db:nb');                                  -- db:<name>[@version] works anywhere a path does
 ```
@@ -151,6 +151,6 @@ Saving from the editor of a `db:` notebook adds a version. Use a file-backed dat
 | Old look after a rebuild | Restart the server; hard-reload the page |
 | Port in use | Stop the old server (find its PID with `ss -ltnp`) or pick another port |
 | `Forbidden` / 403 from the API | Missing token: use the full URL that `notebook_start` returned |
-| Extension will not load into a released DuckDB | Local builds are stamped with the commit; install the `v2.0.0`-stamped build (CLAUDE.md, "Build and test") and `LOAD notebook` in `duckdb -unsigned` |
+| Extension will not load into a released DuckDB | Local builds are stamped with the commit; install the `v2.0.0`-stamped build (CLAUDE.md, "Build and test") and `LOAD sketchbook` in `duckdb -unsigned` |
 | Notebook reading `hdfs://` fails | Run it in a DuckDB that has the `hdfs` extension (the repo's shell does not), with the preprod Hadoop config in `HADOOP_CONF_DIR` and no proxy variables in the environment |
 | PDF export fails | Pass `chrome :=` pointing at Chrome or Chromium |

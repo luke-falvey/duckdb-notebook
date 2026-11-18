@@ -14,7 +14,7 @@ import shutil
 
 SITE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SITE)
-BLOB = "https://github.com/luke-falvey/duckdb-notebook/blob/main/"
+BLOB = "https://github.com/luke-falvey/duckdb-sketchbook/blob/main/"
 FONTS = ["Excalifont.woff2", "CascadiaCode.woff2"]
 
 # Generated pages: the page in content/ is a placeholder, its text comes from this file.

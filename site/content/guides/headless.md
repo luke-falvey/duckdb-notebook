@@ -47,7 +47,7 @@ The DuckDB CLI runs one query and exits with `-c`. Start it with `-init /dev/nul
 `~/.duckdbrc` cannot get in the way:
 
 ```sh
-duckdb -unsigned -init /dev/null -c "LOAD notebook" \
+duckdb -unsigned -init /dev/null -c "LOAD sketchbook" \
   -c "SELECT name, status, error FROM notebook_run('report.sql') WHERE status = 'error'"
 ```
 
@@ -63,7 +63,7 @@ This exits non-zero if any cell has a format error or fails to run:
 ```
 
 The repository's
-[`check.sh`](https://github.com/luke-falvey/duckdb-notebook/blob/main/.github/skills/sketchbook-authoring/scripts/check.sh)
+[`check.sh`](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/.github/skills/sketchbook-authoring/scripts/check.sh)
 does the same with a readable report.
 
 ## From Python
@@ -82,7 +82,7 @@ quoting.
 
 A workflow that checks every notebook in `notebooks/` and keeps the HTML exports as an artifact. It
 expects the extension's `linux_amd64` build (see [install](../start/install.md)) at
-`tools/notebook.duckdb_extension`, and the script above at `tools/check_notebooks.py`:
+`tools/sketchbook.duckdb_extension`, and the script above at `tools/check_notebooks.py`:
 
 ```yaml
 name: Notebooks
@@ -96,7 +96,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install duckdb==2.0.0
-      - run: python tools/check_notebooks.py tools/notebook.duckdb_extension out notebooks/*.sql
+      - run: python tools/check_notebooks.py tools/sketchbook.duckdb_extension out notebooks/*.sql
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -12,7 +12,7 @@ are laid out on a 12-column grid by their `span=`:
 
 <figure class="shot" markdown>
 ![The sketchbook template in the reading view: title and prose, two inputs side by side, three KPIs in a row, and a line chart](../images/template-reading.webp)
-<figcaption>The <a href="https://github.com/luke-falvey/duckdb-notebook/blob/main/.github/skills/sketchbook-authoring/assets/template.sql">sketchbook template</a> in the reading view: plumbing hidden with <code>hide=</code>, inputs and KPIs in rows with <code>span=</code>.</figcaption>
+<figcaption>The <a href="https://github.com/luke-falvey/duckdb-sketchbook/blob/main/.github/skills/sketchbook-authoring/assets/template.sql">sketchbook template</a> in the reading view: plumbing hidden with <code>hide=</code>, inputs and KPIs in rows with <code>span=</code>.</figcaption>
 </figure>
 
 An [HTML export](exporting.md) looks like the reading view, with code shown unless hidden.
@@ -66,7 +66,7 @@ query hide=code rows=10                        the detail table
 - Keep paragraphs short. The handwriting is large and wide.
 - Hide the plumbing (`hide=all` on loading cells, `hide=code` on results).
 
-The repository's [sketchbook template](https://github.com/luke-falvey/duckdb-notebook/blob/main/.github/skills/sketchbook-authoring/assets/template.sql)
+The repository's [sketchbook template](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/.github/skills/sketchbook-authoring/assets/template.sql)
 follows this shape.
 
 ## Presenting
@@ -210,4 +210,4 @@ order, so a result further down waits for the pen.
 <img src="../../images/handwriting/watch-chart.gif" alt="Watch mode: a chart drawn after its query, axes first, then the line, then labels" width="720">
 
 The design and measurements are in
-[docs/HANDWRITING.md](https://github.com/luke-falvey/duckdb-notebook/blob/main/docs/HANDWRITING.md#watch-mode).
+[docs/HANDWRITING.md](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/docs/HANDWRITING.md#watch-mode).

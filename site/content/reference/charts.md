@@ -1,7 +1,7 @@
 # Chart spec
 
 Every chart type, each drawn by the cell shown under it. The cells are taken from
-[`examples/charts.sql`](https://github.com/luke-falvey/duckdb-notebook/blob/main/examples/charts.sql)
+[`examples/charts.sql`](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/examples/charts.sql)
 when this site is built, and the pictures are screenshots of that notebook's HTML export, which you
 can also [open live](../examples/index.md). The grammar itself (every key and what it means) is in
 [the format specification, §5](format.md#5-charts); this page is the catalogue and the values each

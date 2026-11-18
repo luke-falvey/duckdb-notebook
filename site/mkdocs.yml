@@ -1,10 +1,10 @@
 # The documentation site, published to GitHub Pages by .github/workflows/docs.yml.
 # Build from the repository root:  mkdocs build --strict -f site/mkdocs.yml
 # Preview:                         mkdocs serve -f site/mkdocs.yml
-site_name: duckdb-notebook
+site_name: duckdb-sketchbook
 site_description: A notebook for DuckDB where the notebook is a plain .sql file.
-site_url: https://luke-falvey.github.io/duckdb-notebook/
-repo_url: https://github.com/luke-falvey/duckdb-notebook
+site_url: https://luke-falvey.github.io/duckdb-sketchbook/
+repo_url: https://github.com/luke-falvey/duckdb-sketchbook
 edit_uri: edit/main/site/content/
 docs_dir: content
 site_dir: ../build/site

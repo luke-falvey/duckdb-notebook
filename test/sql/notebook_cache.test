@@ -2,7 +2,7 @@
 # description: The result cache: written by notebook_run(cache := true), listed by notebook_cache, disposable
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 # A copy of the test notebook in the test directory, so its cache is written there
 statement ok
@@ -30,7 +30,7 @@ SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
 0
 
 query I
-SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-notebook/nb_cache/*')
+SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-sketchbook/nb_cache/*')
 ----
 0
 
@@ -63,23 +63,23 @@ SELECT idx, CASE WHEN cell LIKE '@%' THEN '@' || (length(cell) - 1) ELSE cell EN
 
 # It lives beside the notebook: a file per cell, the variables, and a .gitignore that ignores it all
 query I
-SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-notebook/nb_cache/*.json')
+SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-sketchbook/nb_cache/*.json')
 ----
 9
 
 query I
-SELECT content LIKE '%*%' FROM read_text('{TEST_DIR}/.duckdb-notebook/.gitignore')
+SELECT content LIKE '%*%' FROM read_text('{TEST_DIR}/.duckdb-sketchbook/.gitignore')
 ----
 true
 
 # An entry holds what the editor shows: the page of rows and the chart's data
 query IIII
-SELECT content LIKE '{"format":2,"cell":"kept","key":"%', content LIKE '%"rows":[[4,1],[5,2],[6,0],[7,1],[8,2],[9,0]]%', content LIKE '%"charts":[{"render":%', content LIKE '%"datasets":[{%' FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json')
+SELECT content LIKE '{"format":2,"cell":"kept","key":"%', content LIKE '%"rows":[[4,1],[5,2],[6,0],[7,1],[8,2],[9,0]]%', content LIKE '%"charts":[{"render":%', content LIKE '%"datasets":[{%' FROM read_text('{TEST_DIR}/.duckdb-sketchbook/nb_cache/kept.json')
 ----
 true	true	true	true
 
 query I
-SELECT content FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/@state.json')
+SELECT content FROM read_text('{TEST_DIR}/.duckdb-sketchbook/nb_cache/@state.json')
 ----
 {"format":2,"variables":{"lowest":{"type":"INTEGER","value":"4","shown":4}}}
 
@@ -93,7 +93,7 @@ SELECT count(*), count(*) FILTER (status = 'fresh') FROM notebook_cache('{TEST_D
 8	8
 
 query I
-SELECT content LIKE '%"rows":[[7,1],[8,2],[9,0]]%' FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json')
+SELECT content LIKE '%"rows":[[7,1],[8,2],[9,0]]%' FROM read_text('{TEST_DIR}/.duckdb-sketchbook/nb_cache/kept.json')
 ----
 true
 
@@ -130,13 +130,13 @@ SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql') WHERE status = 's
 
 # A corrupt entry, a truncated one and one of another format are ignored, never an error
 statement ok
-COPY (SELECT 'this is not json') TO '{TEST_DIR}/.duckdb-notebook/nb_cache/kept.json' (FORMAT csv, HEADER false, QUOTE '')
+COPY (SELECT 'this is not json') TO '{TEST_DIR}/.duckdb-sketchbook/nb_cache/kept.json' (FORMAT csv, HEADER false, QUOTE '')
 
 statement ok
-COPY (SELECT '{"format":2') TO '{TEST_DIR}/.duckdb-notebook/nb_cache/by_group.json' (FORMAT csv, HEADER false, QUOTE '')
+COPY (SELECT '{"format":2') TO '{TEST_DIR}/.duckdb-sketchbook/nb_cache/by_group.json' (FORMAT csv, HEADER false, QUOTE '')
 
 statement ok
-COPY (SELECT replace(content, '{"format":2', '{"format":1') FROM read_text('{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json')) TO '{TEST_DIR}/.duckdb-notebook/nb_cache/lowest.json' (FORMAT csv, HEADER false, QUOTE '', DELIMITER '|')
+COPY (SELECT replace(content, '{"format":2', '{"format":1') FROM read_text('{TEST_DIR}/.duckdb-sketchbook/nb_cache/lowest.json')) TO '{TEST_DIR}/.duckdb-sketchbook/nb_cache/lowest.json' (FORMAT csv, HEADER false, QUOTE '', DELIMITER '|')
 
 query I
 SELECT idx FROM notebook_cache('{TEST_DIR}/nb_cache.sql') ORDER BY idx
@@ -169,7 +169,7 @@ statement ok
 FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
 
 query I
-SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-notebook/nb_cache/*')
+SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-sketchbook/nb_cache/*')
 ----
 0
 
@@ -201,7 +201,7 @@ statement ok
 FROM notebook_checkout('nb_cache_test', file := '{TEST_DIR}/nb_cache_blocked.sql', force := true)
 
 statement ok
-COPY (SELECT 'in the way') TO '{TEST_DIR}/.duckdb-notebook/nb_cache_blocked' (FORMAT csv, HEADER false, QUOTE '')
+COPY (SELECT 'in the way') TO '{TEST_DIR}/.duckdb-sketchbook/nb_cache_blocked' (FORMAT csv, HEADER false, QUOTE '')
 
 query I
 SELECT count(*) FILTER (status = 'ok') FROM notebook_run('{TEST_DIR}/nb_cache_blocked.sql', cache := true)
@@ -213,7 +213,7 @@ SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache_blocked.sql')
 ----
 0
 
-# A notebook stored in the database keeps its cache in _notebook.cache
+# A notebook stored in the database keeps its cache in _sketchbook.cache
 query I
 SELECT count(*) FROM notebook_cache('db:nb_cache_test')
 ----
@@ -235,7 +235,7 @@ SELECT idx, status FROM notebook_cache('db:nb_cache_test') ORDER BY idx
 7	fresh
 
 query III
-SELECT cell, format, result LIKE '{"status":"ok"%' FROM _notebook.cache WHERE name = 'nb_cache_test' AND cell NOT LIKE '@%' ORDER BY cell
+SELECT cell, format, result LIKE '{"status":"ok"%' FROM _sketchbook.cache WHERE name = 'nb_cache_test' AND cell NOT LIKE '@%' ORDER BY cell
 ----
 by_group	2	true
 kept	2	true
@@ -260,7 +260,7 @@ SELECT idx, status FROM notebook_cache('db:nb_cache_test') ORDER BY idx
 
 # A row that is not a result is ignored
 statement ok
-UPDATE _notebook.cache SET result = '{"status":' WHERE name = 'nb_cache_test' AND cell = 'kept'
+UPDATE _sketchbook.cache SET result = '{"status":' WHERE name = 'nb_cache_test' AND cell = 'kept'
 
 query I
 SELECT count(*) FROM notebook_cache('db:nb_cache_test')
@@ -273,7 +273,7 @@ FROM notebook_cache_clear('db:nb_cache_test')
 8
 
 query I
-SELECT count(*) FROM _notebook.cache
+SELECT count(*) FROM _sketchbook.cache
 ----
 0
 
@@ -282,10 +282,10 @@ statement ok
 DROP TABLE nb_cache_numbers
 
 statement ok
-DROP TABLE _notebook.cache
+DROP TABLE _sketchbook.cache
 
 statement ok
-DELETE FROM _notebook.versions WHERE name LIKE 'nb_cache_%'
+DELETE FROM _sketchbook.versions WHERE name LIKE 'nb_cache_%'
 
 statement ok
-DELETE FROM _notebook.notebooks WHERE name LIKE 'nb_cache_%'
+DELETE FROM _sketchbook.notebooks WHERE name LIKE 'nb_cache_%'

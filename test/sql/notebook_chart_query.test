@@ -2,7 +2,7 @@
 # description: notebook_chart_query shows the SQL and render description a chart spec compiles to
 # group: [notebook]
 
-require notebook
+require sketchbook
 
 statement ok
 CREATE TABLE nb_chart_t AS SELECT range AS i, range % 3 AS g, DATE '2026-01-01' + range::INTEGER AS d FROM range(100)
