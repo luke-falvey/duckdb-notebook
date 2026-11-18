@@ -236,6 +236,8 @@ var NB = (function () {
   //   opts.onPageSize(size): the reader picked a page size (the editor writes it to the cell)
   //   opts.offset: first row of data.rows (server paging)
   //   opts.formats {col: fmt}, opts.bars [col], opts.heat [col]
+  //   opts.tips: [row][column] hover text for a cell (null for none), indexed like data.rows
+  //   opts.links: [row][column] [{text, href}] the cell's text as links (href null: plain text), or null
   NB.table = function (container, data, opts) {
     opts = opts || {};
     container.innerHTML = '';
@@ -263,14 +265,21 @@ var NB = (function () {
     });
     var heat = NB.ramp('blues');
     var body = '<tbody>' + rows.map(function (r, i) {
+      var tipRow = opts.tips ? opts.tips[serverPaging ? i : offset + i] : null;
+      var linkRow = opts.links ? opts.links[serverPaging ? i : offset + i] : null;
       return '<tr><td class="nb-rownum">' + (offset + i + 1) + '</td>' + r.map(function (v, k) {
         var col = cols[k], numeric = typeof v === 'number', style = '', text = NB.formatValue(v, col.type, (opts.formats || {})[col.name]);
+        var tip = tipRow && tipRow[k], parts = linkRow && linkRow[k];
+        var inner = parts ? parts.map(function (p) {
+          return p.href ? '<a class="nb-link" href="' + NB.esc(p.href) + '" target="_blank" rel="noopener noreferrer">' + NB.esc(p.text) + '</a>' : NB.esc(p.text);
+        }).join(', ') : NB.esc(text);
         if (ranges[col.name] && numeric) {
           var range = ranges[col.name], t = (v - range[0]) / ((range[1] - range[0]) || 1);
           if ((opts.heat || []).indexOf(col.name) >= 0) style = 'background:' + heat(t * 0.8);
           else style = 'background:linear-gradient(90deg, var(--nb-bar) ' + Math.round(t * 100) + '%, transparent ' + Math.round(t * 100) + '%)';
         }
-        return '<td class="' + (v === null ? 'nb-null' : numeric ? 'nb-num' : '') + '" style="' + style + '">' + NB.esc(text) + '</td>';
+        var cls = (v === null ? 'nb-null' : numeric ? 'nb-num' : '') + (tip ? ' nb-has-tip' : '');
+        return '<td class="' + cls + '" style="' + style + '"' + (tip ? ' data-tip="' + NB.esc(tip) + '"' : '') + '>' + inner + '</td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody>';
     table.innerHTML = thead + '</thead>' + body;

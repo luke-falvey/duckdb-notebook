@@ -169,6 +169,8 @@ Styled table with in-cell bars:
 ```yaml
 type: table
 columns: [day, region, revenue]
+tip: {region: [category, orders]}   # pointing at a region cell shows that row's category and orders
+link: {region: "https://example.com/regions/{region}"}   # each region links there; or name a column of URLs
 bar: revenue
 limit: 8
 ```

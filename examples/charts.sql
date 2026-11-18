@@ -175,6 +175,8 @@ value: {field: id, agg: count}
 /*
 type: table
 columns: [day, region, revenue]
+tip: {region: [category, orders]}
+link: {region: "https://example.com/regions/{region}"}
 bar: revenue
 limit: 8
 */

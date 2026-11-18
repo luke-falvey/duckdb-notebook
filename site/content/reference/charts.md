@@ -208,7 +208,15 @@ left out).
 ### Styled table
 
 `columns` picks and orders columns, `format: {col: spec}` formats them, `bar: col` draws in-cell bars,
-`heat: col` shades cells.
+`heat: col` shades cells. `tip: {col: source}` shows the row's `source` value when the reader points at a cell
+of `col` (a list, `{col: [a, b]}`, shows several, one per line); those cells are underlined with dots, and the
+sources are not shown as columns of their own unless `columns` lists them.
+
+`link: {col: "https://jira.example.com/browse/{col}"}` makes each cell of `col` a link: `{name}` is filled in
+with the row's value of column `name`, URL-encoded. A column name instead of a URL, `link: {col: url}`, links to
+the URL that column holds. A list value links each of its items. Only `http`, `https` and `mailto` URLs are
+linked; links open in a new tab. In the editor links are blue; in exports they keep the colour of the text
+around them and are underlined. Columns that only build a link are not shown unless `columns` lists them.
 
 <!-- cell table -->
 

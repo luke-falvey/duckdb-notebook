@@ -454,7 +454,7 @@ Charts that are not marks on axes use `type:` with their own short vocabulary:
 | `type` | Required keys | Notes |
 |---|---|---|
 | `kpi` | `value` | `label`, `compare` (delta against another channel), `sparkline: {x, y}`, `bands: [{from, to, color}]` (colours the value by the band it falls in; ends inclusive, either may be left out) |
-| `table` | | `columns`, per-column `format: {col: spec}`, `bar` and `heat` column decorations |
+| `table` | | `columns`, per-column `format: {col: spec}`, `bar` and `heat` column decorations, `tip: {col: source}` (hovering a cell of `col` shows that row's value of `source`; a list shows several, one per line. `link: {col: "https://…/{col}"}` (each cell of `col` links to the URL with every `{name}` filled in from the row, URL-encoded; a column name instead of a URL links to the URL it holds; a list value links each item; only `http(s)` and `mailto`). Columns used only by `tip` or `link` are not shown unless `columns` lists them) |
 | `pivot` | `rows`, `columns`, `values` | `heat: true` shading |
 | `map` | `geometry` or `lat` + `lon` | `layer: point \| heat \| hex \| arc` (`arc` needs `lat2`, `lon2`), `color`, `size`. `geometry` needs the `spatial` extension; polygons draw as a choropleth. No basemap: tiles are not available offline |
 | `sankey` | `source`, `target`, `value` | |

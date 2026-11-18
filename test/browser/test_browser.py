@@ -809,6 +809,24 @@ def test_exports(browser, work, chromium):
           f"a color scale's domain and range fix each category's order and colour ({legend})")
     kpi_colour = page.locator(".nb-kpi-banded .nb-kpi-value").first.evaluate("e => getComputedStyle(e).color")
     check(kpi_colour == "rgb(47, 158, 68)", f"a KPI's bands colour its value by the band it falls in ({kpi_colour})")
+    # tip: on a table chart: the region cells carry the row's category and orders, which are not columns of their own.
+    tipped = page.locator(".nb-cell:has(td.nb-has-tip)")
+    heads = tipped.locator("thead th .nb-colname").all_text_contents()
+    check(heads == ["day", "region", "revenue"], f"a table's tip sources are not shown as columns ({heads})")
+    cell = tipped.locator("td.nb-has-tip").first
+    cell.scroll_into_view_if_needed()
+    cell.hover()
+    page.wait_for_selector(".nb-tip", state="visible", timeout=5000)
+    tip_text = page.locator(".nb-tip").text_content()
+    check("category" in tip_text and "orders" in tip_text and tipped.locator("td.nb-has-tip").count() == tipped.locator("tbody tr").count(),
+          f"hovering a table cell with tip: shows that row's values of the tip columns ({tip_text!r})")
+    page.mouse.move(0, 0)
+    link = tipped.locator("td a.nb-link").first
+    href, region = link.get_attribute("href"), link.text_content()
+    colours = link.evaluate("a => [getComputedStyle(a).color, getComputedStyle(a.closest('td')).color, getComputedStyle(a).textDecorationLine]")
+    check(href == "https://example.com/regions/" + region and link.get_attribute("target") == "_blank",
+          f"link: makes a table cell a link to its URL template, filled in from the row ({href})")
+    check(colours[0] == colours[1] and "underline" in colours[2], f"in an export a table link keeps the text's colour and is underlined ({colours})")
     widths = page.locator(".nb-cell[data-idx='15'] svg.nb-chart-svg [data-tip] > .sk-hit").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
     check(len(widths) == 48 and min(widths) > 0.9 * max(widths),
           f"bars on a date axis fill their slot, the first and last as wide as the rest ({min(widths or [0]):.1f}-{max(widths or [0]):.1f}px)")

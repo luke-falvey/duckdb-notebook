@@ -497,6 +497,39 @@ static void TestChartErrors() {
 	plan = CompileChart("type: table\nlimit: 3\n", "t", sales);
 	CHECK(plan.queries.at(0).find("\nORDER BY") == std::string::npos &&
 	      plan.queries.at(0).find("\nLIMIT 3") != std::string::npos);
+
+	// tip: on a table: sources are selected even when columns: leaves them out, once each.
+	plan = CompileChart("type: table\ncolumns: [region, amount]\ntip: {region: category, amount: [category]}\n", "t",
+	                    sales);
+	CHECK(plan.error.empty());
+	CHECK(plan.queries.at(0).find("\"region\", \"amount\", \"category\"") != std::string::npos);
+	CHECK(plan.queries.at(0).find("\"category\", \"category\"") == std::string::npos);
+	plan = CompileChart("type: table\ntip: {region: [category, amount]}\n", "t", sales);
+	CHECK(plan.error.empty() && plan.queries.at(0).find("SELECT *") != std::string::npos);
+	CHECK(CompileChart("type: table\ntip: {region: nope}\n", "t", sales).error ==
+	      "table tip: column 'nope' is not in t");
+	CHECK(CompileChart("type: table\ntip: {nope: region}\n", "t", sales).error ==
+	      "table tip: column 'nope' is not in t");
+	CHECK(CompileChart("type: table\ncolumns: [amount]\ntip: {region: category}\n", "t", sales).error ==
+	      "table tip: column 'region' is not one of columns:");
+	CHECK(CompileChart("type: table\ntip: region\n", "t", sales).error ==
+	      "table tip: needs a mapping such as {name: description}");
+	CHECK(CompileChart("type: table\ntip: {region: {a: b}}\n", "t", sales).error ==
+	      "table tip: 'region' needs a column name or a list of them");
+
+	// link: a URL template reads its {column} placeholders; a plain value is a column holding the URL.
+	plan = CompileChart("type: table\ncolumns: [region]\nlink: {region: \"https://x.test/{category}/{region}\"}\n", "t",
+	                    sales);
+	CHECK(plan.error.empty() && plan.queries.at(0).find("\"region\", \"category\"\nFROM") != std::string::npos);
+	plan = CompileChart("type: table\ncolumns: [region]\nlink: {region: category}\ntip: {region: category}\n", "t",
+	                    sales);
+	CHECK(plan.error.empty() && plan.queries.at(0).find("\"region\", \"category\"\nFROM") != std::string::npos);
+	CHECK(CompileChart("type: table\nlink: {region: \"https://x.test/{nope}\"}\n", "t", sales).error ==
+	      "table link: column 'nope' is not in t");
+	CHECK(CompileChart("type: table\nlink: {region: [a, b]}\n", "t", sales).error ==
+	      "table link: 'region' needs a URL column or a URL with {column} in it");
+	CHECK(CompileChart("type: table\nlink: https://x.test\n", "t", sales).error ==
+	      "table link: needs a mapping such as {key: \"https://example.com/{key}\"}");
 }
 
 static void TestChartReferences() {
