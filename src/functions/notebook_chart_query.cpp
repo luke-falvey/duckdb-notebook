@@ -19,8 +19,8 @@ struct ChartBindData : public TableFunctionData {
 
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
                               vector<Identifier> &names) {
-	auto spec = input.inputs[0].GetValue<string>();
-	auto from = input.inputs[1].GetValue<string>();
+	auto spec = StringArgument(input, 0, "notebook_chart_query", "the chart spec");
+	auto from = StringArgument(input, 1, "notebook_chart_query", "the relation to chart (from)");
 	notebook::ChartContext chart;
 	for (auto &entry : input.named_parameters) {
 		auto key = entry.first.GetIdentifierName();

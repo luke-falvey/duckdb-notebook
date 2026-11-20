@@ -3,7 +3,10 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/database_manager.hpp"
+#include "notebook/source.hpp"
 
 namespace duckdb {
 
@@ -24,35 +27,97 @@ string ReadFile(FileSystem &fs, const string &path) {
 	return contents;
 }
 
-void WriteFile(FileSystem &fs, const string &path, const string &content) {
+//! Writes `content` to a new file at `path`, syncs it and closes it, so write, sync and close errors all surface.
+void WriteWhole(FileSystem &fs, const string &path, const string &content) {
 	auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
 	handle->Write(const_cast<char *>(content.data()), content.size());
 	handle->Sync();
+	handle->Close();
+}
+
+//! Removes a temporary file if it is there; a failure to remove it must not hide the error being reported.
+void RemoveQuietly(FileSystem &fs, const string &path) {
+	try {
+		fs.TryRemoveFile(path);
+	} catch (...) { // NOLINT: best effort
+	}
+}
+
+//! Replaces `path` atomically: the text goes to a uniquely named file beside it, which is then moved over it. A
+//! failed write leaves the old file as it was, and a reader (the editor's file watcher) never sees half a file.
+void WriteFile(FileSystem &fs, const string &path, const string &content) {
+	auto temporary = path + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".tmp";
+	try {
+		WriteWhole(fs, temporary, content);
+	} catch (...) {
+		RemoveQuietly(fs, temporary);
+		throw;
+	}
+	try {
+		fs.MoveFile(temporary, path);
+		return;
+	} catch (NotImplementedException &) { // NOLINT: handled below
+		// This file system cannot move files (some remote stores). Object stores publish a file only once its
+		// upload completes, so writing the target directly is still all-or-nothing there.
+	} catch (...) {
+		RemoveQuietly(fs, temporary);
+		throw;
+	}
+	RemoveQuietly(fs, temporary);
+	WriteWhole(fs, path, content);
+}
+
+//! A stored notebook from `database` (the default database when empty), named by a `db:` source.
+string ReadStored(DatabaseInstance &db, const string &database, const string &source) {
+	auto stored = notebook::ParseStoredSource(source);
+	if (!stored.error.empty()) {
+		throw InvalidInputException("%s", stored.error);
+	}
+	Connection connection(db);
+	int32_t found;
+	return StoredNotebook(connection, database, stored.name, stored.version, found);
 }
 
 } // namespace
 
 string ReadNotebookText(DatabaseInstance &db, const string &source) {
-	if (source.compare(0, 3, "db:") == 0) {
-		auto name = source.substr(3);
-		int32_t version = 0;
-		auto at = name.rfind('@');
-		if (at != string::npos) {
-			version = std::atoi(name.substr(at + 1).c_str());
-			name = name.substr(0, at);
-		}
-		Connection connection(db);
-		int32_t found;
-		return StoredNotebook(connection, string(), name, version, found);
+	if (notebook::IsStoredSource(source)) {
+		return ReadStored(db, string(), source);
 	}
 	return ReadFile(FileSystem::GetFileSystem(db), source);
 }
 
 string ReadNotebookText(ClientContext &context, const string &source) {
-	if (source.compare(0, 3, "db:") == 0) {
-		return ReadNotebookText(DatabaseInstance::GetDatabase(context), source);
+	if (notebook::IsStoredSource(source)) {
+		return ReadStored(DatabaseInstance::GetDatabase(context), CurrentDatabase(context), source);
 	}
 	return ReadFile(FileSystem::GetFileSystem(context), source);
+}
+
+string CurrentDatabase(ClientContext &context) {
+	return DatabaseManager::TryGetDefaultDatabase(context).GetIdentifierName();
+}
+
+string StringArgument(TableFunctionBindInput &input, idx_t index, const char *function, const char *what) {
+	auto &value = input.inputs[index];
+	if (value.IsNull()) {
+		throw InvalidInputException("%s: %s must not be NULL", function, what);
+	}
+	return value.GetValue<string>();
+}
+
+string SourceArgument(TableFunctionBindInput &input, idx_t index, const char *function) {
+	auto source = StringArgument(input, index, function, "the notebook path");
+	if (source.empty()) {
+		throw InvalidInputException("%s: the notebook path is empty", function);
+	}
+	if (notebook::IsStoredSource(source)) {
+		auto stored = notebook::ParseStoredSource(source);
+		if (!stored.error.empty()) {
+			throw InvalidInputException("%s: %s", function, stored.error);
+		}
+	}
+	return source;
 }
 
 void WriteTextFile(ClientContext &context, const string &path, const string &content) {

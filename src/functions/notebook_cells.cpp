@@ -29,7 +29,7 @@ Value StringOrNull(const std::string &value) {
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
                               vector<Identifier> &names) {
 	auto result = make_uniq<CellsBindData>();
-	result->notebook = ReadNotebook(context, input.inputs[0].GetValue<string>());
+	result->notebook = ReadNotebook(context, SourceArgument(input, 0, "notebook_cells"));
 
 	// Keep this list in step with Scan below and with the notebook_cells row of DESIGN §4.
 	auto column = [&](const char *name, LogicalType type) {

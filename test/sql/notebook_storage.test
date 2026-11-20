@@ -1,6 +1,6 @@
 # name: test/sql/notebook_storage.test
 # description: notebook_save and notebook_checkout keep notebooks, with history, inside the database
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 
@@ -81,6 +81,202 @@ statement error
 FROM notebook_checkout('missing')
 ----
 No stored notebook 'missing'
+
+# ---- db:<name>@<version> and version := are checked when the query is bound ----
+
+statement error
+FROM notebook_cells('db:basic@abc')
+----
+notebook_cells: "db:basic@abc" has version "abc": a version is a whole number from 1
+
+statement error
+FROM notebook_sql('db:basic@0')
+----
+notebook_sql: "db:basic@0" has version "0": a version is a whole number from 1
+
+statement error
+FROM notebook_run('db:basic@-1')
+----
+notebook_run: "db:basic@-1" has version "-1": a version is a whole number from 1
+
+statement error
+FROM notebook_cells('db:basic@')
+----
+has version "": a version is a whole number from 1
+
+statement error
+FROM notebook_cells('db:')
+----
+notebook_cells: "db:" names no notebook
+
+statement error
+FROM notebook_checkout('basic', version := 0)
+----
+notebook_checkout: version 0 is not valid: versions start at 1
+
+statement error
+FROM notebook_checkout('basic', version := -1)
+----
+notebook_checkout: version -1 is not valid: versions start at 1
+
+# A NULL version is the newest, like leaving it out
+query I
+SELECT version FROM notebook_checkout('basic', version := NULL)
+----
+3
+
+# ---- Writing a file replaces it whole, through a temporary file that is not left behind ----
+
+statement ok
+FROM notebook_checkout('basic', version := 3, file := '__TEST_DIR__/atomic_target.sql', force := true)
+
+statement ok
+FROM notebook_checkout('basic', version := 1, file := '__TEST_DIR__/atomic_target.sql', force := true)
+
+query I
+SELECT content = (SELECT content FROM _sketchbook.versions WHERE name = 'basic' AND version = 1)
+FROM read_text('__TEST_DIR__/atomic_target.sql')
+----
+true
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/atomic_target*')
+----
+1
+
+# ---- The current database (USE) is where notebooks are saved and read ----
+
+statement ok
+ATTACH ':memory:' AS nb_use
+
+statement ok
+USE nb_use
+
+query III
+SELECT name, version, saved FROM notebook_save('test/notebooks/basic.sql', name := 'used')
+----
+used	1	true
+
+query I
+SELECT count(*) FROM notebook_cells('db:used')
+----
+9
+
+query I
+SELECT version FROM notebook_checkout('used')
+----
+1
+
+statement ok
+USE memory
+
+query I
+SELECT count(*) FROM nb_use._sketchbook.versions WHERE name = 'used'
+----
+1
+
+query I
+SELECT count(*) FROM _sketchbook.versions WHERE name = 'used'
+----
+0
+
+statement error
+FROM notebook_checkout('used')
+----
+No stored notebook 'used'
+
+statement ok
+DETACH nb_use
+
+# ---- Database names match whatever their case ----
+
+statement ok
+ATTACH ':memory:' AS NbCaseDb
+
+statement ok
+FROM notebook_save('test/notebooks/basic.sql', name := 'cased', database := 'nbcasedb')
+
+query I
+SELECT version FROM notebook_checkout('cased', database := 'NBCASEDB')
+----
+1
+
+statement ok
+DETACH NbCaseDb
+
+# ---- Concurrent saves of one notebook each get a version number of their own ----
+
+loop i 0 8
+
+statement ok
+COPY (SELECT 'SELECT {i} AS n;' AS line) TO '__TEST_DIR__/race_{i}.sql' (HEADER false, QUOTE '')
+
+endloop
+
+concurrentloop i 0 8
+
+statement ok
+FROM notebook_save('__TEST_DIR__/race_{i}.sql', name := 'race')
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT version), max(version) FROM _sketchbook.versions WHERE name = 'race'
+----
+8	8	8
+
+# ---- The copy of an old _notebook history is one transaction: if it fails, nothing is left half done ----
+
+statement ok
+ATTACH ':memory:' AS nb_migrate
+
+statement ok
+CREATE SCHEMA nb_migrate._notebook
+
+statement ok
+CREATE TABLE nb_migrate._notebook.notebooks (name VARCHAR PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now())
+
+# No foreign key here, so a version can name a notebook that is missing: copying it fails
+statement ok
+CREATE TABLE nb_migrate._notebook.versions (name VARCHAR NOT NULL, version INTEGER NOT NULL, content VARCHAR NOT NULL,
+    content_hash VARCHAR NOT NULL, saved_at TIMESTAMPTZ NOT NULL DEFAULT now(), message VARCHAR)
+
+statement ok
+INSERT INTO nb_migrate._notebook.versions (name, version, content, content_hash)
+VALUES ('orphan', 1, 'SELECT 1;', sha256('SELECT 1;'))
+
+statement error
+FROM notebook_save('test/notebooks/basic.sql', name := 'orphan', database := 'nb_migrate')
+----
+foreign key
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'nb_migrate' AND schema_name = '_sketchbook'
+----
+0
+
+# The old history is still what is read
+query II
+SELECT version, content FROM notebook_checkout('orphan', database := 'nb_migrate')
+----
+1	SELECT 1;
+
+# Once the old data is fixed, the next save copies it
+statement ok
+INSERT INTO nb_migrate._notebook.notebooks (name) VALUES ('orphan')
+
+query II
+SELECT version, note FROM notebook_save('test/notebooks/basic.sql', name := 'orphan', database := 'nb_migrate')
+----
+2	new version
+
+query I
+SELECT count(*) FROM nb_migrate._sketchbook.versions WHERE name = 'orphan'
+----
+2
+
+statement ok
+DETACH nb_migrate
 
 statement ok
 DROP SCHEMA _sketchbook CASCADE
