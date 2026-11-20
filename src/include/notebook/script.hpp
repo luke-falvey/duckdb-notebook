@@ -16,12 +16,27 @@ std::string QuoteIdentifier(const std::string &name);
 //!    CREATE OR REPLACE TEMP VIEW <name> (or TEMP TABLE with materialize=table)
 //!  - input cell: its SET VARIABLE statement
 //!  - anything else: the body unchanged
-std::string CellSql(const Cell &cell);
+//! With `store` (the database a long-lived session keeps its tables in, see Runner), a
+//! materialize=table cell creates its table there and a temp view of it under its own name.
+std::string CellSql(const Cell &cell, const std::string &store = std::string());
 
 //! What a fresh connection must run to have what a SQL cell left in the last one: its statements that
 //! set connection state (SET, USE, CREATE TEMP ..., notebook::IsConnectionState) and, for a named
 //! query cell, the view or temp table it defines. Each statement ends in `;\n`. Empty for other cells.
-std::string ReplaySql(const Cell &cell);
+//! With `store`, a materialize=table cell's replay is a view of the table kept there (nothing is
+//! computed again), and CREATE TEMP TABLE statements are left out: the session restores those tables
+//! from copies in the store, with the rows later statements put in them.
+std::string ReplaySql(const Cell &cell, const std::string &store = std::string());
+
+//! `"store".main."name"`: where a session's store keeps the table `name`.
+std::string StoredTable(const std::string &store, const std::string &name);
+
+//! Whether a statement is CREATE [OR REPLACE] TEMP[ORARY] TABLE.
+bool IsCreateTempTable(const std::string &statement);
+
+//! Whether a SQL cell has a statement that may change tables: anything but queries, SET, RESET, USE
+//! and SET VARIABLE.
+bool MayWrite(const Cell &cell);
 
 //! The SQL whose rows a query cell displays: `SELECT * FROM <name>` for a named one, its last
 //! statement for an unnamed one. Empty for other cells.

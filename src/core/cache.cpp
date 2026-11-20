@@ -2,6 +2,7 @@
 
 #include "notebook/chart.hpp"
 #include "notebook/graph.hpp"
+#include "notebook/sql_lexer.hpp"
 #include "notebook/yaml.hpp"
 #include "notebook/text.hpp"
 
@@ -12,7 +13,8 @@
 
 namespace notebook {
 
-const int CACHE_FORMAT = 2;
+// 3: keys cover the versions of the files a cell names.
+const int CACHE_FORMAT = 3;
 const size_t CACHE_MAX_RESULT_BYTES = 4 * 1024 * 1024;
 const char *const CACHE_STATE_ID = "@state";
 
@@ -57,6 +59,151 @@ std::vector<std::string> ChartOnlyVariables(const Cell &cell) {
 	return result;
 }
 
+//! A word, a string literal's text, a quoted identifier or one punctuation character of SQL code.
+struct SourceToken {
+	enum class Kind { WORD, STRING, NAME, PUNCT } kind;
+	//! Words lower case; strings and names decoded.
+	std::string text;
+};
+
+std::vector<SourceToken> SourceTokens(const std::string &sql) {
+	std::vector<SourceToken> tokens;
+	SqlScanner scan(sql);
+	while (!scan.Done()) {
+		size_t start = scan.Position();
+		char c = sql[start];
+		if (scan.CurrentState() != SqlScanner::State::CODE) {
+			// A comment.
+			scan.Advance();
+			continue;
+		}
+		if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+			size_t end = start;
+			while (end < sql.size() && (std::isalnum(static_cast<unsigned char>(sql[end])) || sql[end] == '_')) {
+				end++;
+			}
+			tokens.push_back({SourceToken::Kind::WORD, Lower(sql.substr(start, end - start))});
+			while (scan.Position() < end) {
+				scan.Advance();
+			}
+			continue;
+		}
+		scan.Advance();
+		auto state = scan.CurrentState();
+		if (state == SqlScanner::State::STRING || state == SqlScanner::State::DOLLAR_STRING ||
+		    state == SqlScanner::State::QUOTED_IDENTIFIER) {
+			SourceToken token {state == SqlScanner::State::QUOTED_IDENTIFIER ? SourceToken::Kind::NAME
+			                                                                 : SourceToken::Kind::STRING,
+			                   std::string()};
+			while (!scan.Done() && scan.CurrentState() == state) {
+				size_t at = scan.Position();
+				size_t step = scan.Advance();
+				if (scan.CurrentState() == state) {
+					// A doubled quote is one quote.
+					token.text += step == 2 ? sql.substr(at, 1) : sql.substr(at, step);
+				}
+			}
+			tokens.push_back(std::move(token));
+		} else if (state == SqlScanner::State::CODE && !std::isspace(static_cast<unsigned char>(c))) {
+			tokens.push_back({SourceToken::Kind::PUNCT, std::string(1, c)});
+		}
+	}
+	return tokens;
+}
+
+//! Table functions whose first argument is a file, a glob or a list of them.
+bool IsFileReader(const std::string &name) {
+	static const char *const NAMES[] = {"read_csv",
+	                                    "read_csv_auto",
+	                                    "read_parquet",
+	                                    "parquet_scan",
+	                                    "read_json",
+	                                    "read_json_auto",
+	                                    "read_ndjson",
+	                                    "read_ndjson_auto",
+	                                    "read_json_objects",
+	                                    "read_ndjson_objects",
+	                                    "read_json_objects_auto",
+	                                    "read_text",
+	                                    "read_blob",
+	                                    "read_xlsx",
+	                                    "sniff_csv",
+	                                    "glob",
+	                                    "parquet_metadata",
+	                                    "parquet_schema",
+	                                    "parquet_file_metadata",
+	                                    "parquet_kv_metadata"};
+	for (auto known : NAMES) {
+		if (name == known) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool EndsWith(const std::string &text, const std::string &end) {
+	return text.size() >= end.size() && text.compare(text.size() - end.size(), end.size(), end) == 0;
+}
+
+//! Other functions that read data from outside the database: the cache cannot tell when it changes.
+bool IsExternalScan(const std::string &name) {
+	return name.compare(0, 5, "read_") == 0 || EndsWith(name, "_scan") || EndsWith(name, "_query") || name == "query" ||
+	       name == "query_table" || name.compare(0, 8, "iceberg_") == 0;
+}
+
+void AddSources(const std::string &sql, CacheSources &sources) {
+	auto tokens = SourceTokens(sql);
+	using Kind = SourceToken::Kind;
+	auto is = [&](size_t i, Kind kind, const char *text = nullptr) {
+		return i < tokens.size() && tokens[i].kind == kind && (!text || tokens[i].text == text);
+	};
+	std::string first;
+	for (size_t i = 0; i < tokens.size(); i++) {
+		auto &token = tokens[i];
+		if (is(i, Kind::PUNCT, ";")) {
+			first.clear();
+			continue;
+		}
+		if (token.kind != Kind::WORD) {
+			continue;
+		}
+		if (first.empty()) {
+			first = token.text;
+		}
+		// `INSTALL x FROM 'repository'` names no data.
+		if (first == "install" || first == "force") {
+			continue;
+		}
+		if ((token.text == "from" || token.text == "join") && is(i + 1, Kind::STRING)) {
+			AddUnique(sources.files, tokens[i + 1].text);
+			continue;
+		}
+		if (!is(i + 1, Kind::PUNCT, "(") || (i > 0 && is(i - 1, Kind::PUNCT, "."))) {
+			continue;
+		}
+		if (!IsFileReader(token.text)) {
+			sources.unchecked = sources.unchecked || IsExternalScan(token.text);
+			continue;
+		}
+		size_t j = i + 2;
+		if (is(j, Kind::STRING)) {
+			AddUnique(sources.files, tokens[j].text);
+			continue;
+		}
+		if (!is(j, Kind::PUNCT, "[")) {
+			sources.unchecked = true;
+			continue;
+		}
+		for (j++; j < tokens.size() && !is(j, Kind::PUNCT, "]"); j++) {
+			if (is(j, Kind::STRING)) {
+				AddUnique(sources.files, tokens[j].text);
+			} else if (!is(j, Kind::PUNCT, ",")) {
+				sources.unchecked = true;
+			}
+		}
+	}
+}
+
 void AddVariable(KeyText &text, const std::string &name, const std::map<std::string, std::string> &variables) {
 	auto found = variables.find(name);
 	text.Add(name).Add(found == variables.end() ? "unset" : "set").Add(found == variables.end() ? "" : found->second);
@@ -65,12 +212,39 @@ void AddVariable(KeyText &text, const std::string &name, const std::map<std::str
 struct KeyBuilder {
 	const Notebook &notebook;
 	const std::map<std::string, std::string> &variables;
+	const std::map<std::string, std::string> &files;
 	std::vector<CacheKey> keys;
 	//! 0: not started, 1: being computed, 2: done.
 	std::vector<int> state;
+	//! Every name a cell defines.
+	std::set<std::string> defined;
 
-	KeyBuilder(const Notebook &notebook, const std::map<std::string, std::string> &variables)
-	    : notebook(notebook), variables(variables), keys(notebook.cells.size()), state(notebook.cells.size(), 0) {
+	KeyBuilder(const Notebook &notebook, const std::map<std::string, std::string> &variables,
+	           const std::map<std::string, std::string> &files)
+	    : notebook(notebook), variables(variables), files(files), keys(notebook.cells.size()),
+	      state(notebook.cells.size(), 0) {
+		for (auto &cell : notebook.cells) {
+			defined.insert(cell.defines.begin(), cell.defines.end());
+		}
+	}
+
+	//! False if the cell reads a relation that no cell defines under exactly that name: a table already in
+	//! the database, a table of a database or schema a cell attached or created, a catalog view. A string
+	//! after FROM is read as a relation of that name too, and is one of the cell's files instead.
+	bool ReadsOnlyCells(const Cell &cell, const CacheSources &sources) const {
+		for (auto &name : cell.reads) {
+			if (name.empty() || name[0] == '$' || defined.count(name)) {
+				continue;
+			}
+			bool file = false;
+			for (auto &path : sources.files) {
+				file = file || Lower(path) == name;
+			}
+			if (!file) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	const std::string &DataKey(size_t index) {
@@ -99,11 +273,22 @@ struct KeyBuilder {
 		}
 		// A query cell's charts are not part of what it computes for others.
 		data.Add(cell.kind == CellKind::SQL ? cell.sql : cell.body);
+		auto sources = CellSources(cell);
+		bool verified = !sources.unchecked && ReadsOnlyCells(cell, sources);
+		for (auto &path : sources.files) {
+			auto found = files.find(path);
+			auto version = found == files.end() ? std::string() : found->second;
+			verified = verified && !version.empty();
+			data.Add("file").Add(path).Add(version);
+		}
 		for (int dependency : cell.depends_on) {
 			if (dependency >= 0 && static_cast<size_t>(dependency) < notebook.cells.size()) {
 				data.Add(DataKey(static_cast<size_t>(dependency)));
+				// A cell in a cycle (state 1) is already an error; it does not make the key unverified.
+				verified = verified && keys[static_cast<size_t>(dependency)].verified;
 			}
 		}
+		keys[index].verified = verified;
 		std::vector<std::string> read;
 		for (auto &name : cell.reads) {
 			if (name.size() > 1 && name[0] == '$' && !Contains(chart_only, name.substr(1))) {
@@ -257,8 +442,30 @@ std::string CacheVariableKey(const std::string &type, const std::string &text, b
 	return key.text;
 }
 
-std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables) {
-	KeyBuilder builder(notebook, variables);
+CacheSources CellSources(const Cell &cell) {
+	CacheSources sources;
+	if (cell.kind == CellKind::SQL || cell.kind == CellKind::INPUT) {
+		AddSources(cell.sql, sources);
+	}
+	for (auto &expression : cell.expressions) {
+		AddSources(expression.sql, sources);
+	}
+	return sources;
+}
+
+std::vector<std::string> CacheSourceFiles(const Notebook &notebook) {
+	std::vector<std::string> files;
+	for (auto &cell : notebook.cells) {
+		for (auto &path : CellSources(cell).files) {
+			AddUnique(files, path);
+		}
+	}
+	return files;
+}
+
+std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables,
+                                const std::map<std::string, std::string> &files) {
+	KeyBuilder builder(notebook, variables, files);
 	for (size_t i = 0; i < notebook.cells.size(); i++) {
 		builder.DataKey(i);
 	}
@@ -431,12 +638,13 @@ std::map<std::string, std::string> CacheVariableKeys(const CacheState &state) {
 }
 
 std::vector<CachedCell> MatchCache(const Notebook &notebook, const std::map<std::string, std::string> &variables,
-                                   const std::map<std::string, CacheEntry> &entries) {
+                                   const std::map<std::string, CacheEntry> &entries,
+                                   const std::map<std::string, std::string> &files) {
 	std::vector<CachedCell> cached;
 	if (entries.empty()) {
 		return cached;
 	}
-	auto keys = CacheKeys(notebook, variables);
+	auto keys = CacheKeys(notebook, variables, files);
 	auto ids = CacheCellIds(notebook);
 	for (size_t i = 0; i < notebook.cells.size(); i++) {
 		auto &cell = notebook.cells[i];
@@ -447,6 +655,7 @@ std::vector<CachedCell> MatchCache(const Notebook &notebook, const std::map<std:
 		CachedCell match;
 		match.index = cell.index;
 		match.stale = found->second.key != keys[i].result;
+		match.verified = keys[i].verified;
 		match.entry = &found->second;
 		cached.push_back(match);
 	}

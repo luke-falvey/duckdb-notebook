@@ -1,6 +1,6 @@
 # name: test/sql/query_charts.test
 # description: charts written at the end of a query cell
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

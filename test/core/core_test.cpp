@@ -12,7 +12,9 @@
 #include <cstdio>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <sstream>
 
 static int failures = 0;
@@ -138,6 +140,35 @@ static void TestScript() {
 	auto undefined = UndefinedVariables(nb);
 	CHECK(undefined.size() == 1 && undefined[0] == "brush");
 	CHECK(ExpandNotebook(nb, "x.sql").find("SET VARIABLE \"brush\" = NULL;") != std::string::npos);
+}
+
+// A long-lived session keeps materialize=table results and temp tables in a database of its own
+// (Runner in src/functions/session.cpp): its replay reads them instead of computing them again.
+static void TestSessionStore() {
+	auto nb = ParseNotebook("-- %% snap materialize=table\nSET threads = 2;\nFROM filtered\n"
+	                        "-- %% setup\nSET threads = 2;\nCREATE OR REPLACE TEMPORARY TABLE t AS SELECT 1 AS x;\n"
+	                        "INSERT INTO t VALUES (2);\nCREATE TEMP VIEW v AS FROM t;\n"
+	                        "-- %% kept\nSELECT 1 AS one\n"
+	                        "-- %%\nSET VARIABLE x = 1;\nUSE memory;\nSELECT 2;\n");
+	CHECK(CellSql(nb.cells[0], "_s") ==
+	      "SET threads = 2;\nCREATE OR REPLACE TABLE \"_s\".main.\"snap\" AS\nFROM filtered;\n"
+	      "CREATE OR REPLACE TEMP VIEW \"snap\" AS SELECT * FROM \"_s\".main.\"snap\";\n");
+	CHECK(ReplaySql(nb.cells[0], "_s") ==
+	      "SET threads = 2;\nCREATE OR REPLACE TEMP VIEW \"snap\" AS SELECT * FROM \"_s\".main.\"snap\";\n");
+	// Without a store nothing changes: the plain script and notebook_run keep temp tables.
+	CHECK(CellSql(nb.cells[0]) == "SET threads = 2;\nCREATE OR REPLACE TEMP TABLE \"snap\" AS\nFROM filtered;\n");
+	CHECK(ReplaySql(nb.cells[1], "_s") == "SET threads = 2;\nCREATE TEMP VIEW v AS FROM t;\n");
+	CHECK(ReplaySql(nb.cells[1]) ==
+	      "SET threads = 2;\nCREATE OR REPLACE TEMPORARY TABLE t AS SELECT 1 AS x;\nCREATE TEMP VIEW v AS FROM t;\n");
+	CHECK(CellSql(nb.cells[2], "_s") == CellSql(nb.cells[2]) && ReplaySql(nb.cells[2], "_s") == ReplaySql(nb.cells[2]));
+	CHECK(StoredTable("a\"b", "t") == "\"a\"\"b\".main.\"t\"");
+	CHECK(IsCreateTempTable("-- x\ncreate or replace temp table t AS SELECT 1"));
+	CHECK(IsCreateTempTable("CREATE TEMPORARY TABLE IF NOT EXISTS t (x INT)"));
+	CHECK(!IsCreateTempTable("CREATE TEMP VIEW v AS SELECT 1") && !IsCreateTempTable("CREATE TABLE t (x INT)"));
+	CHECK(!IsCreateTempTable("CREATE TEMP MACRO table_of(x) AS x"));
+	CHECK(MayWrite(nb.cells[1]) && !MayWrite(nb.cells[2]) && !MayWrite(nb.cells[3]));
+	CHECK(MayWrite(ParseNotebook("-- %%\nUPDATE t SET x = 1;\n").cells[0]));
+	CHECK(!MayWrite(nb.cells[0]));
 }
 
 static void TestFindExpressions() {
@@ -334,6 +365,26 @@ static void TestYaml() {
 	CHECK(y.Get("layers")->items[0].Get("y")->ToJson().GetType() == Json::Type::NUMBER);
 	ParseYaml("a: {b: 1", error);
 	CHECK(error.find("missing '}'") != std::string::npos);
+	// Nesting is bounded: a crafted spec is an error, not a stack overflow.
+	error.clear();
+	auto nested = ParseYaml("a: " + std::string(100, '[') + "1" + std::string(100, ']'), error);
+	CHECK(error.empty() && nested.Get("a")->IsList());
+	ParseYaml("a: " + std::string(100000, '[') + "1" + std::string(100000, ']'), error);
+	CHECK(error.find("nested more than 256 levels deep") != std::string::npos);
+	error.clear();
+	std::string maps;
+	for (int i = 0; i < 100000; i++) {
+		maps += "{a: ";
+	}
+	ParseYaml("a: " + maps, error);
+	CHECK(error.find("nested more than 256 levels deep") != std::string::npos);
+	std::string deep;
+	for (int i = 0; i < 2000; i++) {
+		deep += std::string(static_cast<size_t>(i), ' ') + "k:\n";
+	}
+	error.clear();
+	ParseYaml(deep + std::string(2000, ' ') + "k: 1\n", error);
+	CHECK(error.find("nested more than 256 levels deep") != std::string::npos);
 }
 
 static void TestJson() {
@@ -346,6 +397,53 @@ static void TestJson() {
 	CHECK(ParseJson("{\"u\": \"\\u00e9\"}", error).Get("u")->Str() == "\xc3\xa9");
 	ParseJson("{1}", error);
 	CHECK(!error.empty());
+	// Nesting is bounded, so a crafted request body or cache file cannot overflow the stack.
+	error.clear();
+	CHECK(ParseJson(std::string(200, '[') + std::string(200, ']'), error).GetType() == Json::Type::ARRAY &&
+	      error.empty());
+	ParseJson(std::string(1000000, '['), error);
+	CHECK(error.find("nested more than 256 levels deep") != std::string::npos);
+	error.clear();
+	std::string objects;
+	for (int i = 0; i < 100000; i++) {
+		objects += "{\"a\":";
+	}
+	ParseJson(objects, error);
+	CHECK(error.find("nested more than 256 levels deep") != std::string::npos);
+	// Only JSON numbers: no NaN, infinities, hex or '+', so a number in a request is always finite.
+	for (auto text : {"NaN", "nan", "-nan", "Infinity", "-inf", "1e999", "-1e999", "+1", "0x10"}) {
+		error.clear();
+		ParseJson(text, error);
+		CHECK(!error.empty());
+	}
+	error.clear();
+	CHECK(ParseJson("-1.5e3", error).Num() == -1500 && error.empty());
+}
+
+// Numbers as JSON: the fewest digits that read back as the same double, and Infinity and NaN as
+// strings JavaScript's Number() reads back (FORMAT §8, DESIGN §12).
+static void TestNumberFormat() {
+	CHECK(FormatNumber(268.18) == "268.18" && FormatNumber(0.1) == "0.1" && FormatNumber(-2.5) == "-2.5");
+	CHECK(FormatNumber(0.1 + 0.2) == "0.30000000000000004");
+	CHECK(FormatNumber(1.0 / 3) == "0.3333333333333333");
+	CHECK(FormatNumber(42) == "42" && FormatNumber(-7) == "-7" && FormatNumber(1e20) == "1e+20");
+	CHECK(FormatNumber(1.7976931348623157e308) == "1.7976931348623157e+308");
+	for (double value : {268.18, 0.1 + 0.2, 1.0 / 3, 123456.789, 1e-7, 2.0 / 7e10, 5e-324}) {
+		CHECK(std::strtod(FormatNumber(value).c_str(), nullptr) == value);
+	}
+	CHECK(FormatNumber(std::numeric_limits<double>::infinity()) == "Infinity");
+	CHECK(FormatNumber(-std::numeric_limits<double>::infinity()) == "-Infinity");
+	CHECK(FormatNumber(std::numeric_limits<double>::quiet_NaN()) == "NaN");
+	auto row = Json::Array()
+	               .Push(Json::Number(268.18))
+	               .Push(Json::Number(std::numeric_limits<double>::infinity()))
+	               .Push(Json::Number(-std::numeric_limits<double>::infinity()))
+	               .Push(Json::Number(std::numeric_limits<double>::quiet_NaN()));
+	CHECK(row.Dump() == "[268.18,\"Infinity\",\"-Infinity\",\"NaN\"]");
+	// A browser value that is not finite becomes a double literal DuckDB reads.
+	CHECK(JsonToSqlLiteral(Json::Number(std::numeric_limits<double>::infinity())) == "'Infinity'::DOUBLE");
+	CHECK(JsonToSqlLiteral(Json::Number(std::numeric_limits<double>::quiet_NaN()), "FLOAT") == "'NaN'::FLOAT");
+	CHECK(JsonToSqlLiteral(Json::Number(0.1), "DOUBLE") == "0.1::DOUBLE");
 }
 
 static void TestLiterals() {
@@ -521,8 +619,8 @@ static void TestChartErrors() {
 	plan = CompileChart("type: table\ncolumns: [region]\nlink: {region: \"https://x.test/{category}/{region}\"}\n", "t",
 	                    sales);
 	CHECK(plan.error.empty() && plan.queries.at(0).find("\"region\", \"category\"\nFROM") != std::string::npos);
-	plan = CompileChart("type: table\ncolumns: [region]\nlink: {region: category}\ntip: {region: category}\n", "t",
-	                    sales);
+	plan =
+	    CompileChart("type: table\ncolumns: [region]\nlink: {region: category}\ntip: {region: category}\n", "t", sales);
 	CHECK(plan.error.empty() && plan.queries.at(0).find("\"region\", \"category\"\nFROM") != std::string::npos);
 	CHECK(CompileChart("type: table\nlink: {region: \"https://x.test/{nope}\"}\n", "t", sales).error ==
 	      "table link: column 'nope' is not in t");
@@ -819,6 +917,7 @@ static void TestWidthSetting() {
 }
 
 #include "cache_test.hpp"
+#include "source_test.hpp"
 
 int main() {
 	TestSplitStatements();
@@ -828,6 +927,8 @@ int main() {
 	TestParseNotebook();
 	TestParseErrors();
 	TestScript();
+	TestSessionStore();
+	TestNumberFormat();
 	TestFindExpressions();
 	TestChartSpec();
 	TestGraph();
@@ -847,6 +948,7 @@ int main() {
 	TestTimingSetting();
 	TestWidthSetting();
 	TestCache();
+	TestStoredSource();
 	if (failures) {
 		std::cerr << failures << " check(s) failed" << std::endl;
 		return 1;

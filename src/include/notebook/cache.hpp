@@ -31,19 +31,43 @@ std::string CacheHash(const std::string &text);
 
 struct CacheKey {
 	//! Covers what the cell computes: its kind, name, SQL (or text) and the options that change its
-	//! data, the data keys of the cells it reads, and the values of the variables it reads. The
-	//! cells that read this one build their keys from it.
+	//! data, the data keys of the cells it reads, the values of the variables it reads, and the
+	//! version of every file it names (CacheSources). The cells that read this one build their keys
+	//! from it.
 	std::string data;
 	//! Covers what the cell shows: the data key plus its chart specs, the options that change the
 	//! picture (rows=, width=), and the selections its charts filter on. An entry is fresh when it
 	//! was stored under this key.
 	std::string result;
+	//! False when the key cannot cover all the data the cell reads, here or in a cell it reads: a
+	//! file whose version is unknown, a relation no cell defines (a table already in the database,
+	//! one in an attached database), or a scan the cache cannot check (CacheSources::unchecked).
+	//! A matching entry is then `unverified` rather than fresh.
+	bool verified = true;
 };
+
+//! What one cell reads from outside the notebook by literal path, found with the lexer (no database):
+//! the first argument of the file readers (`read_csv`, `read_parquet`, `read_json`, `read_text`,
+//! `glob`, ...: a string or a list of strings) and a string after `FROM` or `JOIN`.
+struct CacheSources {
+	//! Paths and globs exactly as written, in order of first appearance.
+	std::vector<std::string> files;
+	//! The cell reads through something whose input the cache cannot check: a file reader given
+	//! anything but literal paths (`read_csv($path)`), or another scan of external data (`delta_scan`,
+	//! `postgres_query`, `query(...)`, any other `read_*`, `*_scan` or `*_query` function).
+	bool unchecked = false;
+};
+CacheSources CellSources(const Cell &cell);
+
+//! The files of every cell's CacheSources, once each: what CacheKeys needs versions of.
+std::vector<std::string> CacheSourceFiles(const Notebook &notebook);
 
 //! One key per cell, in file order. `variables` maps a variable name (no `$`) to a text that
 //! identifies its value and type (CacheVariableKey); a variable that is missing counts as unset.
-//! Needs AnalyzeNotebook.
-std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables);
+//! `files` maps each path of CacheSourceFiles to a text that identifies its version (size, modified
+//! time, ETag); a path that is missing or maps to "" has no known version. Needs AnalyzeNotebook.
+std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables,
+                                const std::map<std::string, std::string> &files = {});
 
 //! Identifies a variable's value in a key: its SQL type and its text.
 std::string CacheVariableKey(const std::string &type, const std::string &text, bool is_null);
@@ -107,14 +131,22 @@ std::map<std::string, std::string> CacheVariableKeys(const CacheState &state);
 struct CachedCell {
 	int index = 0;
 	//! The result was made from other inputs than the cell has now: its own text, a cell it reads,
-	//! or a variable it reads has changed since.
+	//! or a variable it reads has changed since. A file it reads having changed counts too.
 	bool stale = false;
+	//! CacheKey::verified: false when the cell reads data whose changes the key cannot see.
+	bool verified = true;
 	const CacheEntry *entry = nullptr;
+
+	//! `stale`, `unverified` (the key matches, but the cell reads data it cannot check) or `fresh`.
+	const char *Status() const {
+		return stale ? "stale" : verified ? "fresh" : "unverified";
+	}
 };
 
 //! The decision: which cells have a cached result, and whether each is still fresh. Cells with
-//! errors have none (they cannot run, so nothing they show could be current).
+//! errors have none (they cannot run, so nothing they show could be current). `files` as for CacheKeys.
 std::vector<CachedCell> MatchCache(const Notebook &notebook, const std::map<std::string, std::string> &variables,
-                                   const std::map<std::string, CacheEntry> &entries);
+                                   const std::map<std::string, CacheEntry> &entries,
+                                   const std::map<std::string, std::string> &files = {});
 
 } // namespace notebook

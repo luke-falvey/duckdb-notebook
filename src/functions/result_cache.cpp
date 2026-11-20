@@ -1,6 +1,8 @@
 #include "notebook/result_cache.hpp"
 
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/path.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
@@ -80,24 +82,125 @@ bool ReadSmallFile(FileSystem &fs, const string &path, string &text) {
 	}
 }
 
+//! True if DuckDB's file system has `path` on this machine's own file system. A notebook anywhere else (a URL, an
+//! object store, HDFS or any other file system an extension adds) has no cache: it would be written over the
+//! network on every run. False too for a file that does not exist.
+bool IsLocalFile(FileSystem &fs, const string &path) {
+	if (path.empty() || FileSystem::IsRemoteFile(path) || Path::FromString(path).IsRemote()) {
+		return false;
+	}
+	// Any other "scheme://" path is served by an extension's file system (hdfs://, webhdfs://, gs://, ...).
+	// Decided from the path, not from an opened handle: wrapping file systems (the test runner's, caching
+	// wrappers) do not report themselves as local even when the file is.
+	if (path.find("://") != string::npos && !StringUtil::StartsWith(StringUtil::Lower(path), "file://")) {
+		return false;
+	}
+	return fs.FileExists(path);
+}
+
+//! Writes a cache file: to a temporary file of this writer's own beside it, then moved over it, so a reader never
+//! sees half an entry and two writers never share a temporary file. Not synced: the cache is disposable, and an
+//! entry lost in a crash only means a cell reopens empty.
+void WriteCacheFile(FileSystem &fs, const string &path, const string &text) {
+	auto temporary = path + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".tmp";
+	try {
+		auto handle = fs.OpenFile(temporary, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
+		handle->Write(const_cast<char *>(text.data()), text.size());
+		handle->Close();
+		fs.MoveFile(temporary, path);
+	} catch (...) {
+		fs.TryRemoveFile(temporary);
+		throw;
+	}
+}
+
+//! A temporary file a writer left behind (WriteCacheFile).
+bool IsCacheTemporary(const string &file) {
+	return StringUtil::EndsWith(file, ".tmp") && StringUtil::Contains(file, ".json.");
+}
+
+//! A file the store wrote: an entry, or a temporary file.
+bool IsCacheFile(const string &file) {
+	return StringUtil::EndsWith(file, ".json") || IsCacheTemporary(file);
+}
+
+//! A text that changes when one file does: its size, modified time, file id and version tag (an ETag, for
+//! the file systems that have one). "" when the file system reports neither a modified time nor a tag: its
+//! version is unknown. `missing` for a file that does not exist.
+string OneFileVersion(FileSystem &fs, const string &path) {
+	auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS);
+	if (!handle) {
+		return "missing";
+	}
+	auto stats = handle->Stats();
+	bool modified = stats.last_modification_time.value > 0 && stats.last_modification_time != timestamp_t::infinity();
+	if (!modified && stats.version_tag.empty()) {
+		return string();
+	}
+	return std::to_string(stats.file_size) + ":" +
+	       (modified ? std::to_string(stats.last_modification_time.value) : string()) + ":" +
+	       (stats.file_id.IsValid() ? std::to_string(stats.file_id.GetIndex()) : string()) + ":" + stats.version_tag;
+}
+
+//! The most files a glob may match and still be checked; beyond it, its cells are `unverified`.
+const idx_t MAX_GLOB_FILES = 1000;
+
+//! A file's or a glob's version for the cache keys (notebook::CacheKeys), "" when it cannot be told.
+string FileVersion(FileSystem &fs, const string &path) {
+	try {
+		if (!FileSystem::HasGlob(path)) {
+			return OneFileVersion(fs, path);
+		}
+		// What the glob matches is part of its version: a file added or removed changes it.
+		auto matches = fs.Glob(path);
+		if (matches.size() > MAX_GLOB_FILES) {
+			return string();
+		}
+		string version = "glob";
+		for (auto &match : matches) {
+			auto one = OneFileVersion(fs, match.path);
+			if (one.empty()) {
+				return string();
+			}
+			version += "|" + match.path + "=" + one;
+		}
+		return version;
+	} catch (...) { // NOLINT: a file that cannot be looked at has no known version
+		return string();
+	}
+}
+
 } // namespace
+
+std::map<string, string> CacheFileVersions(DatabaseInstance &db, const notebook::Notebook &notebook) {
+	std::map<string, string> versions;
+	auto files = notebook::CacheSourceFiles(notebook);
+	if (files.empty()) {
+		return versions;
+	}
+	auto &fs = FileSystem::GetFileSystem(db);
+	for (auto &path : files) {
+		versions[path] = FileVersion(fs, path);
+	}
+	return versions;
+}
 
 // ---- The store -------------------------------------------------------------------------------------
 
 ResultCacheStore::ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy)
     : db(db), source(source), legacy(legacy) {
 	table = string(legacy ? LEGACY_CACHE_SCHEMA : CACHE_SCHEMA) + ".cache";
-	if (source.compare(0, 3, "db:") == 0) {
+	if (notebook::IsStoredSource(source)) {
 		in_database = true;
-		name = source.substr(3);
-		name = name.substr(0, name.rfind('@'));
-		available = !name.empty();
+		auto stored = notebook::ParseStoredSource(source);
+		name = stored.name;
+		available = stored.error.empty();
 		return;
 	}
 	try {
 		auto &fs = FileSystem::GetFileSystem(db);
 		// A cache beside a remote notebook would be written over the network on every run.
-		if (source.empty() || FileSystem::IsRemoteFile(source) || !fs.FileExists(source)) {
+		if (!IsLocalFile(fs, source)) {
 			return;
 		}
 		auto slash = source.find_last_of("/\\");
@@ -152,7 +255,7 @@ bool ResultCacheStore::Prepare() {
 			}
 			auto ignore = root + "/.gitignore";
 			if (!fs.FileExists(ignore)) {
-				WriteTextFile(db, ignore, "# Results cached by the DuckDB sketchbook extension. Safe to delete.\n*\n");
+				WriteCacheFile(fs, ignore, "# Results cached by the DuckDB sketchbook extension. Safe to delete.\n*\n");
 			}
 		}
 		prepared = true;
@@ -237,11 +340,7 @@ bool ResultCacheStore::Write(const string &id, const string &key, const string &
 			         Value(saved_at), Value(text)});
 			return true;
 		}
-		// Written beside the entry and moved over it, so a reader never sees half an entry.
-		auto &fs = FileSystem::GetFileSystem(db);
-		auto path = FilePath(id);
-		WriteTextFile(db, path + ".tmp", text);
-		fs.MoveFile(path + ".tmp", path);
+		WriteCacheFile(FileSystem::GetFileSystem(db), FilePath(id), text);
 		return true;
 	} catch (...) { // NOLINT: writing the cache must not fail a run
 		return false;
@@ -294,7 +393,7 @@ vector<string> ResultCacheStore::StoredIds() {
 	if (fs.DirectoryExists(directory)) {
 		fs.ListFiles(directory, [&](const string &file, bool is_directory) {
 			// Only what this extension writes there is ever touched.
-			if (!is_directory && (StringUtil::EndsWith(file, ".json") || StringUtil::EndsWith(file, ".json.tmp"))) {
+			if (!is_directory && IsCacheFile(file)) {
 				stored.push_back(file);
 			}
 		});
@@ -345,7 +444,7 @@ idx_t ResultCacheStore::ClearHere() {
 		                              : notebook::CacheFileName(notebook::CACHE_STATE_ID) + ".json";
 		auto stored = StoredIds();
 		for (auto &entry : stored) {
-			removed += entry != state_name && !StringUtil::EndsWith(entry, ".tmp");
+			removed += entry != state_name && !IsCacheTemporary(entry);
 		}
 		if (in_database) {
 			if (!stored.empty()) {
@@ -451,7 +550,7 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 		}
 	}
 	UpdateVariables(session);
-	auto keys = notebook::CacheKeys(notebook, notebook::CacheVariableKeys(state));
+	auto keys = notebook::CacheKeys(notebook, notebook::CacheVariableKeys(state), CacheFileVersions(db, notebook));
 	auto ids = notebook::CacheCellIds(notebook);
 	ResultCacheStore store(db, source);
 	auto now = Now();
@@ -508,12 +607,17 @@ idx_t ResultCache::Clear(DatabaseInstance &db, const string &source) {
 	return MaxValue<idx_t>(held, store.Clear());
 }
 
-Json ResultCache::CachedJson(const notebook::Notebook &notebook, const SessionState &session) const {
+Json ResultCache::CachedJson(DatabaseInstance &db, const notebook::Notebook &notebook,
+                             const SessionState &session) const {
 	auto cached = Json::Array();
-	for (auto &match : notebook::MatchCache(notebook, Variables(session), entries)) {
+	if (entries.empty()) {
+		return cached;
+	}
+	for (auto &match : notebook::MatchCache(notebook, Variables(session), entries, CacheFileVersions(db, notebook))) {
 		cached.Push(Json::Object()
 		                .Set("idx", Json::Number(match.index))
 		                .Set("stale", Json::Bool(match.stale))
+		                .Set("unverified", Json::Bool(!match.stale && !match.verified))
 		                .Set("saved_at", Json::String(match.entry->saved_at))
 		                .Set("result", Json::Raw(match.entry->result)));
 	}
@@ -565,16 +669,18 @@ struct CacheScanState : public GlobalTableFunctionState {
 unique_ptr<FunctionData> CacheBind(ClientContext &context, TableFunctionBindInput &input,
                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<CacheBindData>();
-	result->path = input.inputs[0].GetValue<string>();
+	result->path = SourceArgument(input, 0, "notebook_cache");
 	auto notebook = ReadNotebook(context, result->path);
+	auto &db = DatabaseInstance::GetDatabase(context);
 	ResultCache cache;
-	cache.Load(DatabaseInstance::GetDatabase(context), result->path, notebook);
+	cache.Load(db, result->path, notebook);
 	auto ids = notebook::CacheCellIds(notebook);
 	SessionState none;
-	for (auto &match : notebook::MatchCache(notebook, cache.Variables(none), cache.Entries())) {
+	auto versions = cache.Entries().empty() ? std::map<string, string>() : CacheFileVersions(db, notebook);
+	for (auto &match : notebook::MatchCache(notebook, cache.Variables(none), cache.Entries(), versions)) {
 		auto &cell = notebook.cells[NumericCast<idx_t>(match.index)];
 		result->rows.push_back({ids[NumericCast<idx_t>(match.index)], match.index, notebook::CellKindName(cell.kind),
-		                        match.stale ? "stale" : "fresh", match.entry->saved_at,
+		                        match.Status(), match.entry->saved_at,
 		                        NumericCast<int64_t>(match.entry->result.size())});
 	}
 	auto column = [&](const char *name, LogicalType type) {
@@ -585,7 +691,9 @@ unique_ptr<FunctionData> CacheBind(ClientContext &context, TableFunctionBindInpu
 	column("cell", LogicalType::VARCHAR);
 	column("idx", LogicalType::INTEGER);
 	column("kind", LogicalType::VARCHAR);
-	// `fresh`, or `stale` when the cell, something it reads or a variable it reads has changed since.
+	// `fresh`; `stale` when the cell, something it reads, a variable it reads or a file it names has changed
+	// since; `unverified` when nothing has, but the cell reads data whose changes cannot be told (a table no cell
+	// defines, a file with no known version, a scan of external data).
 	column("status", LogicalType::VARCHAR);
 	column("saved_at", LogicalType::TIMESTAMP);
 	column("bytes", LogicalType::BIGINT);
@@ -617,7 +725,7 @@ struct ClearBindData : public TableFunctionData {
 unique_ptr<FunctionData> ClearBind(ClientContext &context, TableFunctionBindInput &input,
                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<ClearBindData>();
-	result->path = input.inputs[0].GetValue<string>();
+	result->path = SourceArgument(input, 0, "notebook_cache_clear");
 	names.emplace_back("removed");
 	return_types.push_back(LogicalType::BIGINT);
 	return std::move(result);

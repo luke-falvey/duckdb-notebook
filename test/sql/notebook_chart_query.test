@@ -1,6 +1,6 @@
 # name: test/sql/notebook_chart_query.test
 # description: notebook_chart_query shows the SQL and render description a chart spec compiles to
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

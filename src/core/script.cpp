@@ -2,6 +2,8 @@
 
 #include "notebook/sql_lexer.hpp"
 
+#include <cctype>
+#include <cmath>
 #include <set>
 
 namespace notebook {
@@ -89,6 +91,10 @@ std::string JsonToSqlLiteral(const Json &value, const std::string &type) {
 	case Json::Type::BOOL:
 		return value.Truthy() ? "true" : "false";
 	case Json::Type::NUMBER: {
+		if (!std::isfinite(value.Num())) {
+			// Not a SQL number literal: DuckDB reads 'Infinity', '-Infinity' and 'NaN' as doubles.
+			return QuoteString(FormatNumber(value.Num())) + "::" + (type.empty() ? "DOUBLE" : type);
+		}
 		auto literal = value.Dump();
 		return type.empty() ? literal : literal + "::" + type;
 	}
@@ -124,7 +130,76 @@ std::string JsonToSqlLiteral(const Json &value, const std::string &type) {
 	return "NULL";
 }
 
-std::string CellSql(const Cell &cell) {
+std::string StoredTable(const std::string &store, const std::string &name) {
+	return QuoteIdentifier(store) + ".main." + QuoteIdentifier(name);
+}
+
+namespace {
+
+bool Materialized(const Cell &cell) {
+	return cell.kind == CellKind::SQL && cell.is_query && !cell.name.empty() &&
+	       cell.Option("materialize", "view") == "table";
+}
+
+//! The first words of a statement after its leading comments, upper-cased: enough to tell what it creates.
+std::vector<std::string> LeadingWords(const std::string &statement, size_t count) {
+	std::vector<std::string> words;
+	auto text = StripLeadingComments(statement);
+	size_t i = 0;
+	while (words.size() < count && i < text.size()) {
+		while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
+			i++;
+		}
+		std::string word;
+		while (i < text.size() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) {
+			word += static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
+			i++;
+		}
+		if (word.empty()) {
+			break;
+		}
+		words.push_back(word);
+	}
+	return words;
+}
+
+} // namespace
+
+bool IsCreateTempTable(const std::string &statement) {
+	if (!IsConnectionState(statement)) {
+		return false;
+	}
+	auto words = LeadingWords(statement, 6);
+	if (words.empty() || words[0] != "CREATE") {
+		return false;
+	}
+	for (auto &word : words) {
+		if (word == "TABLE") {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool MayWrite(const Cell &cell) {
+	if (cell.kind != CellKind::SQL) {
+		return false;
+	}
+	for (auto &statement : SplitStatements(cell.sql)) {
+		std::string variable;
+		if (IsQueryStatement(statement.text) || IsSetVariable(statement.text, variable)) {
+			continue;
+		}
+		auto words = LeadingWords(statement.text, 1);
+		if (!words.empty() && (words[0] == "SET" || words[0] == "RESET" || words[0] == "USE")) {
+			continue;
+		}
+		return true;
+	}
+	return false;
+}
+
+std::string CellSql(const Cell &cell, const std::string &store) {
 	if (cell.kind == CellKind::INPUT) {
 		std::string result;
 		for (auto &statement : SplitStatements(cell.sql)) {
@@ -149,14 +224,21 @@ std::string CellSql(const Cell &cell) {
 		const auto &last = statements.back().text;
 		auto query = StripLeadingComments(last);
 		result += last.substr(0, last.size() - query.size());
-		const char *object = cell.Option("materialize", "view") == "table" ? "TABLE" : "VIEW";
+		if (Materialized(cell) && !store.empty()) {
+			// The table lives in the session's database; the name the other cells read is a view of it.
+			result += "CREATE OR REPLACE TABLE " + StoredTable(store, cell.name) + " AS\n" + WithSemicolon(query);
+			result += "CREATE OR REPLACE TEMP VIEW " + QuoteIdentifier(cell.name) + " AS SELECT * FROM " +
+			          StoredTable(store, cell.name) + ";\n";
+			return result;
+		}
+		const char *object = Materialized(cell) ? "TABLE" : "VIEW";
 		result += std::string("CREATE OR REPLACE TEMP ") + object + " " + QuoteIdentifier(cell.name) + " AS\n";
 		result += WithSemicolon(query);
 	}
 	return result;
 }
 
-std::string ReplaySql(const Cell &cell) {
+std::string ReplaySql(const Cell &cell, const std::string &store) {
 	if (cell.kind != CellKind::SQL) {
 		return std::string();
 	}
@@ -165,11 +247,16 @@ std::string ReplaySql(const Cell &cell) {
 	auto statements = SplitStatements(cell.sql);
 	std::string replay;
 	for (size_t i = 0; i < statements.size() && !(defines_view && i + 1 == statements.size()); i++) {
-		if (IsConnectionState(statements[i].text)) {
+		// With a store, temp tables come back from the copies kept there, rows and all.
+		if (IsConnectionState(statements[i].text) && (store.empty() || !IsCreateTempTable(statements[i].text))) {
 			replay += statements[i].text + ";\n";
 		}
 	}
-	if (defines_view) {
+	if (defines_view && Materialized(cell) && !store.empty()) {
+		// Reads the table the run stored instead of computing it again.
+		replay += "CREATE OR REPLACE TEMP VIEW " + QuoteIdentifier(cell.name) + " AS SELECT * FROM " +
+		          StoredTable(store, cell.name) + ";\n";
+	} else if (defines_view) {
 		auto wrapped = SplitStatements(CellSql(cell));
 		replay += wrapped.empty() ? std::string() : wrapped.back().text + ";\n";
 	}

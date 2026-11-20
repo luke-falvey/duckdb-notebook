@@ -1,6 +1,6 @@
 # name: test/sql/docs_notebooks.test
 # description: the notebooks the documentation site shows (site/notebooks) parse and run without errors
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

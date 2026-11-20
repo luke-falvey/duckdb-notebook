@@ -1,6 +1,6 @@
 # name: test/sql/notebook_run.test
 # description: notebook_run executes every cell in a session of its own
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 
@@ -109,8 +109,67 @@ SELECT name, row_count FROM notebook_run('test/notebooks/metadata.sql') WHERE na
 ----
 from_attached	1
 
+# and detached when the run is over
+query I
+SELECT count(*) FROM duckdb_databases() WHERE database_name = 'nb_meta_db'
+----
+0
+
+# A database already attached under that name is used if it is the same one, and left attached
+statement ok
+ATTACH ':memory:' AS nb_meta_db
+
+query II
+SELECT name, row_count FROM notebook_run('test/notebooks/metadata.sql') WHERE name IS NOT NULL
+----
+from_attached	1
+
+query I
+SELECT v FROM nb_meta_db.t
+----
+7
+
 statement ok
 DETACH nb_meta_db
+
+# but a different database under that name is an error, not silently used
+statement ok
+ATTACH '__TEST_DIR__/nb_meta_other.db' AS nb_meta_db
+
+statement error
+SELECT * FROM notebook_run('test/notebooks/metadata.sql')
+----
+the [notebook] cell attaches ':memory:' as nb_meta_db, but nb_meta_db is already attached to
+
+statement ok
+DETACH nb_meta_db
+
+# and so is the same database in another mode (the file is next to the notebook, as its attach: says)
+statement ok
+ATTACH 'test/notebooks/nb_meta_mode.duckdb' AS nb_meta_mode
+
+statement ok
+DETACH nb_meta_mode
+
+statement ok
+ATTACH 'test/notebooks/nb_meta_mode.duckdb' AS nb_meta_mode (READ_ONLY)
+
+statement error
+SELECT * FROM notebook_run('test/notebooks/attach_mode.sql')
+----
+the [notebook] cell attaches 'test/notebooks/nb_meta_mode.duckdb' as nb_meta_mode, but nb_meta_mode is already attached read-only
+
+statement ok
+DETACH nb_meta_mode
+
+# DECIMAL values are exact, and doubles have the fewest digits that read back as the same value
+statement ok
+FROM notebook_export('test/notebooks/numbers.sql', file := '__TEST_DIR__/numbers.md', format := 'md')
+
+query I
+SELECT content LIKE '%| 268.18 | 268.18 | 12345678901234567.89 | 0.1 | 0.30000000000000004 | Infinity | -Infinity | NaN |%' FROM read_text('__TEST_DIR__/numbers.md')
+----
+true
 
 # A chart whose spec does not compile fails like any other cell
 query II

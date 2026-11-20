@@ -1,0 +1,68 @@
+# name: test/sql/notebook_cache_sources.test
+# description: The result cache sees changes to the files a cell reads, and calls what it cannot check unverified
+# group: [sql]
+
+require sketchbook
+
+statement ok
+COPY (SELECT range AS i FROM range(3)) TO '{TEST_DIR}/nb_src_data.csv' (HEADER)
+
+statement ok
+CREATE TABLE nb_src_table AS SELECT 1 AS n
+
+# A cell reading the file by its path, a cell reading that cell, one reading a table no cell defines, and one
+# reading nothing
+statement ok
+COPY (SELECT '-- %% src' || chr(10) || 'SELECT * FROM read_csv(''{TEST_DIR}/nb_src_data.csv'');' || chr(10) || chr(10) || '-- %% total' || chr(10) || 'SELECT count(*) AS n FROM src;' || chr(10) || chr(10) || '-- %% outside' || chr(10) || 'SELECT * FROM nb_src_table;' || chr(10) || chr(10) || '-- %% one' || chr(10) || 'SELECT 1 AS one;' || chr(10)) TO '{TEST_DIR}/nb_src.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')
+
+query II
+SELECT name, status FROM notebook_run('{TEST_DIR}/nb_src.sql', cache := true) ORDER BY idx
+----
+src	ok
+total	ok
+outside	ok
+one	ok
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src.sql') ORDER BY idx
+----
+src	fresh
+total	fresh
+outside	unverified
+one	fresh
+
+# The file is written again with other rows: what reads it, directly or not, is stale
+statement ok
+COPY (SELECT range AS i FROM range(5)) TO '{TEST_DIR}/nb_src_data.csv' (HEADER)
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src.sql') ORDER BY idx
+----
+src	stale
+total	stale
+outside	unverified
+one	fresh
+
+# Running again records the new version
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src.sql', cache := true)
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src.sql') ORDER BY idx
+----
+src	fresh
+total	fresh
+outside	unverified
+one	fresh
+
+# Clean up: all test files share one database
+query I
+SELECT removed FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')
+----
+4
+
+statement ok
+DROP TABLE nb_src_table

@@ -162,9 +162,11 @@ static void TestCacheEntries() {
 	}
 	CHECK(!ParseCacheEntry("not json at all", "monthly", untouched));
 	CHECK(!ParseCacheEntry("[1, 2]", "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2", "\"format\":1"), "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2", "\"format\":3"), "monthly", untouched));
-	CHECK(!ParseCacheEntry(Replaced(text, "\"format\":2,", ""), "monthly", untouched));
+	auto format = "\"format\":" + std::to_string(CACHE_FORMAT);
+	CHECK(!ParseCacheEntry(Replaced(text, format, "\"format\":2"), "monthly", untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, format, "\"format\":" + std::to_string(CACHE_FORMAT + 1)), "monthly",
+	                       untouched));
+	CHECK(!ParseCacheEntry(Replaced(text, format + ",", ""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"key\":\"0123456789abcdef\"", "\"key\":7"), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "\"status\":\"ok\"", "\"status\":\"done\""), "monthly", untouched));
 	CHECK(!ParseCacheEntry(Replaced(text, "[[1],[2]]", "[[1],[2,3]]"), "monthly", untouched));
@@ -201,8 +203,9 @@ static void TestCacheEntries() {
 	      parsed.variables["region"].shown.Str() == "US" && parsed.variables["cutoff"].is_null &&
 	      parsed.variables["cutoff"].type == "DATE" && parsed.variables["cutoff"].shown.IsNull());
 	CHECK(CacheVariableKeys(parsed)["region"] == CacheVariableKey("VARCHAR", "US", false));
-	CHECK(!ParseCacheState("{\"format\":2}", parsed));
-	CHECK(!ParseCacheState("{\"format\":2,\"variables\":{\"a\":{\"type\":\"X\"}}}", parsed));
+	CHECK(!ParseCacheState("{\"format\":" + std::to_string(CACHE_FORMAT) + "}", parsed));
+	CHECK(!ParseCacheState("{\"format\":" + std::to_string(CACHE_FORMAT) + ",\"variables\":{\"a\":{\"type\":\"X\"}}}",
+	                       parsed));
 	CHECK(!ParseCacheState(DumpCacheState(state).substr(0, 20), parsed));
 	CHECK(parsed.variables.size() == 2);
 }
@@ -247,10 +250,102 @@ static void TestCacheFreshness() {
 	          .find("1") == std::string::npos);
 }
 
+static std::string SourcesText(const std::string &sql) {
+	auto nb = ParseNotebook("-- %%\n" + sql + "\n");
+	auto sources = CellSources(nb.cells[0]);
+	std::string text;
+	for (auto &file : sources.files) {
+		text += file + "|";
+	}
+	return text + (sources.unchecked ? "unchecked" : "checked");
+}
+
+static void TestCacheSources() {
+	// File readers' literal paths, lists of them and strings after FROM or JOIN, as written.
+	CHECK(SourcesText("SELECT * FROM read_csv('Data/A.csv', header = true)") == "Data/A.csv|checked");
+	CHECK(SourcesText("SELECT * FROM READ_PARQUET(['a.parquet', 'b/*.parquet'])") == "a.parquet|b/*.parquet|checked");
+	CHECK(SourcesText("FROM 'it''s.csv' JOIN \"t\" USING (k) JOIN 'b.json' USING (k)") == "it's.csv|b.json|checked");
+	CHECK(SourcesText("SELECT * FROM read_json_auto($$x.json$$)") == "x.json|checked");
+	CHECK(SourcesText("COPY t FROM 'in.csv'; COPY t TO 'out.csv'") == "in.csv|checked");
+	CHECK(SourcesText("SELECT * FROM glob('*.csv')") == "*.csv|checked");
+	// Only code counts: not strings, comments or a path in a SELECT list.
+	CHECK(SourcesText("-- FROM 'a.csv'\nSELECT 'FROM ''b.csv''', 'c.csv' /* read_csv('d.csv') */") == "checked");
+	CHECK(SourcesText("INSTALL x FROM 'https://example.org'; SELECT 1") == "checked");
+	// A reader given anything but literal paths, and other scans of external data, cannot be checked.
+	CHECK(SourcesText("SELECT * FROM read_csv($path)") == "unchecked");
+	CHECK(SourcesText("SELECT * FROM read_csv(['a.csv', $more])") == "a.csv|unchecked");
+	CHECK(SourcesText("SELECT * FROM delta_scan('t')") == "unchecked");
+	CHECK(SourcesText("SELECT * FROM postgres_query('db', 'SELECT 1')") == "unchecked");
+	CHECK(SourcesText("SELECT * FROM query('SELECT 1')") == "unchecked");
+	CHECK(SourcesText("SELECT * FROM range(10), generate_series(1, 3)") == "checked");
+
+	// Markdown expressions are read too.
+	auto md = Analyzed("-- %% [markdown]\n/* {{ (SELECT count(*) FROM 'm.csv') }} */\n");
+	CHECK(CacheSourceFiles(md) == std::vector<std::string> {"m.csv"});
+
+	// (`FROM other, read_csv(...)`: the fake extractor would take a reader after FROM for a table.)
+	auto nb = Analyzed("-- %% raw\nSELECT * FROM 'events.csv';\n"
+	                   "-- %% daily\nSELECT * FROM raw;\n"
+	                   "-- %% other\nSELECT 1 AS n;\n"
+	                   "-- %% outside\nSELECT * FROM warehouse_orders;\n"
+	                   "-- %% below\nSELECT * FROM outside;\n"
+	                   "-- %% attached\nATTACH 'wh.duckdb' AS wh;\n"
+	                   "-- %% inside\nSELECT * FROM wh.orders;\n"
+	                   "-- %% two\nSELECT * FROM other, read_csv(['a.csv', 'b.csv']);\n");
+	CHECK(!nb.HasErrors());
+	CHECK((CacheSourceFiles(nb) == std::vector<std::string> {"events.csv", "a.csv", "b.csv"}));
+	std::map<std::string, std::string> files {{"events.csv", "100:1"}, {"a.csv", "1:1"}, {"b.csv", "2:2"}};
+	auto keys = CacheKeys(nb, {}, files);
+	auto verified = [](const std::vector<CacheKey> &list) {
+		std::string text;
+		for (auto &key : list) {
+			text += key.verified ? "v" : "-";
+		}
+		return text;
+	};
+	// A table no cell defines, and what reads it, cannot be checked; neither can a table of an attached
+	// database.
+	CHECK(verified(keys) == "vvv--v-v");
+	// A file's version changes the cell that names it and everything that reads that cell, and nothing else.
+	auto changed = files;
+	changed["events.csv"] = "120:2";
+	CHECK(Changed(keys, CacheKeys(nb, {}, changed)) == "0d 0r 1d 1r ");
+	changed = files;
+	changed["b.csv"] = "2:3";
+	CHECK(Changed(keys, CacheKeys(nb, {}, changed)) == "7d 7r ");
+	// A file without a known version leaves its cell and readers unverified.
+	changed = files;
+	changed["events.csv"] = "";
+	CHECK(verified(CacheKeys(nb, {}, changed)) == "--v--v-v");
+	changed.erase("events.csv");
+	CHECK(verified(CacheKeys(nb, {}, changed)) == "--v--v-v");
+
+	// MatchCache says so: fresh, unverified or stale.
+	auto ids = CacheCellIds(nb);
+	std::map<std::string, CacheEntry> entries;
+	for (size_t i = 0; i < ids.size(); i++) {
+		entries[ids[i]] = CacheEntry {keys[i].result, keys[i].data, "2026-11-17 10:00:00", "{\"status\":\"ok\"}"};
+	}
+	auto status = [&](const std::map<std::string, std::string> &versions) {
+		std::string text;
+		for (auto &match : MatchCache(nb, {}, entries, versions)) {
+			text += std::string(match.Status()).substr(0, 1);
+		}
+		return text;
+	};
+	CHECK(status(files) == "fffuufuf");
+	changed = files;
+	changed["events.csv"] = "120:2";
+	CHECK(status(changed) == "ssfuufuf");
+	// Without versions, a cell that names a file is never fresh.
+	CHECK(status({}) == "ssfuufus");
+}
+
 static void TestCache() {
 	TestCacheKeys();
 	TestCacheIds();
 	TestCacheSetting();
 	TestCacheEntries();
 	TestCacheFreshness();
+	TestCacheSources();
 }

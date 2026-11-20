@@ -1,6 +1,6 @@
 # name: test/sql/notebook_export.test
 # description: notebook_export writes HTML, Markdown, SQL and data files
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

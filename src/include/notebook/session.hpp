@@ -6,6 +6,7 @@
 #include "notebook/json.hpp"
 
 #include <map>
+#include <set>
 
 // Running cells, shared by notebook_run, notebook_export and the server.
 //
@@ -13,13 +14,43 @@
 // rebuild its per-connection objects (temp views of query cells, temp tables, settings). A Runner
 // opens a connection, replays that state, runs cells, and records the new state when it goes
 // away. The extension therefore never keeps the database alive between requests (DESIGN §11).
+//
+// A long-lived session (the server's, `keep_tables`) also has a store: an in-memory database attached
+// to the DatabaseInstance, hidden from listings. Its materialize=table cells create their tables
+// there, and the temp tables its cells make are copied there after each cell that may change them,
+// so a new connection reads them instead of running their SQL again (DESIGN §12).
 namespace duckdb {
+
+//! A session's store: `ATTACH ':memory:' AS <name> (HIDDEN true)`, owned by the database instance.
+//! Detached when the last SessionState that shares it goes away, if the database is still open.
+struct SessionStore {
+	weak_ptr<DatabaseInstance> db;
+	string name;
+	~SessionStore();
+};
 
 struct SessionState {
 	//! User variables, as they were when the last runner finished.
 	std::map<string, Value> variables;
 	//! Per cell index: the SQL that recreates what that cell made which a new connection lacks.
 	std::map<int, string> replay;
+	//! Set for a session that outlives its requests (the server's): keep tables in a store.
+	bool keep_tables = false;
+	//! The store, created by the first cell that needs it. Copies of the state (a peek's) share it.
+	shared_ptr<SessionStore> store;
+	//! The store could not be attached; temp tables are replayed by running their SQL again.
+	bool store_failed = false;
+	//! Temp tables with a copy in the store, restored into every new connection.
+	std::set<string> tables;
+	//! Per cell index: the materialize=table cell's table in the store.
+	std::map<int, string> stored;
+};
+
+//! What every chart of a cell needs to know about the relation it reads (Runner::Charts).
+struct ChartInput {
+	std::vector<notebook::ColumnInfo> columns;
+	int64_t row_count = -1;
+	string error;
 };
 
 struct CellOutcome {
@@ -54,12 +85,29 @@ public:
 	Runner(DatabaseInstance &db, SessionState &state);
 	~Runner();
 
+	//! The connection, with the session restored (Restore).
 	Connection &Conn() {
+		Restore();
 		return *connection;
 	}
 
+	//! The connection's context before anything has run on it: register it for interrupts first.
+	shared_ptr<ClientContext> Context() {
+		return connection->context;
+	}
+
+	//! Replays the session into the connection: temp tables from the store, then every cell's replay.
+	//! Runs once, on first use of the connection; never before Context() can be registered.
+	void Restore();
+
+	//! The databases ApplyMetadata attached (not those it found attached already).
+	const vector<string> &Attached() const {
+		return attached;
+	}
+
 	//! Applies the [notebook] cell: loads its `extensions` and attaches its `attach` databases
-	//! (paths relative to the notebook file). Throws if one fails.
+	//! (paths relative to the notebook file). Throws if one fails, or if its name is already attached
+	//! to another database or in another mode; one that matches is used as it is.
 	void ApplyMetadata(const notebook::Notebook &notebook, const string &source);
 
 	//! Sets variables that cells read but nothing sets to NULL, or to their param.
@@ -77,13 +125,17 @@ public:
 	                notebook::Json *data = nullptr);
 
 	//! `{columns: [{name, type}], rows: [[...]], truncated}` for a query, at most `limit` rows.
-	notebook::Json Page(const string &sql, idx_t limit, string &error);
+	//! DECIMAL values are exact strings unless `exact` is false.
+	notebook::Json Page(const string &sql, idx_t limit, string &error, bool exact = true);
 
 	//! `{render, datasets: [...], queries: [...]}` for one of a cell's charts, or `{error}`.
 	notebook::Json Chart(const notebook::Notebook &notebook, const notebook::Cell &cell, const string &spec);
 
 	//! Every chart of a cell, in order. Sets `error` to the first chart's error, if any.
 	notebook::Json Charts(const notebook::Notebook &notebook, const notebook::Cell &cell, string &error);
+	//! As above, with the relation's row count when it is known (-1 counts it).
+	notebook::Json Charts(const notebook::Notebook &notebook, const notebook::Cell &cell, int64_t row_count,
+	                      string &error);
 
 	//! Peek under the pen: the first `rows` rows of the CTE or sub-query around byte offset `cursor`
 	//! of `sql`, as `{kind, name, start, end, columns, rows, more, total}` (`total` only when counting
@@ -95,9 +147,24 @@ public:
 	void Save();
 
 private:
+	//! The store's name, attaching it if the session keeps tables and has none yet; empty without one.
+	string Store();
+	//! After a cell that may change tables: copies the temp tables it made or names into the store,
+	//! and forgets those that are gone.
+	void KeepTempTables(const notebook::Cell &cell);
+	//! Describes (and, unless `row_count` is known, counts) the relation a cell's charts read.
+	bool ChartSource(const notebook::Cell &cell, int64_t row_count, ChartInput &input);
+	notebook::Json Chart(const notebook::Notebook &notebook, const notebook::Cell &cell, const string &spec,
+	                     const ChartInput &input);
+
 	SessionState &state;
 	unique_ptr<Connection> connection;
+	bool restored = false;
+	vector<string> attached;
 };
+
+//! Detaches `names` (Runner::Attached) from a connection of its own; best effort.
+void DetachDatabases(DatabaseInstance &db, const vector<string> &names);
 
 struct ExportOptions {
 	//! html, html-wasm, md, sql, data or pdf.
@@ -167,6 +234,8 @@ idx_t CellRows(const notebook::Cell &cell);
 
 //! A Value as JSON: numbers stay numbers (unless too large for a double), temporal values are
 //! ISO-like strings, lists and structs nest.
-notebook::Json ValueToJson(const Value &value);
+//! DECIMAL is an exact string unless `exact_decimal` is false (chart data); ±inf and NaN are numbers
+//! that Json::Dump writes as "Infinity", "-Infinity" and "NaN".
+notebook::Json ValueToJson(const Value &value, bool exact_decimal = true);
 
 } // namespace duckdb
