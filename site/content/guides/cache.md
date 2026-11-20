@@ -46,9 +46,16 @@ cell it reads, reads:
 
 - a table that no cell in the notebook creates (one already in the database, or in a database a cell
   attaches, like `wh.orders`);
-- a file named by a variable (`read_csv($path)`), or a file whose file system reports neither a
-  modified time nor a version tag;
-- another kind of external data: `delta_scan`, `iceberg_scan`, `postgres_query` and the like.
+- a file named by a variable (`read_csv($path)`), a file whose file system reports neither a
+  modified time nor a version tag, or a file modified in the last two seconds (modified times are often
+  whole seconds, so it could still change unseen);
+- a remote file (`https://`, `s3://` and any other `scheme://` but `file://`): the cache never looks at
+  one, so opening or running a notebook costs no request;
+- another kind of external data: `delta_scan`, `iceberg_scan`, `postgres_query` and the like, and any
+  table function but `range`, `generate_series`, `unnest`, `json_each`, `json_tree` and `repeat_row`
+  (an extension's reader such as `st_read`, or a table macro).
+
+Files are looked at just before a run, so one that changes while the cells read it leaves them stale.
 
 Run such a cell when its data may have changed. [FORMAT §8](../reference/format.md#8-sidecar-cache)
 has the exact rules.

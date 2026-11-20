@@ -295,6 +295,9 @@ SELECT ...;
 */
 ```
 
+A spec (and the `[notebook]` cell's YAML, §6) nests at most 256 levels deep; a deeper one is a format
+error.
+
 At the end of a query cell (§2) the chart draws that cell's result. A chart cell draws `from`, which
 names a cell, table or view. The spec says how to turn that relation into a picture. The runner
 compiles each spec into one aggregate SQL query over the relation plus a small render description, so
@@ -575,7 +578,9 @@ whole directory, so it never needs adding to a project's own:
     @state.json                  the variables the results were made with
 ```
 
-For a notebook stored in a database (`db:<name>`), in that database's `_sketchbook.cache` table,
+For a notebook stored in a database (`db:<name>`), in that database's `_sketchbook.cache` table (the
+database it is read from: the current one, which `USE` chooses, for the SQL functions and for the editor
+opened by `notebook_start`),
 `(name, cell, format, key, data, saved_at, result)` with one row per cell and one for `@state`. A notebook
 that DuckDB's file system does not have on the local file system (a URL, an object store, `hdfs://`, any
 file system an extension adds) and a notebook not saved yet have no cache. A location that cannot be
@@ -611,8 +616,10 @@ edited. This is why naming cells you care about matters (§2).
   string after `FROM` or `JOIN` (`FROM 'events.csv'`). A file's version is its size, its last-modified
   time, its file id and its version tag (an ETag, on file systems that have one) as DuckDB's file system
   reports them; a glob's is the list of files it matches with each one's version; a file that does not
-  exist has the version *missing*. Looking at a file opens it and reads none of it; for a remote file
-  that is one `HEAD` request, when the notebook is opened and after each run.
+  exist has the version *missing*. Versions are taken when the notebook is opened and just before a
+  run, so a file that changes while the cells read it leaves them stale. Looking at a file opens it and
+  reads none of it. Only files on this machine are looked at: a remote one (any `scheme://` path but
+  `file://`) has no known version, and costs no request.
 
 What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width`,
 `height`, `label` and `placeholder`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
@@ -628,20 +635,20 @@ fainter ink with the note *from an earlier run* until it runs. A cell whose key 
 
 - a relation that no cell defines under exactly that name: a table already in the database, a table
   of a database or schema a cell attached or created (`wh.orders`), a catalog view;
-- a file whose version the file system cannot report (neither a modified time nor a version tag), or a
-  glob matching more than 1000 files;
+- a remote file; a file whose version the file system cannot report (neither a modified time nor a
+  version tag); a file modified in the last two seconds, which could still change without its modified
+  time changing (modified times are often whole seconds); or a glob matching more than 1000 files;
 - a file reader given anything but literal paths (`read_csv($path)`), or another scan of external data:
-  any other `read_*`, `*_scan` or `*_query` function, `iceberg_*`, `query` and `query_table`.
+  any other `read_*`, `*_scan` or `*_query` function, `iceberg_*`, `query` and `query_table`;
+- any other table function, an extension's (`st_read`) or a table macro alike, except `range`,
+  `generate_series`, `unnest`, `json_each`, `json_tree` and `repeat_row`.
 
 The editor shows an unverified result as it shows a fresh one; `notebook_cache` lists it as
 `unverified`. What no key covers: data a later cell changes (an `INSERT` into a table an earlier cell
-made), functions such as `now()` and `random()`, and a file rewritten within the same second with the
-same size on a file system whose modified times have one-second resolution and no version tag (the
-local one, where the file id still changes when the file is replaced rather than rewritten). A cell
-with an error shows nothing from the cache.
+made) and functions such as `now()` and `random()`. A cell with an error shows nothing from the cache.
 
 **Trust.** Showing cached output executes nothing (DESIGN §3): opening a notebook reads files or rows
-and computes hashes. The inputs show the values the results were made with, and the session is given
+and computes hashes, and makes no network request. The inputs show the values the results were made with, and the session is given
 those values, but no cell runs until the reader runs one. Until then, changing an input marks what reads
 it stale instead of running it, a brush asks for a run, and only the remembered page of a grid can be
 seen.
@@ -677,7 +684,8 @@ the file, so this specification is the only format.
 
 A stored notebook is named `db:<name>` (the newest version) or `db:<name>@<version>`, where the version
 is a whole number from 1; the name is everything between `db:` and the last `@`. It is read from the
-current database. `notebook_save` and `notebook_checkout` commit on a connection of their own (they
+current database. A name a notebook is saved under holds no `@` and is not blank: `notebook_save`
+refuses one (a file `report@2.sql` is saved with `name := '...'`). `notebook_save` and `notebook_checkout` commit on a connection of their own (they
 are not part of the caller's transaction); a save takes the next version number in the same
 transaction as its insert.
 
