@@ -165,7 +165,7 @@ statements create. Effect cells run only when asked (see [DESIGN.md §3](DESIGN.
 | Option | Values | Meaning |
 |---|---|---|
 | `run` | `auto`, `manual` | Default `auto` for query cells, `manual` for effect cells |
-| `materialize` | `view`, `table` | `view` (default) keeps the result lazy. `table` stores it as a temp table: use for slow queries that many cells read |
+| `materialize` | `view`, `table` | `view` (default) keeps the result lazy. `table` stores it as a temp table: use for slow queries that many cells read. The editor keeps the table between requests and computes it again only when the cell runs |
 
 ### Ordering
 
@@ -526,8 +526,10 @@ window. Any other value is an error. A reader's own choice (the editor's gear me
 control, or `?width=wide` / `?width=normal` in the address) wins over it; presenting, print and PDF
 always use the normal width. A chart cell or query with `width=` keeps that width when the page is
 wide; the others are drawn at the width they have. `attach` and `extensions` are applied before the first
-cell runs (`LOAD` for each extension, `ATTACH IF NOT EXISTS` for each database). Paths are relative to
-the notebook file.
+cell runs (`LOAD` for each extension, `ATTACH` for each database). Paths are relative to the notebook
+file. A database already attached under the same name is used if it is the same path in the same mode
+(`read_only`), and is an error otherwise. `notebook_run` detaches the databases it attached when it
+returns; the editor keeps them attached while it runs.
 
 ## 7. Running without the notebook
 
@@ -574,8 +576,9 @@ whole directory, so it never needs adding to a project's own:
 ```
 
 For a notebook stored in a database (`db:<name>`), in that database's `_sketchbook.cache` table,
-`(name, cell, format, key, data, saved_at, result)` with one row per cell and one for `@state`. A remote
-notebook (a URL, an object store) and a notebook not saved yet have no cache. A location that cannot be
+`(name, cell, format, key, data, saved_at, result)` with one row per cell and one for `@state`. A notebook
+that DuckDB's file system does not have on the local file system (a URL, an object store, `hdfs://`, any
+file system an extension adds) and a notebook not saved yet have no cache. A location that cannot be
 written means no cache, quietly; a run never fails because of it.
 
 **Caches from before the rename.** The extension was called `notebook` before it became `sketchbook`,
@@ -600,18 +603,42 @@ edited. This is why naming cells you care about matters (§2).
 - the cell's kind, name, widget and SQL (or text), and its options except the ones that only lay it
   out (`hide`, `span`, `run`, `screen`);
 - the keys of the cells it reads, so a change anywhere upstream reaches every cell below it;
-- the type and value of every variable its SQL reads (unset, `NULL` and a value are all different).
+- the type and value of every variable its SQL reads (unset, `NULL` and a value are all different);
+- the version of every file it names by a literal path: the first argument of a file reader
+  (`read_csv`, `read_csv_auto`, `read_parquet`, `parquet_scan`, `read_json`, `read_json_auto`,
+  `read_ndjson`, `read_json_objects`, `read_ndjson_objects`, `read_text`, `read_blob`, `read_xlsx`,
+  `sniff_csv`, `glob` and the `parquet_*` metadata functions), as one string or a list of strings, and a
+  string after `FROM` or `JOIN` (`FROM 'events.csv'`). A file's version is its size, its last-modified
+  time, its file id and its version tag (an ETag, on file systems that have one) as DuckDB's file system
+  reports them; a glob's is the list of files it matches with each one's version; a file that does not
+  exist has the version *missing*. Looking at a file opens it and reads none of it; for a remote file
+  that is one `HEAD` request, when the notebook is opened and after each run.
 
 What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width`,
 `height`, `label` and `placeholder`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
 that filters it changes that cell's key, not the keys of the cells that read it.
 
-**Fresh or stale.** When a notebook is opened, each cell's key is computed from the text as it is now
-and the variables recorded in `@state` (the last values of its inputs and selections). A cell whose key
-equals its entry's is *fresh* and looks exactly like a result just computed. A cell whose key differs
-is *stale*: the cell, something it reads, or a variable it reads changed after the result was made. Its
-last result is shown in fainter ink with the note *from an earlier run* until it runs. A cell with an
-error shows nothing from the cache.
+**Fresh, unverified or stale.** When a notebook is opened, each cell's key is computed from the text as
+it is now, the variables recorded in `@state` (the last values of its inputs and selections) and the
+files' versions now. A cell whose key differs from its entry's is *stale*: the cell, something it reads,
+a variable it reads or a file it names changed after the result was made. Its last result is shown in
+fainter ink with the note *from an earlier run* until it runs. A cell whose key equals its entry's is
+*fresh*, unless it reads data the key cannot cover, here or in a cell it reads; then it is
+*unverified*:
+
+- a relation that no cell defines under exactly that name: a table already in the database, a table
+  of a database or schema a cell attached or created (`wh.orders`), a catalog view;
+- a file whose version the file system cannot report (neither a modified time nor a version tag), or a
+  glob matching more than 1000 files;
+- a file reader given anything but literal paths (`read_csv($path)`), or another scan of external data:
+  any other `read_*`, `*_scan` or `*_query` function, `iceberg_*`, `query` and `query_table`.
+
+The editor shows an unverified result as it shows a fresh one; `notebook_cache` lists it as
+`unverified`. What no key covers: data a later cell changes (an `INSERT` into a table an earlier cell
+made), functions such as `now()` and `random()`, and a file rewritten within the same second with the
+same size on a file system whose modified times have one-second resolution and no version tag (the
+local one, where the file id still changes when the file is replaced rather than rewritten). A cell
+with an error shows nothing from the cache.
 
 **Trust.** Showing cached output executes nothing (DESIGN §3): opening a notebook reads files or rows
 and computes hashes. The inputs show the values the results were made with, and the session is given
@@ -620,8 +647,9 @@ it stale instead of running it, a brush asks for a run, and only the remembered 
 seen.
 
 **Disposable and safe.** An entry that is not whole (truncated, not JSON, the wrong shape, another
-`format`, another cell's) is ignored, never an error. Entries are written to a temporary file and moved
-into place. Entries of cells that no longer exist are removed on the next run. The `format` number
+`format`, another cell's) is ignored, never an error. Entries are written to a temporary file of the
+writer's own (`<entry>.json.<uuid>.tmp`) and moved into place; they are not synced to disk, since an entry
+lost in a crash only means that cell reopens empty. Entries of cells that no longer exist are removed on the next run. The `format` number
 is raised whenever what a key covers or how an entry is laid out changes, and an entry with another
 number is simply ignored.
 
@@ -632,7 +660,7 @@ number is simply ignored.
 | The editor | when a notebook is opened | after every run, redraw and input change |
 | `notebook_run` | never: a run computes from the data as it is | only with `cache := true` |
 | `notebook_export` | never: an export shows the data as it is now | never: an export has no side effects |
-| `notebook_cache(path)` | lists entries with `status` fresh or stale | |
+| `notebook_cache(path)` | lists entries with `status` fresh, unverified or stale | |
 | `notebook_cache_clear(path)` | | removes the notebook's entries |
 
 `notebook_run(path, cache := true)` is how a scheduled job or a colleague prepares a notebook so it
@@ -646,6 +674,12 @@ Teams who want reviewable outputs can commit an export (HTML or Markdown) instea
 The same text can be stored in a DuckDB database: see
 [DESIGN.md §5](DESIGN.md#5-notebooks-inside-the-database). The stored `content` is byte-identical to
 the file, so this specification is the only format.
+
+A stored notebook is named `db:<name>` (the newest version) or `db:<name>@<version>`, where the version
+is a whole number from 1; the name is everything between `db:` and the last `@`. It is read from the
+current database. `notebook_save` and `notebook_checkout` commit on a connection of their own (they
+are not part of the caller's transaction); a save takes the next version number in the same
+transaction as its insert.
 
 ## 10. Verified against DuckDB 2.0.0
 

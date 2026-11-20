@@ -87,9 +87,12 @@ The cell is not run and its result does not change.
 on a copy of the session, so the session's variables and views are as they were. Only a plain
 `SELECT` is looked into: `INSERT … SELECT`, `CREATE TABLE AS` and statements that change data are
 refused wherever the caret is. A part that calls a volatile function (`nextval`, `setval`, …; `random()`
-and `uuid()` are allowed) or a table function that changes something is refused before it runs.
-The read-only transaction protects only the local database: a table function from another extension
-that acts on a remote system (such as `postgres_execute`) cannot be judged and could run. Parts of a
+and `uuid()` are allowed) is refused before it runs, and so is one that calls a table function not known
+to only read. Known are DuckDB's generators and readers (`range`, `generate_series`, `unnest`, `glob`,
+`read_csv`, `read_parquet`, `read_json` and their kin), the `duckdb_*` and `pragma_*` information
+functions, and the extension's own `notebook_cells`, `notebook_sql`, `notebook_chart_query`,
+`notebook_peek` and `notebook_cache`. Another extension's table function (such as `postgres_execute`),
+`query()` and table macros are not peeked at: run the cell instead. Parts of a
 recursive CTE that read the CTE itself are not peeked at. Errors and SQL that does not parse simply
 show nothing.
 

@@ -20,14 +20,18 @@ CI builds the extension for every native platform DuckDB distributes for:
 | macOS Intel | `osx_amd64` | built only |
 | Windows x86-64 (MSVC) | `windows_amd64` | yes |
 | Windows x86-64 (MinGW) | `windows_amd64_mingw` | yes |
-| Windows ARM64 | `windows_arm64` | built only |
+| Windows ARM64 | `windows_arm64` | yes |
 | DuckDB-WASM 2.0, `base` bundle | `wasm_eh` | yes, loaded into DuckDB-WASM in Chromium |
 | DuckDB-WASM 2.0, `threads` bundle | `wasm_threads` | yes, as above; `LOAD` can hang (see [running in the browser](../guides/browser.md)) |
 | (no DuckDB-WASM 2.0 bundle loads it) | `wasm_mvp` | built only |
 
-"Tested" means DuckDB's pipeline runs the SQL test suite there (for the WebAssembly builds, a job of
-this repository loads them into DuckDB-WASM in headless Chromium and runs the notebook functions);
-"built only" platforms compile and link but are not tested. In DuckDB-WASM the editor's server and
+"Tested" means DuckDB's pipeline runs the SQL test suite there (its test phase skips only `linux_arm64`
+and `osx_amd64`; for the WebAssembly builds, a job of this repository loads them into DuckDB-WASM in
+headless Chromium and runs the notebook functions); "built only" platforms compile and link but are not
+tested. On `linux_amd64` CI also loads the shipped extension file into the DuckDB 2.0.0 Python package
+and checks the editor server's HTTP API. The table is what every push to `main` runs
+([`MainDistributionPipeline.yml`](https://github.com/luke-falvey/duckdb-sketchbook/blob/main/.github/workflows/MainDistributionPipeline.yml));
+a pull request builds and tests only `linux_amd64`, `windows_amd64` and `wasm_eh`. In DuckDB-WASM the editor's server and
 PDF export are not available; [running in the browser](../guides/browser.md) has what works there and
 how to load it.
 

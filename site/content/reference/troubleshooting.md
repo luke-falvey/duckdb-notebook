@@ -65,6 +65,8 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 | The server stops right after starting | The DuckDB process exited (for example, the CLI with `-c` exits after the query). Use an interactive shell, and keep it open |
 | `notebook_start: cannot listen on 127.0.0.1:8765 (in use?)` | Another server has that port. Stop it, or pass another `port :=`, or leave it out for any free port |
 | `port :=` is ignored | A server is already running in this DuckDB process; `notebook_start` reuses it. Call `notebook_stop()` first |
+| `notebook_start: the notebook server cannot be started with external access disabled …` or `… while the configuration is locked …` | The database has `enable_external_access = false` or `lock_configuration = true`. Start the editor from a DuckDB without them |
+| A select input has no choices, the catalog lacks an attached database, or paging says "run the notebook first" | Nothing has run in this session yet, or the file was reloaded from disk: opening runs no SQL, the `[notebook]` cell's included. Press **Run all** |
 | The editor shows an old look after updating the extension | The frontend is compiled into the extension. Restart DuckDB, then reload the page |
 | Edits disappeared | They were not saved before the server stopped. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves |
 
@@ -95,6 +97,7 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 | Symptom | Cause and fix |
 |---|---|
 | `notebook_export: PDF needs Chrome, Chromium or Edge…` | Install one, or pass `chrome := '/path/to/browser'` or set `NOTEBOOK_CHROME` |
+| `notebook_export: format 'pdf' runs a browser to print the page, which is not allowed with external access disabled …` | The database has `enable_external_access = false`. Export `html` and print it from a browser |
 | html-wasm export asks for a runtime | Build it once with `sh wasm/build.sh` (needs Node and npm) and pass `wasm_runtime := 'wasm/dist'` |
 | Inputs do nothing in an exported page | Plain HTML exports freeze inputs. Use `interactive := 'precomputed'` or `format := 'html-wasm'` |
 | Some inputs are frozen in a precomputed export | They cannot be enumerated (text, dates, sliders without `step=`, more than 50 values) or did not fit the `budget`. The export's `note` names them |
@@ -105,7 +108,9 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 
 | Symptom | Cause and fix |
 |---|---|
-| `No notebooks are stored in this database: there is no _sketchbook.versions table` | Nothing has been saved in this database. Check you opened the right file, or pass `database :=` |
+| `No notebooks are stored in database "x": there is no _sketchbook.versions table` | Nothing has been saved in that database. Check you opened the right file and `USE`d the right database, or pass `database :=` |
+| `"db:x@abc" has version "abc": a version is a whole number from 1…` | Versions are numbered from 1. Leave `@…` out for the latest |
+| `notebook_cells: the notebook path must not be NULL` | The path argument was `NULL`, often from a column or variable that is not set |
 | `notebook_save: "x.sql" matches version 1 of 'x', but version 2 is newer…` | You are saving an old version over newer work. Check out the latest first, or pass `force := true` |
 | `notebook_checkout: "x.sql" has changes that are not saved in 'x'…` | The file has unsaved work. Save it with `notebook_save`, or pass `force := true` |
 | Saved notebooks vanished | They were saved in an in-memory database. Open a database file |

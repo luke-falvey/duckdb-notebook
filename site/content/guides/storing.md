@@ -50,7 +50,8 @@ pass `force := true` to overwrite anyway. Without `file :=` it only returns the 
 
 ## Another attached database
 
-Both functions take `database :=` to use the `_sketchbook` schema of another attached database:
+Both functions use the current database, the one `USE` chose, and take `database :=` to use the
+`_sketchbook` schema of another attached database:
 
 ```sql
 ATTACH 'reports.duckdb' AS reports;
@@ -71,8 +72,15 @@ The first save creates a `_sketchbook` schema:
 
 A database saved to before the extension was renamed from `notebook` to `sketchbook` has its
 notebooks in a `_notebook` schema instead. They are read from there, and the first save copies their
-history into `_sketchbook`, so version numbers carry on. The `_notebook` schema is left as it was; drop
-it once you no longer need it.
+history into `_sketchbook`, so version numbers carry on. The copy is one transaction: if it fails,
+nothing of `_sketchbook` is left behind, the old history is still read, and the next save tries again.
+The `_notebook` schema is left as it was; drop it once you no longer need it.
+
+## Transactions
+
+`notebook_save` and `notebook_checkout` commit on their own, on a connection of their own: inside
+`BEGIN … ROLLBACK`, a save is not undone. Each save reads the latest version and stores the next one
+in one transaction, so two saves of the same notebook at once never get the same version number.
 
 They are ordinary tables, so you can query history with SQL:
 

@@ -25,8 +25,9 @@ It returns one row: the format, the path written, its size in bytes, and a note.
 | `'sql'` | The expanded script, the same as `notebook_sql`. Runs in any DuckDB with no extension | `<name>.expanded.sql` |
 | `'data'` | A folder with one file per named query cell, Parquet unless `data_format := 'csv'` | `<name>_data/` |
 
-`<name>` is the notebook's file name without its extension (or its stored name for `db:` notebooks),
-next to the notebook. Pass `file :=` to choose the path.
+`<name>` is the notebook's path without its extension, so the file goes next to the notebook. For a
+stored notebook (`db:<name>` or `db:<name>@<version>`) it is `<name>` or `<name>@<version>` in the
+working directory: `db:revenue@3` writes `./revenue@3.html`. Pass `file :=` to choose the path.
 
 The editor's ⚙ menu exports too: pick a format and tick **code** and **output** to choose what to
 include. Exports from the editor use the text in the editor, saved or not.
@@ -117,7 +118,9 @@ in order, at `chrome :=`, the `NOTEBOOK_CHROME` environment variable, the `PATH`
 `google-chrome`, `microsoft-edge`, `chrome`, `chrome-headless-shell` and the like; `chrome.exe` and
 `msedge.exe` on Windows), and then the usual install places: `Program Files` and `AppData\Local` on
 Windows, `/Applications` on macOS. So on most machines with Chrome or Edge installed it needs no
-setting. Handwriting is off in PDFs.
+setting. Handwriting is off in PDFs. Printing starts another program, so it is refused when
+`enable_external_access` is false. On Windows the output path cannot contain `%`, `#` or `?`, which
+the command line that starts the browser cannot pass safely.
 
 ## Markdown
 
@@ -144,7 +147,7 @@ One Parquet file per named query cell, named after the cell. `data_format := 'cs
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `file` | next to the notebook | Output path. For `data`, a folder |
+| `file` | next to the notebook; for `db:` notebooks, in the working directory ([formats](#formats)) | Output path. For `data`, a folder |
 | `format` | `'html'` | `html`, `html-wasm`, `pdf`, `md`, `sql`, `data` |
 | `hide` | `'none'` | `code`, `output`, `all` or `none`, for every cell |
 | `params` | | A struct of variable values: `{region: 'US'}` |

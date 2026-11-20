@@ -115,4 +115,6 @@ a spreadsheet or another pipeline. See [exporting](exporting.md#data).
   relative to DuckDB's working directory, except `attach:` paths, which are relative to the notebook.
 - Notebook paths go through DuckDB's file system, so `s3://` and `https://` paths work once `httpfs`
   is loaded.
-- `notebook_run` holds no connection after it returns: the database closes normally.
+- `notebook_run` holds no connection after it returns: the database closes normally. It also
+  detaches the databases its `attach:` attached. An `attach:` whose name is already attached to a
+  different file, or in the other `read_only` mode, is an error; the same database is used as it is.

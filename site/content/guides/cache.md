@@ -7,12 +7,15 @@ file.
 
 ## What you see when you reopen
 
-Each cell's last result comes back in one of two states:
+Each cell's last result comes back in one of three states:
 
-- **Fresh**: nothing it depends on has changed since it ran. It looks exactly like a result just
-  computed.
-- **Stale**: the cell, something it reads, or a variable it reads has changed since. Its last result
-  is drawn in fainter ink with the note *from an earlier run*, until you run it.
+- **Fresh**: nothing it depends on has changed since it ran, the files it reads included. It looks
+  exactly like a result just computed.
+- **Unverified**: nothing the cache can see has changed, but the cell reads data whose changes it
+  cannot see, such as a table no cell in the notebook creates. The editor shows it like a fresh result;
+  `notebook_cache` lists it as `unverified`.
+- **Stale**: the cell, something it reads, a variable it reads or a file it reads has changed since.
+  Its last result is drawn in fainter ink with the note *from an earlier run*, until you run it.
 
 A cell whose last run failed shows nothing from the cache.
 
@@ -24,14 +27,31 @@ A cell whose last run failed shows nothing from the cache.
 Opening a notebook **runs nothing**. Inputs show the values the results were made with, and the
 session is given those values, but no cell runs until you run one. Until then, changing an input marks
 what reads it stale instead of running it, a brush asks for a run, and a table shows only the page
-that was kept.
+that was kept. Nor does the `[notebook]` cell load its `extensions:` or attach its `attach:` databases:
+the catalog shows the database as it is, and a select input whose choices come `from=` a query offers
+them once something has run. The same holds again after the file is reloaded from disk.
 
 ## What decides fresh or stale
 
 Each kept result records a key: a hash of the cell's kind, name, SQL or text and options (except
 `hide`, `span` and `run`, which only lay it out), the keys of the cells it reads, and the type and value
-of every variable its SQL reads. So editing a cell makes it and everything below it that reads it
-stale; changing an input makes the cells that read it stale; moving a cell around does not.
+of every variable its SQL reads, and the version (size, modified time, ETag) of every file it names by
+its path, in `read_csv('events.csv')`, `read_parquet(['a.parquet', 'b/*.parquet'])` or
+`FROM 'events.csv'`. So editing a cell makes it and everything below it that reads it stale; changing
+an input makes the cells that read it stale; rewriting a CSV file makes the cells that read it stale;
+moving a cell around does not.
+
+The cache cannot see every change. A result is **unverified** rather than fresh when the cell, or a
+cell it reads, reads:
+
+- a table that no cell in the notebook creates (one already in the database, or in a database a cell
+  attaches, like `wh.orders`);
+- a file named by a variable (`read_csv($path)`), or a file whose file system reports neither a
+  modified time nor a version tag;
+- another kind of external data: `delta_scan`, `iceberg_scan`, `postgres_query` and the like.
+
+Run such a cell when its data may have changed. [FORMAT §8](../reference/format.md#8-sidecar-cache)
+has the exact rules.
 
 What a cell shows on top of what it computes counts only for that cell: editing a query's chart spec or
 brushing a chart that filters it changes that cell, not the cells that read it.
@@ -55,7 +75,8 @@ For a notebook file, in a `.duckdb-sketchbook/` folder beside it, one folder per
 The extension writes the `.gitignore`, so the cache is never committed by accident. For a notebook
 stored in a database (`db:<name>`), results go in that database's `_sketchbook.cache` table.
 
-A remote notebook (a URL, an object store) and a notebook not saved yet have no cache. If the
+A notebook that is not on the local file system (a URL, an object store, `hdfs://`) and a notebook not
+saved yet have no cache. If the
 location cannot be written, there is quietly no cache; a run never fails because of it.
 
 Results kept before the extension was renamed from `notebook` to `sketchbook`, in `.duckdb-notebook/`
@@ -93,15 +114,15 @@ editor sees them at once. Use it in a scheduled job:
 FROM notebook_run('reports/weekly.sql', cache := true);
 ```
 
-`notebook_cache(path)` lists what is kept and whether each entry is fresh or stale against the
-notebook as it is now. Exports never use the cache: an export always shows the data as it is now.
+`notebook_cache(path)` lists what is kept and whether each entry is fresh, unverified or stale against
+the notebook and its files as they are now. Exports never use the cache: an export always shows the data as it is now.
 
 | | Reads the cache | Writes the cache |
 |---|---|---|
 | The editor | when a notebook is opened | after every run, redraw and input change |
 | `notebook_run` | never | only with `cache := true` |
 | `notebook_export` | never | never |
-| `notebook_cache(path)` | lists entries, fresh or stale | |
+| `notebook_cache(path)` | lists entries, fresh, unverified or stale | |
 | `notebook_cache_clear(path)` | | removes the notebook's entries |
 
 Teams who want results that can be reviewed in a pull request should commit an
