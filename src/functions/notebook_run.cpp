@@ -5,6 +5,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/settings.hpp"
 #include "notebook/result_cache.hpp"
 #include "notebook/script.hpp"
 #include "notebook/session.hpp"
@@ -94,18 +95,6 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	return std::move(result);
 }
 
-//! Detaches what the run attached once the runner (whose connection may have USEd it) is gone.
-struct DetachOnExit {
-	DatabaseInstance &db;
-	vector<string> names;
-	~DetachOnExit() {
-		try {
-			DetachDatabases(db, names);
-		} catch (...) { // NOLINT: a destructor must not throw
-		}
-	}
-};
-
 unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 	auto state = make_uniq<RunState>();
 	auto &bind_data = input.bind_data->Cast<RunBindData>();
@@ -113,23 +102,32 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 	auto &cells = bind_data.notebook.cells;
 	SessionState session;
 	ResultCache cache;
+	cache.database = CurrentDatabase(context);
 	vector<RanCell> ran;
 	DetachOnExit detach {db, {}};
 	{
 		// A separate connection gives the notebook its own temp views and variables, while sharing
 		// the caller's attached databases.
 		Runner runner(db, session);
-		try {
-			runner.Prepare(bind_data.notebook, bind_data.path, bind_data.params);
-		} catch (...) {
-			detach.names = runner.Attached();
-			throw;
+		PrepareOnce(runner, detach, bind_data.notebook, bind_data.path, bind_data.params);
+		auto limit = Settings::Get<MaxExecutionTimeSetting>(context);
+		if (limit > 0) {
+			// A session setting: the caller's limit applies to each of the notebook's queries too.
+			auto result = runner.Conn().Query("SET SESSION max_execution_time = " + std::to_string(limit));
+			(void)result;
 		}
-		detach.names = runner.Attached();
+		std::map<string, string> versions;
 		if (bind_data.cache) {
 			cache.Load(db, bind_data.path, bind_data.notebook);
+			// Before anything runs: a file that changes while the cells read it leaves them stale.
+			versions = CacheFileVersions(db, bind_data.notebook);
 		}
 		for (auto index : bind_data.order) {
+			// The cells run on the runner's own connection, which the caller's interrupt does not reach: stop
+			// between cells instead (a long cell is bounded by the caller's max_execution_time, below).
+			if (context.IsInterrupted()) {
+				throw InterruptException();
+			}
 			auto &cell = cells[NumericCast<idx_t>(index)];
 			RunnerOptions options;
 			options.params = bind_data.params;
@@ -152,7 +150,7 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 		}
 		if (bind_data.cache) {
 			runner.Save();
-			cache.Record(db, bind_data.path, bind_data.notebook, session, ran);
+			cache.Record(db, bind_data.path, bind_data.notebook, session, ran, &versions);
 		}
 		// The connection is released here, then the databases, before the first row is returned.
 	}

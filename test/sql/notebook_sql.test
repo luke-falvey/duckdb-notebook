@@ -41,3 +41,19 @@ statement error
 SELECT sql FROM notebook_sql('test/notebooks/graph_errors.sql')
 ----
 'later' is defined further down
+
+# A cell that ends in a -- comment: the semicolon after it goes on a line of its own, or the comment would swallow it
+# and the next cell's statement with it
+statement ok
+COPY (SELECT '-- %% daily materialize=table' || chr(10) || 'SELECT 1 AS x -- by day' || chr(10) || chr(10) || '-- %% next' || chr(10) || 'SELECT * FROM daily -- trailing' || chr(10)) TO '__TEST_DIR__/nb_trailing.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+query II
+SELECT contains(sql, 'SELECT 1 AS x -- by day' || chr(10) || ';'), contains(sql, 'SELECT * FROM daily -- trailing' || chr(10) || ';') FROM notebook_sql('__TEST_DIR__/nb_trailing.sql')
+----
+true	true
+
+query II
+SELECT name, status FROM notebook_run('__TEST_DIR__/nb_trailing.sql') ORDER BY idx
+----
+daily	ok
+next	ok

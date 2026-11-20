@@ -1,0 +1,23 @@
+# name: test/sql/notebook_lock.test
+# description: A locked configuration refuses what runs a program or listens on a port, external access or not
+# group: [sql]
+
+require sketchbook
+
+statement ok
+SET lock_configuration = true;
+
+# External access is still on: the lock alone refuses these
+statement error
+SELECT * FROM notebook_export('test/notebooks/basic.sql', format := 'pdf', file := '__TEST_DIR__/nb_lock.pdf', chrome := '/bin/sh')
+----
+format 'pdf' runs a browser to print the page, which is not allowed while the configuration is locked
+
+statement error
+SELECT * FROM notebook_start('test/notebooks/basic.sql', open := false)
+----
+the notebook server cannot be started while the configuration is locked
+
+# Exports that run nothing outside DuckDB still work
+statement ok
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/nb_lock.md', format := 'md')

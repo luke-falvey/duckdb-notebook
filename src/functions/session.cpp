@@ -252,8 +252,27 @@ void Runner::Restore() {
 	// cell reports the problem when it is next run.
 	if (state.store) {
 		for (auto &table : state.tables) {
+			auto stored = notebook::StoredTable(state.store->name, table);
+			auto quoted = "temp.main." + notebook::QuoteIdentifier(table);
+			// The table as it was created (keys, defaults, generated columns), then its rows.
+			auto ddl = state.table_ddl.find(table);
+			if (ddl != state.table_ddl.end() && !ddl->second.first.empty()) {
+				auto created = connection->Query(ddl->second.first);
+				if (!created->HasError()) {
+					created.reset();
+					auto filled = connection->Query("INSERT INTO " + quoted + " (" + ddl->second.second + ") SELECT " +
+					                                ddl->second.second + " FROM " + stored);
+					if (!filled->HasError()) {
+						continue;
+					}
+				}
+				created.reset();
+				auto dropped = connection->Query("DROP TABLE IF EXISTS " + quoted);
+				(void)dropped;
+			}
+			// Rows only: the statement cannot run here (it uses a temp sequence, which is replayed later).
 			auto result = connection->Query("CREATE OR REPLACE TEMP TABLE " + notebook::QuoteIdentifier(table) +
-			                                " AS FROM " + notebook::StoredTable(state.store->name, table));
+			                                " AS FROM " + stored);
 			(void)result;
 		}
 	}
@@ -287,22 +306,27 @@ string Runner::Store() {
 	return string();
 }
 
-void Runner::KeepTempTables(const notebook::Cell &cell) {
+bool Runner::KeepTempTables(const notebook::Cell &cell) {
 	auto store = state.store ? state.store->name : string();
 	if (store.empty()) {
-		return;
+		return true;
 	}
-	auto listed = connection->Query("SELECT table_name FROM duckdb_tables() WHERE database_name = 'temp'");
+	auto listed = connection->Query("SELECT table_name, sql FROM duckdb_tables() WHERE database_name = 'temp'");
 	if (listed->HasError()) {
-		return;
+		return false;
 	}
 	std::set<string> present;
+	std::map<string, string> ddl;
 	while (auto chunk = listed->Fetch()) {
 		for (idx_t r = 0; r < chunk->size(); r++) {
-			present.insert(chunk->GetValue(0, r).ToString());
+			auto name = chunk->GetValue(0, r).ToString();
+			present.insert(name);
+			auto sql = chunk->GetValue(1, r);
+			ddl[name] = sql.IsNull() ? string() : sql.ToString();
 		}
 	}
 	listed.reset();
+	bool kept_all = true;
 	std::set<string> mentioned;
 	for (auto &name : cell.defines) {
 		mentioned.insert(StringUtil::Lower(name));
@@ -317,9 +341,30 @@ void Runner::KeepTempTables(const notebook::Cell &cell) {
 		}
 		auto copied = connection->Query("CREATE OR REPLACE TABLE " + notebook::StoredTable(store, table) +
 		                                " AS FROM temp.main." + notebook::QuoteIdentifier(table));
-		if (!copied->HasError()) {
-			state.tables.insert(table);
+		if (copied->HasError()) {
+			// Not an older copy either: the cell's SQL is replayed for it instead (Run).
+			kept_all = false;
+			copied.reset();
+			auto dropped = connection->Query("DROP TABLE IF EXISTS " + notebook::StoredTable(store, table));
+			(void)dropped;
+			state.tables.erase(table);
+			state.table_ddl.erase(table);
+			continue;
 		}
+		copied.reset();
+		state.tables.insert(table);
+		auto columns = connection->Query("SELECT column_name FROM duckdb_columns() WHERE database_name = 'temp' AND "
+		                                 "table_name = " +
+		                                 notebook::QuoteString(table) + " AND NOT is_generated ORDER BY column_index");
+		string list;
+		if (!columns->HasError()) {
+			while (auto chunk = columns->Fetch()) {
+				for (idx_t r = 0; r < chunk->size(); r++) {
+					list += (list.empty() ? "" : ", ") + notebook::QuoteIdentifier(chunk->GetValue(0, r).ToString());
+				}
+			}
+		}
+		state.table_ddl[table] = {list.empty() ? string() : ddl[table], list};
 	}
 	for (auto it = state.tables.begin(); it != state.tables.end();) {
 		if (present.count(*it)) {
@@ -329,8 +374,10 @@ void Runner::KeepTempTables(const notebook::Cell &cell) {
 		// Dropped by the cell.
 		auto dropped = connection->Query("DROP TABLE IF EXISTS " + notebook::StoredTable(store, *it));
 		(void)dropped;
+		state.table_ddl.erase(*it);
 		it = state.tables.erase(it);
 	}
+	return kept_all;
 }
 
 Runner::~Runner() {
@@ -378,17 +425,20 @@ void Runner::ApplyMetadata(const notebook::Notebook &notebook, const string &sou
 		if (!attach || !attach->IsList()) {
 			continue;
 		}
-		auto slash = source.find_last_of('/');
+		// Both separators: a Windows notebook path (C:\nb\x.sql) has its folder too.
+		auto slash = source.find_last_of("/\\");
 		auto base = notebook::IsStoredSource(source) || slash == string::npos ? string() : source.substr(0, slash + 1);
 		for (auto &entry : attach->items) {
 			auto path = entry.IsMap() ? entry.Str("path") : entry.scalar;
 			if (path.empty()) {
 				continue;
 			}
-			bool relative = path[0] != '/' && path.find(':') == string::npos;
+			auto &fs = FileSystem::GetFileSystem(*connection->context);
+			// `:memory:`, `md:x` and URLs are not relative paths either.
+			bool relative =
+			    !fs.IsPathAbsolute(path) && path[0] != '/' && path[0] != '\\' && path.find(':') == string::npos;
 			auto full = relative ? base + path : path;
 			auto alias = entry.IsMap() ? entry.Str("as") : string();
-			auto &fs = FileSystem::GetFileSystem(*connection->context);
 			if (alias.empty()) {
 				// The name ATTACH would give it.
 				alias = AttachedDatabase::ExtractDatabaseName(full, fs).GetIdentifierName();
@@ -459,6 +509,24 @@ void DetachDatabases(DatabaseInstance &db, const vector<string> &names) {
 		auto result = connection.Query("DETACH DATABASE IF EXISTS " + notebook::QuoteIdentifier(name));
 		(void)result;
 	}
+}
+
+DetachOnExit::~DetachOnExit() {
+	try {
+		DetachDatabases(db, names);
+	} catch (...) { // NOLINT: a destructor must not throw
+	}
+}
+
+void PrepareOnce(Runner &runner, DetachOnExit &detach, const notebook::Notebook &notebook, const string &source,
+                 const std::map<string, Value> &params) {
+	try {
+		runner.Prepare(notebook, source, params);
+	} catch (...) {
+		detach.names = runner.Attached();
+		throw;
+	}
+	detach.names = runner.Attached();
 }
 
 void Runner::InitializeVariables(const notebook::Notebook &notebook, const std::map<string, Value> &params) {
@@ -759,9 +827,10 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 			}
 		}
 	}
+	bool kept = true;
 	if (may_write) {
 		// Even after a failure: the store must hold what the connection has.
-		KeepTempTables(cell);
+		kept = KeepTempTables(cell);
 	}
 	if (!failed && options.charts && !cell.charts.empty()) {
 		// The query ran; a chart that fails is reported without hiding the result.
@@ -771,7 +840,8 @@ CellOutcome Runner::Run(const notebook::Notebook &notebook, const notebook::Cell
 	outcome.status = failed ? "error" : "ok";
 	outcome.error = message;
 	if (!failed || !outcome.charts.IsNull()) {
-		auto replay = notebook::ReplaySql(cell, store);
+		// A temp table that could not be copied into the store is made again by running its SQL.
+		auto replay = notebook::ReplaySql(cell, kept ? store : string());
 		if (replay.empty()) {
 			state.replay.erase(cell.index);
 		} else {

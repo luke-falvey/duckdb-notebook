@@ -177,6 +177,10 @@ bool IsCreateTempTable(const std::string &statement) {
 		if (word == "TABLE") {
 			return true;
 		}
+		// What follows AS is the query: CREATE TEMP VIEW v AS TABLE t makes a view.
+		if (word == "AS" || word == "VIEW") {
+			return false;
+		}
 	}
 	return false;
 }
@@ -285,8 +289,9 @@ std::string ChartFrom(const Cell &cell) {
 		return cell.name;
 	}
 	auto statements = SplitStatements(cell.sql);
-	// On lines of their own, so a trailing -- comment cannot swallow the parenthesis.
-	return "(\n" + statements.back().text + "\n)";
+	// On a line of its own (a statement that ends in a -- comment already ends its line), for the parenthesis.
+	auto &text = statements.back().text;
+	return "(\n" + text + (EndsInLineComment(text) || text.back() == '\n' ? ")" : "\n)");
 }
 
 std::vector<std::string> UndefinedVariables(const Notebook &notebook) {
@@ -363,6 +368,26 @@ std::string ExpandNotebook(const Notebook &notebook, const std::string &source_n
 		script += " (line " + std::to_string(cell.start_line) + ")\n" + sql;
 	}
 	return script;
+}
+
+std::vector<double> InputSteps(double lo, double hi, double step, size_t limit) {
+	std::vector<double> values;
+	if (!std::isfinite(lo) || !std::isfinite(hi) || !std::isfinite(step) || step <= 0 || hi < lo) {
+		return values;
+	}
+	// A thousandth of a step for rounding: 0 to 1 in steps of 0.1 has 11 values.
+	double count = std::floor((hi - lo) / step + 1.0 / 1000) + 1;
+	if (!(count >= 1) || count > static_cast<double>(limit)) {
+		return values;
+	}
+	for (size_t i = 0; i < static_cast<size_t>(count); i++) {
+		auto value = lo + static_cast<double>(i) * step;
+		if (!values.empty() && !(value > values.back())) {
+			return std::vector<double>();
+		}
+		values.push_back(value);
+	}
+	return values;
 }
 
 } // namespace notebook

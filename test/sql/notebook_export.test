@@ -161,3 +161,52 @@ DROP TABLE gallery_sales
 
 statement ok
 DROP TABLE gallery_tasks
+
+# ---- Exports leave nothing attached ----
+
+# What the [notebook] cell attaches is detached again, as notebook_run does
+statement ok
+FROM notebook_export('test/notebooks/attach_mode.sql', file := '__TEST_DIR__/attach_mode.html')
+
+statement ok
+FROM notebook_export('test/notebooks/attach_mode.sql', file := '__TEST_DIR__/attach_mode.md', format := 'md')
+
+statement ok
+FROM notebook_export('test/notebooks/attach_mode.sql', file := '__TEST_DIR__/attach_mode_data', format := 'data')
+
+query I
+SELECT count(*) FROM duckdb_databases() WHERE database_name = 'nb_meta_mode'
+----
+0
+
+# html-wasm writes the data the notebook reads into a database of its own; one it cannot copy fails the export, which
+# leaves that database neither attached nor on disk, and the next export works
+statement ok
+CREATE TABLE nb_wasm_src AS SELECT '1x' AS s
+
+statement ok
+CREATE VIEW nb_wasm_bad AS SELECT s::INTEGER AS x FROM nb_wasm_src
+
+statement ok
+COPY (SELECT '-- %% shown' || chr(10) || 'SELECT count(*) AS n FROM nb_wasm_src, nb_wasm_bad;' || chr(10)) TO '__TEST_DIR__/nb_wasm_bad.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement error
+FROM notebook_export('__TEST_DIR__/nb_wasm_bad.sql', file := '__TEST_DIR__/x.html', format := 'html-wasm', wasm_runtime := '__TEST_DIR__/nope')
+----
+html-wasm export: Conversion Error
+
+query I
+SELECT count(*) FROM duckdb_databases() WHERE database_name LIKE '__notebook_export%'
+----
+0
+
+statement error
+FROM notebook_export('test/notebooks/basic.sql', file := '__TEST_DIR__/x.html', format := 'html-wasm', wasm_runtime := '__TEST_DIR__/nope')
+----
+not found. Build the runtime with wasm/build.sh
+
+statement ok
+DROP VIEW nb_wasm_bad
+
+statement ok
+DROP TABLE nb_wasm_src

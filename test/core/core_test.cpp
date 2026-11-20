@@ -9,6 +9,7 @@
 #include "notebook/script.hpp"
 #include "notebook/sql_lexer.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <algorithm>
 #include <cctype>
@@ -37,6 +38,36 @@ static void TestSplitStatements() {
 	CHECK(s[1].line == 2);
 	CHECK(SplitStatements("/* only /* nested */ comment */").empty());
 	CHECK(SplitStatements("SELECT 'it''s; fine'").size() == 1);
+	// A statement ending in a line comment ends its line, so a `;` or `)` put after it is code.
+	auto commented = SplitStatements("SELECT 1 AS x -- by day\n\n");
+	CHECK(commented.size() == 1 && commented[0].text == "SELECT 1 AS x -- by day\n");
+	CHECK(EndsInLineComment("SELECT 1 -- x"));
+	CHECK(!EndsInLineComment("SELECT 1 -- x\n"));
+	CHECK(!EndsInLineComment("SELECT '--'"));
+	CHECK(!EndsInLineComment("SELECT 1 /* -- */"));
+	Cell materialized;
+	materialized.kind = CellKind::SQL;
+	materialized.name = "daily";
+	materialized.is_query = true;
+	materialized.options.push_back({"materialize", "table"});
+	materialized.sql = "SELECT 1 AS x -- by day";
+	CHECK(SplitStatements(CellSql(materialized)).size() == 1);
+	CHECK(SplitStatements(CellSql(materialized, "store")).size() == 2);
+	CHECK(SplitStatements(
+	          ExpandNotebook(ParseNotebook("-- %% a\nSELECT 1 -- one\n\n-- %% b\nSELECT 2 -- two\n"), "nb.sql"))
+	          .size() == 2);
+}
+
+static void TestInputSteps() {
+	CHECK(InputSteps(0, 1, 0.1, 51).size() == 11);
+	CHECK(InputSteps(0, 50, 1, 51).size() == 51);
+	CHECK(InputSteps(0, 51, 1, 51).empty());
+	CHECK(InputSteps(5, 5, 1, 51).size() == 1);
+	CHECK(InputSteps(1, 0, 1, 51).empty());
+	CHECK(InputSteps(0, 1, 0, 51).empty() && InputSteps(0, 1, -1, 51).empty());
+	CHECK(InputSteps(0, 1, std::nan(""), 51).empty() && InputSteps(0, INFINITY, 1, 51).empty());
+	// Adjacent doubles near 1e17 are 16 apart: a step of 1 cannot reach the next value
+	CHECK(InputSteps(1e17, 1e17 + 16, 1, 51).empty());
 }
 
 static void TestParenPairs() {
@@ -165,6 +196,8 @@ static void TestSessionStore() {
 	CHECK(IsCreateTempTable("-- x\ncreate or replace temp table t AS SELECT 1"));
 	CHECK(IsCreateTempTable("CREATE TEMPORARY TABLE IF NOT EXISTS t (x INT)"));
 	CHECK(!IsCreateTempTable("CREATE TEMP VIEW v AS SELECT 1") && !IsCreateTempTable("CREATE TABLE t (x INT)"));
+	CHECK(!IsCreateTempTable("CREATE TEMP VIEW v AS TABLE t") &&
+	      !IsCreateTempTable("CREATE OR REPLACE TEMP VIEW v AS TABLE t"));
 	CHECK(!IsCreateTempTable("CREATE TEMP MACRO table_of(x) AS x"));
 	CHECK(MayWrite(nb.cells[1]) && !MayWrite(nb.cells[2]) && !MayWrite(nb.cells[3]));
 	CHECK(MayWrite(ParseNotebook("-- %%\nUPDATE t SET x = 1;\n").cells[0]));
@@ -921,6 +954,7 @@ static void TestWidthSetting() {
 
 int main() {
 	TestSplitStatements();
+	TestInputSteps();
 	TestParenPairs();
 	TestIsQueryStatement();
 	TestReferencedVariables();

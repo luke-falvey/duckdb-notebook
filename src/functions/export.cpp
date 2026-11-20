@@ -1,5 +1,7 @@
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
@@ -16,7 +18,6 @@
 #include "notebook/yaml.hpp"
 
 #include <cstdlib>
-#include <random>
 #include <set>
 
 // notebook_export (docs/DESIGN.md section 7). Every format starts from one run of the notebook in
@@ -185,10 +186,11 @@ Json CellJson(const notebook::Cell &cell) {
 
 Json BuildPayload(DatabaseInstance &db, const string &text, const string &source, const ExportOptions &options) {
 	SessionState state;
+	DetachOnExit detach {db, {}};
 	Runner runner(db, state);
 	auto notebook = AnalyzeText(*runner.Conn().context, text);
 	ThrowIfInvalid(notebook, source);
-	runner.Prepare(notebook, source, options.params);
+	PrepareOnce(runner, detach, notebook, source, options.params);
 	RunnerOptions run;
 	run.page_rows = options.page_rows;
 	run.rows_at_least = true;
@@ -251,10 +253,11 @@ namespace {
 //! DuckDB-WASM can read, and the SQL the page runs to rebuild the notebook's views.
 Json WasmPayload(DatabaseInstance &db, const string &text, const string &source, const ExportOptions &options) {
 	SessionState state;
+	DetachOnExit detach {db, {}};
 	Runner runner(db, state);
 	auto &connection = runner.Conn();
 	auto notebook = AnalyzeText(*connection.context, text);
-	runner.Prepare(notebook, source, options.params);
+	PrepareOnce(runner, detach, notebook, source, options.params);
 	RunnerOptions run;
 	run.params = options.params;
 	runner.RunAll(notebook, run);
@@ -274,15 +277,38 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 			}
 		}
 	}
-	std::random_device random;
-	auto path = TempDirectory() + "/notebook_export_" + std::to_string(random()) + ".duckdb";
+	auto id = StringUtil::Replace(UUID::ToString(UUID::GenerateRandomUUID()), "-", "");
+	auto &fs = FileSystem::GetFileSystem(db);
+	auto path = fs.JoinPath(TempDirectory(), "notebook_export_" + id + ".duckdb");
+	// ATTACH is the whole database's: a name of this export's own, so that two exports never meet, and detached and
+	// removed however the export ends.
+	auto alias = "__notebook_export_" + id;
+	auto target = notebook::QuoteIdentifier(alias);
+	struct DropExport {
+		DatabaseInstance &db;
+		string alias;
+		string path;
+		bool attached = false;
+		~DropExport() {
+			try {
+				if (attached) {
+					DetachDatabases(db, {alias});
+				}
+				auto &fs = FileSystem::GetFileSystem(db);
+				fs.TryRemoveFile(path);
+				fs.TryRemoveFile(path + ".wal");
+			} catch (...) { // NOLINT: a destructor must not throw
+			}
+		}
+	} drop {db, alias, path};
 	auto check = [&](const string &sql) {
 		auto result = connection.Query(sql);
 		if (result->HasError()) {
 			throw InvalidInputException("html-wasm export: %s", result->GetError());
 		}
 	};
-	check("ATTACH " + notebook::QuoteString(path) + " AS __notebook_export (STORAGE_VERSION 'v1.5.0')");
+	check("ATTACH " + notebook::QuoteString(path) + " AS " + target + " (STORAGE_VERSION 'v1.5.0')");
+	drop.attached = true;
 	auto exported = Json::Array();
 	for (auto &name : relations) {
 		auto probe = connection.Query("SELECT * FROM " + notebook::RelationSql(name) + " LIMIT 0");
@@ -292,15 +318,15 @@ Json WasmPayload(DatabaseInstance &db, const string &text, const string &source,
 		probe.reset();
 		auto dot = name.find('.');
 		if (dot != string::npos) {
-			check("CREATE SCHEMA IF NOT EXISTS __notebook_export." + notebook::QuoteIdentifier(name.substr(0, dot)));
+			check("CREATE SCHEMA IF NOT EXISTS " + target + "." + notebook::QuoteIdentifier(name.substr(0, dot)));
 		}
-		check("CREATE TABLE __notebook_export." + notebook::RelationSql(name) + " AS SELECT * FROM " +
+		check("CREATE TABLE " + target + "." + notebook::RelationSql(name) + " AS SELECT * FROM " +
 		      notebook::RelationSql(name));
 		exported.Push(Json::String(name));
 	}
-	check("DETACH __notebook_export");
+	check("DETACH " + target);
+	drop.attached = false;
 	auto bytes = ReadNotebookText(db, path);
-	FileSystem::GetFileSystem(db).RemoveFile(path);
 
 	auto setup = Json::Array();
 	for (auto &name : notebook::UndefinedVariables(notebook)) {
@@ -481,10 +507,11 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 	if (options.interactive == "precomputed") {
 		// Run once per combination of input values, within the budget; the page swaps between them.
 		SessionState state;
+		DetachOnExit detach {db, {}};
 		Runner runner(db, state);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		// Choices may come from cells (select from=cell.column), which must run first.
-		runner.Prepare(notebook, source, options.params);
+		PrepareOnce(runner, detach, notebook, source, options.params);
 		RunnerOptions run_all;
 		run_all.params = options.params;
 		runner.RunAll(notebook, run_all);
@@ -503,10 +530,8 @@ string ExportDocument(DatabaseInstance &db, const string &text, const string &so
 			} else if ((cell.widget == "slider" || cell.widget == "number") && !cell.Option("step").empty()) {
 				double lo = std::atof(cell.Option("min", "0").c_str()), hi = std::atof(cell.Option("max", "0").c_str());
 				double step = std::atof(cell.Option("step").c_str());
-				if (step > 0 && hi >= lo && (hi - lo) / step <= 50) {
-					for (double v = lo; v <= hi + step / 1000; v += step) {
-						values.push_back(Value::DOUBLE(v));
-					}
+				for (auto v : notebook::InputSteps(lo, hi, step, 51)) {
+					values.push_back(Value::DOUBLE(v));
 				}
 			}
 			if (values.empty() || combinations * values.size() > options.budget) {
@@ -716,6 +741,12 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 		throw PermissionException("notebook_export: format 'pdf' runs a browser to print the page, which is not "
 		                          "allowed with external access disabled (enable_external_access is false)");
 	}
+	// The program is whatever chrome := names: with the configuration locked, SQL may not choose one to run, as it
+	// may not start the server (notebook_start).
+	if (options.format == "pdf" && Settings::Get<LockConfigurationSetting>(context)) {
+		throw PermissionException("notebook_export: format 'pdf' runs a browser to print the page, which is not "
+		                          "allowed while the configuration is locked (lock_configuration is set)");
+	}
 	if (options.hide == "none") {
 		options.hide.clear();
 	}
@@ -771,10 +802,11 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 			fs.CreateDirectory(bind.to);
 		}
 		SessionState session;
+		DetachOnExit detach {db, {}};
 		Runner runner(db, session);
 		auto notebook = AnalyzeText(*runner.Conn().context, text);
 		ThrowIfInvalid(notebook, bind.source);
-		runner.Prepare(notebook, bind.source, bind.options.params);
+		PrepareOnce(runner, detach, notebook, bind.source, bind.options.params);
 		RunnerOptions run;
 		run.params = bind.options.params;
 		runner.RunAll(notebook, run);
@@ -812,8 +844,11 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		// the normal width whatever the notebook or the reader chose (paper has its own width).
 		html = notebook::ReplaceAll(html, "<html lang=\"en\">",
 		                            "<html lang=\"en\" data-ink=\"off\" data-width-fixed=\"normal\">");
-		auto html_path = bind.to + ".html";
+		// A name of its own, so that no file of the reader's (report.html beside report.pdf) is overwritten.
+		auto html_path = bind.to + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".html";
 		WriteTextFile(context, html_path, html);
+		// An older PDF must not pass for this one if the browser writes nothing.
+		fs.TryRemoveFile(bind.to);
 		auto command = ShellQuote(browser) +
 		               " --headless --disable-gpu --no-sandbox --no-pdf-header-footer --virtual-time-budget=10000 "
 		               "--print-to-pdf=" +
