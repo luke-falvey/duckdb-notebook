@@ -11,6 +11,7 @@
 #include "notebook/document.hpp"
 #include "notebook/functions.hpp"
 #include "notebook/graph.hpp"
+#include "notebook/cache.hpp"
 #include "notebook/result_cache.hpp"
 #include "notebook/script.hpp"
 #include "notebook/session.hpp"
@@ -44,6 +45,9 @@ thread_local bool in_server_thread = false;
 
 struct Session {
 	string source;
+	//! The database a stored notebook (`db:`) is read from and saved to, and whose `_sketchbook.cache` holds its
+	//! cache: the current database (the one USE chose) of the notebook_start call before the session was opened.
+	string database;
 	string text;
 	SessionState state;
 	//! Serialises work on the session: one request runs its cells at a time.
@@ -82,6 +86,9 @@ struct ServerState {
 	std::atomic<bool> stopping {false};
 	std::mutex sessions_lock;
 	std::map<string, shared_ptr<Session>> sessions;
+	//! The current database of the latest notebook_start: where sessions opened from now on keep stored notebooks.
+	//! Guarded by sessions_lock.
+	string database;
 };
 
 string RandomToken() {
@@ -231,6 +238,7 @@ void LoadKept(DatabaseInstance &db, Session &session) {
 		session.state.variables.erase(name);
 	}
 	session.cache = ResultCache();
+	session.cache.database = session.database;
 	session.cache.Load(db, session.source, notebook);
 	session.restored = session.cache.RestoreVariables(db, notebook, session.state);
 	for (auto &entry : shown.Entries()) {
@@ -252,11 +260,12 @@ shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	auto db = Database(state);
 	auto session = make_shared_ptr<Session>();
 	session->source = source;
+	session->database = state.database;
 	// The session outlives its requests: materialize=table results and temp tables are kept, not recomputed.
 	session->state.keep_tables = true;
 	bool exists = notebook::IsStoredSource(source) || FileSystem::GetFileSystem(*db).FileExists(source);
 	if (exists) {
-		session->text = ReadNotebookText(*db, source);
+		session->text = ReadNotebookText(*db, session->database, source);
 		LoadKept(*db, *session);
 	} else {
 		// A new notebook: it becomes a file when first saved.
@@ -415,7 +424,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 				            auto name = notebook::ParseStoredSource(session->source).name;
 				            bool saved;
 				            auto version =
-				                SaveNotebookVersion(connection, string(), name, session->text,
+				                SaveNotebookVersion(connection, session->database, name, session->text,
 				                                    "saved from the notebook UI", true, saved, note, session->source);
 				            note = saved ? "Saved as version " + std::to_string(version) : "No changes to save";
 			            } else {
@@ -446,6 +455,9 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            RunningGuard running(*session, runner);
 		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
 		            runner.Prepare(notebook, session->source, {});
+		            // Before anything runs: a file that changes while the cells read it leaves them stale.
+		            auto versions = notebook::CacheEnabled(notebook) ? CacheFileVersions(*db, notebook)
+		                                                             : std::map<string, string>();
 		            RunnerOptions options;
 		            options.charts = true;
 		            options.mark_values = true;
@@ -503,7 +515,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            }
 		            session->ran = true;
 		            runner.Save();
-		            session->cache.Record(*db, session->source, notebook, session->state, ran);
+		            session->cache.Record(*db, session->source, notebook, session->state, ran, &versions);
 		            SendJson(res, Json::Object().Set("results", results).Set("cells", CellsJson(notebook)));
 	            }));
 
@@ -727,9 +739,16 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           for (auto &file : FileSystem::GetFileSystem(*db).Glob("*.sql")) {
 			           files.Push(Json::String(file.path));
 		           }
+		           string database;
+		           {
+			           std::lock_guard<std::mutex> guard(state.sessions_lock);
+			           database = state.database;
+		           }
 		           Connection connection(*db);
-		           auto result = connection.Query("SELECT DISTINCT name FROM " + StorageSchema(connection, string()) +
-		                                          ".versions ORDER BY name");
+		           auto result =
+		               connection.Query("SELECT DISTINCT name FROM " +
+		                                (database.empty() ? string() : notebook::QuoteIdentifier(database) + ".") +
+		                                StorageSchema(connection, database) + ".versions ORDER BY name");
 		           if (!result->HasError()) {
 			           while (auto chunk = result->Fetch()) {
 				           for (idx_t r = 0; r < chunk->size(); r++) {
@@ -817,7 +836,9 @@ void Routes(shared_ptr<ServerState> &shared) {
 				           sink.write("retry: 1000\n\n", 13);
 			           }
 			           std::this_thread::sleep_for(std::chrono::milliseconds(500));
-			           if (notebook::IsStoredSource(source)) {
+			           // A stored notebook changes only through this server; a remote one would be fetched whole
+			           // twice a second for as long as the page is open.
+			           if (notebook::IsStoredSource(source) || !notebook::IsLocalPath(source)) {
 				           sink.write(": ping\n\n", 8);
 				           return true;
 			           }
@@ -875,6 +896,15 @@ public:
 
 	bool Running() const {
 		return state && !state->stopping;
+	}
+
+	//! Where sessions opened from now on read and save stored notebooks (Session::database).
+	void SetDatabase(const string &database) {
+		std::lock_guard<std::mutex> guard(lock);
+		if (state) {
+			std::lock_guard<std::mutex> sessions_guard(state->sessions_lock);
+			state->database = database;
+		}
 	}
 
 	void Start(int port) {
@@ -970,7 +1000,9 @@ unique_ptr<FunctionData> StartBind(ClientContext &context, TableFunctionBindInpu
 	}
 	auto result = make_uniq<StartBindData>();
 	if (!input.inputs.empty() && !input.inputs[0].IsNull()) {
-		result->source = input.inputs[0].GetValue<string>();
+		// Checked as every other function checks it: an empty path or a bad db: version is an error now, not in the
+		// browser later.
+		result->source = SourceArgument(input, 0, "notebook_start");
 	}
 	for (auto &entry : input.named_parameters) {
 		auto key = entry.first.GetIdentifierName();
@@ -1019,6 +1051,7 @@ void StartScan(ClientContext &context, TableFunctionInput &data, DataChunk &outp
 	auto &bind = data.bind_data->Cast<StartBindData>();
 	auto server = ObjectCache::GetObjectCache(context).GetOrCreate<NotebookServer>(CACHE_KEY, context.db);
 	server->Start(bind.port);
+	server->SetDatabase(CurrentDatabase(context));
 	auto url = server->Url(bind.source);
 	if (bind.open) {
 		OpenBrowser(url);

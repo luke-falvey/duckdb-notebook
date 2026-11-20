@@ -583,6 +583,77 @@ def test_metadata_first(browser, work):
         stop(shell)
 
 
+def test_session_store(browser, work):
+    # Round 2 of the review: what the server's session store keeps between requests is the table the cells made,
+    # keys, defaults and later ALTERs included; and a db: notebook opened after USE is read, saved and cached in
+    # that database.
+    folder = os.path.join(work, "session_store")
+    os.makedirs(folder)
+    notebook = os.path.join(folder, "store.sql")
+    with open(notebook, "w") as f:
+        f.write(
+            "-- %% make\nCREATE TEMP TABLE seen(id INTEGER PRIMARY KEY, v VARCHAR DEFAULT 'x');\n\n"
+            "-- %% grow\nALTER TABLE seen ADD COLUMN z INTEGER;\n\n"
+            "-- %% add\nINSERT INTO seen (id) VALUES (1) ON CONFLICT DO NOTHING;\n\n"
+            "-- %% look\nSELECT count(*) AS n, min(v) AS v, count(z) AS z FROM seen;\n"
+        )
+    shell, url = serve(folder, notebook)
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        # One request per cell: each is a new connection, which gets the tables back from the store.
+        results = page.evaluate(
+            """async () => {
+          const out = [];
+          for (const cell of [0, 1, 2, 2, 3]) {
+            const r = await App.api('POST', '/api/run', {text: App.text(), cells: [cell]});
+            out.push(r.results.map(x => x.status + (x.error ? ': ' + x.error : '')).join());
+          }
+          const last = await App.api('POST', '/api/run', {text: App.text(), cells: [3]});
+          out.push(JSON.stringify(last.results[0].data.rows));
+          return out;
+        }"""
+        )
+        check(
+            results[:5] == ["ok"] * 5 and results[5] == '[[1,"x",0]]',
+            f"temp tables keep their keys, defaults and ALTERs across requests ({results})",
+        )
+        page.close()
+    finally:
+        stop(shell)
+
+    team = os.path.join(folder, "team.duckdb")
+    setup = (
+        f"ATTACH '{team}' AS team; USE team; "
+        f"SELECT count(*) FROM notebook_save('{notebook}', name := 'store');"
+    )
+    # The first line the shell prints is the count from notebook_save; the URL follows it.
+    shell, _ = serve(folder, "db:store", setup=setup)
+    url = shell.stdout.readline().strip()
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        saved = page.evaluate(
+            """async () => {
+          await App.api('POST', '/api/run', {text: App.text(), cells: null});
+          const r = await App.api('POST', '/api/notebook', {text: App.text() + '\\n-- saved again\\n', save: true});
+          return r.note;
+        }"""
+        )
+        check(saved == "Saved as version 2", f"a db: notebook opened after USE is saved in that database ({saved})")
+        page.close()
+    finally:
+        stop(shell)
+    stored = sql(
+        team,
+        "SELECT count(*) FROM _sketchbook.versions WHERE name = 'store'",
+        "SELECT count(*) > 0 FROM _sketchbook.cache WHERE name = 'store'",
+    ).split()
+    check(stored == ["2", "true"], f"its versions and its cache are in the database USE chose ({stored})")
+
+
 def test_cache_written_later(browser, work):
     # B24: a session reads the store again until it has run, so results a scheduled
     # notebook_run(cache := true) writes after the editor opened appear on the next reload.
@@ -3211,6 +3282,7 @@ def main():
             test_cache_written_later(browser, work)
             test_cache_redraw_stale(browser, work)
             test_cache_variables_reloaded(browser, work)
+            test_session_store(browser, work)
             test_input_widget(browser, work)
             test_brush_listeners(browser, work)
             # The headless shell prints PDFs too and needs fewer system libraries than full Chrome.

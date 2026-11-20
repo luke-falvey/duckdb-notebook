@@ -79,6 +79,8 @@ jobs:
   loadable-test:
     name: Loadable extension and server API
     needs: duckdb-stable-build
+    # Also when another platform's build failed: what this checks was built (the download fails if not).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +99,8 @@ jobs:
   wasm-test:
     name: Extension in DuckDB-WASM
     needs: duckdb-stable-build
+    # Also when another platform's build failed: what this checks was built (the download fails if not).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

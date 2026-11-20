@@ -54,6 +54,8 @@ string ReadNotebookText(ClientContext &context, const string &source);
 //! Same, with an explicit file system and database, for code that has no ClientContext. A stored notebook is
 //! read from the database's default database.
 string ReadNotebookText(DatabaseInstance &db, const string &source);
+//! Same, reading a stored notebook from `database` (the default database when empty).
+string ReadNotebookText(DatabaseInstance &db, const string &database, const string &source);
 
 //! Writes (creating or replacing) a file through DuckDB's file system, atomically: into a uniquely named file
 //! beside it, synced and closed, then moved over it. Where the file system cannot move files it is written in place.
