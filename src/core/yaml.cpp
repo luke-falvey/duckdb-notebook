@@ -85,10 +85,29 @@ std::string Unquote(const std::string &s, bool &quoted) {
 	return s;
 }
 
+//! How deeply blocks and flow collections may nest. Parsing recurses once per level, so a crafted
+//! [notebook] cell or chart spec must not be able to nest without bound and overflow the stack.
+constexpr int YAML_MAX_DEPTH = 256;
+
 struct Parser {
 	std::vector<Line> lines;
 	size_t pos = 0;
 	std::string error;
+	int depth = 0;
+
+	//! Counts one level of nesting while it is parsed.
+	struct Level {
+		explicit Level(Parser &parser) : parser(parser) {
+			parser.depth++;
+		}
+		~Level() {
+			parser.depth--;
+		}
+		bool TooDeep() const {
+			return parser.depth > YAML_MAX_DEPTH;
+		}
+		Parser &parser;
+	};
 
 	void Fail(const std::string &message, int line) {
 		if (error.empty()) {
@@ -103,6 +122,12 @@ struct Parser {
 		}
 		Yaml node;
 		if (i < s.size() && (s[i] == '{' || s[i] == '[')) {
+			Level level(*this);
+			if (level.TooDeep()) {
+				Fail("nested more than " + std::to_string(YAML_MAX_DEPTH) + " levels deep", line);
+				i = s.size();
+				return node;
+			}
 			bool is_map = s[i] == '{';
 			char close = is_map ? '}' : ']';
 			node.type = is_map ? Yaml::Type::MAP : Yaml::Type::LIST;
@@ -203,6 +228,12 @@ struct Parser {
 	Yaml Block(int indent) {
 		Yaml node;
 		if (pos >= lines.size()) {
+			return node;
+		}
+		Level level(*this);
+		if (level.TooDeep()) {
+			Fail("nested more than " + std::to_string(YAML_MAX_DEPTH) + " levels deep", lines[pos].number);
+			pos = lines.size();
 			return node;
 		}
 		auto &first = lines[pos];

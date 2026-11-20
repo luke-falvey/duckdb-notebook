@@ -1,0 +1,65 @@
+# name: test/sql/notebook_arguments.test
+# description: NULL and empty notebook paths are refused when the query is bound, with the function's name
+# group: [sql]
+
+require sketchbook
+
+statement error
+FROM notebook_cells(NULL)
+----
+notebook_cells: the notebook path must not be NULL
+
+statement error
+FROM notebook_sql(NULL)
+----
+notebook_sql: the notebook path must not be NULL
+
+statement error
+FROM notebook_run(NULL)
+----
+notebook_run: the notebook path must not be NULL
+
+statement error
+FROM notebook_export(NULL, file := '__TEST_DIR__/null_export.html')
+----
+notebook_export: the notebook path must not be NULL
+
+statement error
+FROM notebook_cache(NULL)
+----
+notebook_cache: the notebook path must not be NULL
+
+statement error
+FROM notebook_cache_clear(NULL)
+----
+notebook_cache_clear: the notebook path must not be NULL
+
+statement error
+FROM notebook_save(NULL)
+----
+notebook_save: the notebook path must not be NULL
+
+statement error
+FROM notebook_checkout(NULL)
+----
+notebook_checkout: the notebook name must not be NULL
+
+statement error
+FROM notebook_chart_query(NULL, 'range(3)')
+----
+notebook_chart_query: the chart spec must not be NULL
+
+statement error
+FROM notebook_chart_query('mark: bar', NULL)
+----
+notebook_chart_query: the relation to chart (from) must not be NULL
+
+statement error
+FROM notebook_cells('')
+----
+notebook_cells: the notebook path is empty
+
+statement error
+FROM notebook_checkout('')
+----
+notebook_checkout: the notebook name is empty

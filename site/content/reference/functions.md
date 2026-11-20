@@ -7,8 +7,15 @@ In DuckDB-WASM, `notebook_start`, `notebook_stop` and PDF export are not availab
 cache keeps nothing; the rest works ([running in the browser](../guides/browser.md)).
 
 Every argument that takes a notebook path also accepts `db:<name>` (the latest stored version) or
-`db:<name>@<version>`, for [notebooks stored in the database](../guides/storing.md). Paths are read
-through DuckDB's file system, so remote paths work when `httpfs` is loaded.
+`db:<name>@<version>`, for [notebooks stored in the database](../guides/storing.md), read from the
+current database (the one `USE` chose). A version is a whole number from 1; anything else after the `@`
+(`db:x@abc`, `db:x@0`) is an error, as is a `NULL` path. Paths are read through DuckDB's file system,
+so remote paths work when `httpfs` is loaded.
+
+Files the functions write (`notebook_export`, `notebook_checkout`, saving in the editor) are replaced
+whole: the text goes to a temporary file beside the target, which is then moved over it, so a failed
+write leaves the old file as it was. On a file system that cannot move files (some object stores) the
+target is written directly.
 
 | Function | Does |
 |---|---|
@@ -18,7 +25,7 @@ through DuckDB's file system, so remote paths work when `httpfs` is loaded.
 | [`notebook_export(path)`](#notebook_export) | Writes HTML, html-wasm, PDF, Markdown, SQL or data files |
 | [`notebook_chart_query(spec, from)`](#notebook_chart_query) | The SQL and render description a chart spec compiles to |
 | [`notebook_peek(sql, cursor)`](#notebook_peek) | The CTE or sub-query at a cursor position, and the query that selects from it |
-| [`notebook_cache(path)`](#notebook_cache) | Lists the results the editor keeps for a notebook, fresh or stale |
+| [`notebook_cache(path)`](#notebook_cache) | Lists the results the editor keeps for a notebook, fresh, unverified or stale |
 | [`notebook_cache_clear(path)`](#notebook_cache_clear) | Removes them |
 | [`notebook_save(path)`](#notebook_save) | Stores a version of a notebook in the database |
 | [`notebook_checkout(name)`](#notebook_checkout) | Reads a stored version back, optionally to a file |
@@ -69,7 +76,9 @@ notebook_run(path VARCHAR, params := STRUCT, cache := BOOLEAN)
 
 Runs every cell, charts included, in a connection of its own, and returns one row per cell in the
 order the cells ran. Tables the notebook creates persist; its views and variables do not reach the
-caller's session. See [running headless](../guides/headless.md).
+caller's session. The whole notebook runs before the first row is returned, so a `LIMIT` or `WHERE`
+around the call does not change how many cells run. Databases its `[notebook]` cell attached are
+detached when it returns. See [running headless](../guides/headless.md).
 
 | Argument | Meaning |
 |---|---|
@@ -117,7 +126,7 @@ Runs the notebook and writes it in another form. Returns one row: `format`, `pat
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
-| `file` | `VARCHAR` | next to the notebook | Output path; a folder for `data` |
+| `file` | `VARCHAR` | the notebook's path with the format's extension (`.html`, `.md`, `.expanded.sql`, `.pdf`, `_data/`); for `db:<name>[@version]`, `<name>[@version]` and that extension in the working directory | Output path; a folder for `data` |
 | `format` | `VARCHAR` | `'html'` | `html`, `html-wasm`, `pdf`, `md`, `sql` or `data` |
 | `hide` | `VARCHAR` | `'none'` | `code`, `output`, `all` or `none`, applied to every cell |
 | `params` | `STRUCT` | | Variable values, as for `notebook_run` |
@@ -125,7 +134,7 @@ Runs the notebook and writes it in another form. Returns one row: `format`, `pat
 | `budget` | `UBIGINT` | `16` | Most runs `interactive := 'precomputed'` may make |
 | `page_rows` | `UBIGINT` | `100` | Result rows kept per query cell (at least the cell's `rows=`) |
 | `wasm_runtime` | `VARCHAR` | `$NOTEBOOK_WASM_RUNTIME` | Folder holding the DuckDB-WASM runtime, for `html-wasm` |
-| `chrome` | `VARCHAR` | `$NOTEBOOK_CHROME`, the `PATH`, then the usual install places | Browser that prints PDFs |
+| `chrome` | `VARCHAR` | `$NOTEBOOK_CHROME`, the `PATH`, then the usual install places | Browser that prints PDFs. `pdf` is refused when `enable_external_access` is false |
 | `data_format` | `VARCHAR` | `'parquet'` | `parquet` or `csv`, for `data` |
 
 See [exporting and sharing](../guides/exporting.md).
@@ -187,7 +196,7 @@ the notebook as it is now. Runs nothing.
 | `cell` | `VARCHAR` | The name the result is kept under: the cell's name, or `@` and a hash of an unnamed cell's text |
 | `idx` | `INTEGER` | The cell's position |
 | `kind` | `VARCHAR` | The cell's kind |
-| `status` | `VARCHAR` | `fresh`, or `stale` when the cell, something it reads or a variable it reads changed since |
+| `status` | `VARCHAR` | `fresh`; `stale` when the cell, something it reads, a variable it reads or a file it reads changed since; `unverified` when nothing did but the cell reads data the cache cannot check, such as a table no cell creates ([keeping results](../guides/cache.md#what-decides-fresh-or-stale)) |
 | `saved_at` | `TIMESTAMP` | When the result was kept, UTC |
 | `bytes` | `BIGINT` | Size of the kept result |
 
@@ -231,6 +240,11 @@ schema on first use.
 | `saved` | `BOOLEAN` | Whether a new version was stored |
 | `note` | `VARCHAR` | `first version`, `new version`, or `unchanged since version N` |
 
+`notebook_save` and `notebook_checkout` work on a connection of their own and commit straight away:
+they are not part of the caller's transaction, and a `ROLLBACK` does not undo a save. A save reads the
+latest version and stores the next one in one transaction, so concurrent saves of the same notebook
+get different version numbers.
+
 ## notebook_checkout
 
 ```sql
@@ -240,7 +254,7 @@ notebook_checkout(name VARCHAR, file := …, version := …, database := …, fo
 | Argument | Default | Meaning |
 |---|---|---|
 | `file` | | Write the text to this path. Without it, the text is only returned |
-| `version` | the latest | The version to read |
+| `version` | the latest | The version to read: 1 or more |
 | `database` | the current database | The attached database to read from |
 | `force` | `false` | Overwrite a file whose text is not a stored version of this notebook |
 
@@ -261,12 +275,13 @@ notebook_start(port := …, open := …)
 Starts the notebook server inside this DuckDB process and returns the editor's URL. The server
 listens on 127.0.0.1 only and every request must carry the random token in the URL. It stops when
 the database closes or on `notebook_stop()`. Calling it again while it runs keeps the same server
-and returns a URL for the new notebook.
+and returns a URL for the new notebook. It is refused when `enable_external_access` is false or
+`lock_configuration` is set: the server runs the SQL its page sends and opens a browser.
 
 | Argument | Default | Meaning |
 |---|---|---|
 | `path` | | The notebook to open. Without it, the editor opens with a notebook picker |
-| `port` | any free port | The port to listen on |
+| `port` | any free port | The port to listen on, 1 to 65535 (`0` is any free port) |
 | `open` | `true` | Open the URL in the default browser (on Linux only with a display) |
 
 | Column | Type | Meaning |

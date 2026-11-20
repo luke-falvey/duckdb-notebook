@@ -1,6 +1,6 @@
 # name: test/sql/chart_references.test
 # description: rules and bands on charts: aggregates are computed by DuckDB when the chart runs
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

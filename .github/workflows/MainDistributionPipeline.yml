@@ -20,14 +20,16 @@ jobs:
       - run: make -f core.Makefile frontend_check
 
   # DuckDB's shared extension pipeline: builds the extension on every native platform DuckDB
-  # distributes for and runs test/sql where the pipeline can (it does not run tests on linux_arm64
-  # or osx_amd64). The community extension repository requires all of them.
+  # distributes for and runs test/sql where the pipeline can: its test phase (extension-ci-tools,
+  # scripts/ci_phase.py) skips linux_arm64 and osx_amd64 and runs everywhere else, the musl builds,
+  # windows_arm64 and MinGW included. The community extension repository requires all of them.
   # It builds the three WebAssembly targets too (docs/DESIGN.md section 21): wasm_eh and wasm_threads are
   # what DuckDB-WASM 2.0 loads (its base and threads bundles); wasm_mvp has no 2.0 bundle to load into
   # but the community repository builds it. The pipeline does not test them; wasm-test below does.
-  #   opt_in_archs: the platforms DuckDB's matrix leaves out unless asked for.
-  #   reduced_ci_mode: off, so pull requests build every platform too, not only a sample, and one
-  #   failing platform does not cancel the others.
+  #   Pull requests run the pipeline's reduced matrix (linux_amd64, windows_amd64, wasm_eh) and opt into
+  #   nothing else, to keep them cheap. Pushes to main and manual runs (workflow_dispatch, which also
+  #   works on a branch) build every platform, with one failing platform not cancelling the others.
+  #   opt_in_archs: the platforms DuckDB's matrix leaves out unless asked for (opt-ins override reduced mode).
   duckdb-stable-build:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
@@ -35,12 +37,13 @@ jobs:
       duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
       extension_name: sketchbook
-      opt_in_archs: "linux_amd64_musl;linux_arm64_musl;osx_amd64;windows_arm64"
-      reduced_ci_mode: disabled
+      opt_in_archs: ${{ github.event_name != 'pull_request' && 'linux_amd64_musl;linux_arm64_musl;osx_amd64;windows_arm64' || '' }}
+      reduced_ci_mode: ${{ github.event_name == 'pull_request' && 'enabled' || 'disabled' }}
 
   # The size of each platform's extension, raw and as distributed (gzip), in the run's summary.
   # A loadable extension links all of DuckDB statically, so most of it is DuckDB
-  # (docs/DESIGN.md, "Building for every platform").
+  # (docs/DESIGN.md, "Building for every platform"). Fails if no extension was found, so a renamed
+  # artifact cannot leave the table empty unnoticed.
   extension-sizes:
     name: Extension sizes
     needs: duckdb-stable-build
@@ -49,18 +52,45 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: notebook-*-extension-*
+          pattern: sketchbook-*-extension-*
           path: artifacts
       - name: Report sizes
         run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          files=$(find artifacts -name 'sketchbook.duckdb_extension*' -type f | sort)
+          if [ -z "$files" ]; then
+            echo "::error::No sketchbook-*-extension-* artifact holds a sketchbook.duckdb_extension"
+            exit 1
+          fi
           {
             echo "| Platform | Extension (bytes) | gzip -9 (bytes) |"
             echo "|---|--:|--:|"
-            find artifacts -name 'sketchbook.duckdb_extension*' -type f | sort | while read -r file; do
-              platform=$(basename "$(dirname "$file")" | sed 's/^notebook-[^-]*-extension-//')
+            while read -r file; do
+              platform=$(basename "$(dirname "$file")" | sed 's/^sketchbook-[^-]*-extension-//')
               echo "| $platform | $(stat -c %s "$file") | $(gzip -9c "$file" | wc -c) |"
-            done
+            done <<< "$files"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # test/sql runs with the extension linked into DuckDB's test runner, so the shipped file is never
+  # loaded there. This loads the stripped linux_amd64 build into a stock DuckDB (the Python package)
+  # and runs the notebook functions, then checks the editor server's HTTP API and its token, Host and
+  # Origin gates (test/ci/test_loadable.py).
+  loadable-test:
+    name: Loadable extension and server API
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sketchbook-v2.0.0-extension-linux_amd64
+          path: artifacts/linux_amd64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install duckdb==2.0.0
+      - run: python test/ci/test_loadable.py artifacts/linux_amd64/sketchbook.duckdb_extension
 
   # The pipeline does not test wasm builds, so this loads the wasm_eh and wasm_threads artifacts
   # into DuckDB-WASM 2.0 in headless Chromium and runs the notebook functions (test/wasm).
@@ -74,7 +104,9 @@ jobs:
         with:
           name: sketchbook-v2.0.0-extension-wasm_eh
           path: build/wasm_eh/extension/sketchbook
+      # Pull requests build wasm_eh only (the reduced matrix above).
       - uses: actions/download-artifact@v4
+        if: ${{ github.event_name != 'pull_request' }}
         with:
           name: sketchbook-v2.0.0-extension-wasm_threads
           path: build/wasm_threads/extension/sketchbook
@@ -87,4 +119,4 @@ jobs:
           npm ci --no-audit --no-fund
           npm install --no-save --no-audit --no-fund playwright@1.63.0
           npx playwright install --with-deps chromium
-      - run: node test/wasm/run.cjs wasm_eh wasm_threads
+      - run: node test/wasm/run.cjs wasm_eh ${{ github.event_name != 'pull_request' && 'wasm_threads' || '' }}

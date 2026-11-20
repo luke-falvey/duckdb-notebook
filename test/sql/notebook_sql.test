@@ -1,6 +1,6 @@
 # name: test/sql/notebook_sql.test
 # description: notebook_sql expands a notebook into a plain SQL script
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

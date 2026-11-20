@@ -103,6 +103,9 @@ var NB = (function () {
     if (v === null || v === undefined) return 'NULL';
     if (typeof v === 'object') return JSON.stringify(v);
     if (typeof v === 'number') return NB.formatNumber(v, fmt);
+    // DECIMALs arrive as exact text, and Infinity/NaN and integers past 2^53 as text too: shown as
+    // they are unless the cell asks for a format.
+    if (fmt && typeof v === 'string' && NB.isNumericType(type)) return NB.formatNumber(v, fmt);
     return String(v);
   };
 
@@ -268,7 +271,7 @@ var NB = (function () {
       var tipRow = opts.tips ? opts.tips[serverPaging ? i : offset + i] : null;
       var linkRow = opts.links ? opts.links[serverPaging ? i : offset + i] : null;
       return '<tr><td class="nb-rownum">' + (offset + i + 1) + '</td>' + r.map(function (v, k) {
-        var col = cols[k], numeric = typeof v === 'number', style = '', text = NB.formatValue(v, col.type, (opts.formats || {})[col.name]);
+        var col = cols[k], numeric = typeof v === 'number' || (typeof v === 'string' && NB.isNumericType(col.type)), style = '', text = NB.formatValue(v, col.type, (opts.formats || {})[col.name]);
         var tip = tipRow && tipRow[k], parts = linkRow && linkRow[k];
         var inner = parts ? parts.map(function (p) {
           return p.href ? '<a class="nb-link" href="' + NB.esc(p.href) + '" target="_blank" rel="noopener noreferrer">' + NB.esc(p.text) + '</a>' : NB.esc(p.text);

@@ -3,6 +3,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/settings.hpp"
 #include "miniz_wrapper.hpp"
 #include "notebook/chart.hpp"
 #include "notebook/document.hpp"
@@ -565,16 +566,17 @@ struct ExportBindData : public TableFunctionData {
 	ExportOptions options;
 };
 
-bool IsFile(const string &path) {
-	if (FILE *f = fopen(path.c_str(), "r")) {
-		fclose(f);
-		return true;
+//! True if `path` is a file, asked through the database's file system so its access rules apply.
+bool IsFile(FileSystem &fs, const string &path) {
+	try {
+		return fs.FileExists(path);
+	} catch (std::exception &) {
+		return false;
 	}
-	return false;
 }
 
 //! A Chrome, Chromium or Edge for printing PDFs: chrome :=, NOTEBOOK_CHROME, PATH, then the usual install places.
-string FindBrowser(const string &requested) {
+string FindBrowser(FileSystem &fs, const string &requested) {
 	if (!requested.empty()) {
 		return requested;
 	}
@@ -597,7 +599,7 @@ string FindBrowser(const string &requested) {
 		auto dir = dirs.substr(start, end == string::npos ? string::npos : end - start);
 		for (auto name : names) {
 			auto candidate = dir + "/" + name;
-			if (!dir.empty() && IsFile(candidate)) {
+			if (!dir.empty() && IsFile(fs, candidate)) {
 				return candidate;
 			}
 		}
@@ -622,7 +624,7 @@ string FindBrowser(const string &requested) {
 	}
 #endif
 	for (auto &candidate : installed) {
-		if (IsFile(candidate)) {
+		if (IsFile(fs, candidate)) {
 			return candidate;
 		}
 	}
@@ -631,8 +633,23 @@ string FindBrowser(const string &requested) {
 
 //! Quotes one argument for the shell std::system runs: sh, or cmd.exe on Windows.
 string ShellQuote(const string &text) {
+	if (text.find('\n') != string::npos || text.find('\r') != string::npos || text.find('\0') != string::npos) {
+		throw InvalidInputException("notebook_export: a path for the PDF printer cannot contain a line break");
+	}
 #ifdef _WIN32
-	return "\"" + text + "\"";
+	// Inside double quotes cmd.exe still ends the quote at '"' and expands %NAME%, and neither can be escaped
+	// there. Windows file names cannot contain '"'; one with '%' (or '#' or '?', which the file URL encodes
+	// with '%') cannot be printed this way.
+	if (text.find('"') != string::npos || text.find('%') != string::npos) {
+		throw InvalidInputException("notebook_export: a path for the PDF printer cannot contain '\"' or '%%' on "
+		                            "Windows: %s",
+		                            text);
+	}
+	// A backslash before the closing quote would escape it for the program reading its arguments.
+	auto quoted = text;
+	auto slashes = quoted.size() - MinValue<idx_t>(quoted.size(), quoted.find_last_not_of('\\') + 1);
+	quoted.append(slashes, '\\');
+	return "\"" + quoted + "\"";
 #else
 	return "'" + notebook::ReplaceAll(text, "'", "'\\''") + "'";
 #endif
@@ -642,6 +659,10 @@ string ShellQuote(const string &text) {
 string FileUrl(FileSystem &fs, const string &path) {
 	auto absolute = fs.IsPathAbsolute(path) ? path : fs.JoinPath(FileSystem::GetWorkingDirectory(), path);
 	absolute = notebook::ReplaceAll(absolute, "\\", "/");
+	// What a URL would read as an escape, a query or a fragment is part of the file name.
+	absolute = notebook::ReplaceAll(absolute, "%", "%25");
+	absolute = notebook::ReplaceAll(absolute, "#", "%23");
+	absolute = notebook::ReplaceAll(absolute, "?", "%3F");
 	// Windows drive paths (C:/x) need a third slash: file:///C:/x.
 	return string(absolute.compare(0, 1, "/") == 0 ? "file://" : "file:///") + absolute;
 }
@@ -649,7 +670,7 @@ string FileUrl(FileSystem &fs, const string &path) {
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
                               vector<Identifier> &names) {
 	auto result = make_uniq<ExportBindData>();
-	result->source = input.inputs[0].GetValue<string>();
+	result->source = SourceArgument(input, 0, "notebook_export");
 	for (auto &entry : input.named_parameters) {
 		auto key = entry.first.GetIdentifierName();
 		auto &value = entry.second;
@@ -689,6 +710,12 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	if (!problem.empty()) {
 		throw InvalidInputException("notebook_export: %s", problem);
 	}
+	// A PDF is printed by running a browser (chrome :=, NOTEBOOK_CHROME or one found on the PATH): a program
+	// outside DuckDB, which a database that may not reach outside itself must not start.
+	if (options.format == "pdf" && !Settings::Get<EnableExternalAccessSetting>(context)) {
+		throw PermissionException("notebook_export: format 'pdf' runs a browser to print the page, which is not "
+		                          "allowed with external access disabled (enable_external_access is false)");
+	}
 	if (options.hide == "none") {
 		options.hide.clear();
 	}
@@ -704,7 +731,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	}
 	auto &format = options.format;
 	if (result->to.empty()) {
-		auto stem = result->source.compare(0, 3, "db:") == 0 ? result->source.substr(3) : result->source;
+		auto stem = notebook::IsStoredSource(result->source) ? result->source.substr(3) : result->source;
 		auto dot = stem.rfind('.');
 		auto slash = stem.find_last_of("/\\");
 		if (dot != string::npos && (slash == string::npos || dot > slash)) {
@@ -773,7 +800,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		                              "sketchbook extension cannot do (it was built without host features, as for "
 		                              "DuckDB-WASM). Export html and print it from the browser instead");
 #endif
-		auto browser = FindBrowser(bind.options.chrome);
+		auto browser = FindBrowser(fs, bind.options.chrome);
 		if (browser.empty()) {
 			throw InvalidInputException("notebook_export: PDF needs Chrome, Chromium or Edge. Pass chrome := "
 			                            "'/path/to/browser' or set NOTEBOOK_CHROME, or export html and print it");

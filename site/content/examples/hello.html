@@ -211,6 +211,12 @@ table.nb-grid tbody tr:hover td { background: rgba(255, 236, 153, .45); }
 .nb-colname { font-size: 17px; } .nb-coltype { color: var(--nb-faint); font-size: 12px; font-family: var(--nb-mono); }
 td.nb-num { text-align: right; font-variant-numeric: tabular-nums; }
 td.nb-null { color: var(--nb-faint); }
+td.nb-has-tip { cursor: help; text-decoration: underline dotted var(--nb-muted); text-underline-offset: 3px; }
+table.nb-grid a.nb-link { color: #1971c2; text-decoration: none; }
+table.nb-grid a.nb-link:hover { text-decoration: underline; }
+/* Exports: a link looks like the text around it, underlined, in every state. */
+.nb-viewer table.nb-grid a.nb-link, .nb-viewer table.nb-grid a.nb-link:visited, .nb-viewer table.nb-grid a.nb-link:hover,
+.nb-viewer table.nb-grid a.nb-link:active { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .nb-rownum { color: var(--nb-faint); text-align: right !important; font-size: 13px; width: 1%; }
 .nb-grid-footer { display: flex; gap: 8px; align-items: center; color: var(--nb-muted); font-size: 14px; padding: 6px 2px 0; flex-wrap: wrap; }
 .nb-grid-footer .nb-spacer { flex: 1; }
@@ -343,7 +349,7 @@ button.nb-width-toggle { font-size: 15px; margin-left: 14px; }
 .nb-tip-key::after { content: ':'; }
 .nb-hover-dot { pointer-events: none; }
 .nb-hover-band { pointer-events: none; fill: var(--nb-mark); opacity: .35; }
-@media print { .nb-tip { display: none !important; } }
+@media print { .nb-tip { display: none !important; } td.nb-has-tip { text-decoration: none; } table.nb-grid a.nb-link { color: inherit; } }
 
 /* Peek under the pen (app-peek.js): the first rows of the CTE or sub-query under the caret, on a paper
    note fixed beside the code. Its box is drawn by Sketch.outline; it takes no part in the layout. */
@@ -2375,6 +2381,9 @@ var NB = (function () {
     if (v === null || v === undefined) return 'NULL';
     if (typeof v === 'object') return JSON.stringify(v);
     if (typeof v === 'number') return NB.formatNumber(v, fmt);
+    // DECIMALs arrive as exact text, and Infinity/NaN and integers past 2^53 as text too: shown as
+    // they are unless the cell asks for a format.
+    if (fmt && typeof v === 'string' && NB.isNumericType(type)) return NB.formatNumber(v, fmt);
     return String(v);
   };
 
@@ -2508,6 +2517,8 @@ var NB = (function () {
   //   opts.onPageSize(size): the reader picked a page size (the editor writes it to the cell)
   //   opts.offset: first row of data.rows (server paging)
   //   opts.formats {col: fmt}, opts.bars [col], opts.heat [col]
+  //   opts.tips: [row][column] hover text for a cell (null for none), indexed like data.rows
+  //   opts.links: [row][column] [{text, href}] the cell's text as links (href null: plain text), or null
   NB.table = function (container, data, opts) {
     opts = opts || {};
     container.innerHTML = '';
@@ -2535,14 +2546,21 @@ var NB = (function () {
     });
     var heat = NB.ramp('blues');
     var body = '<tbody>' + rows.map(function (r, i) {
+      var tipRow = opts.tips ? opts.tips[serverPaging ? i : offset + i] : null;
+      var linkRow = opts.links ? opts.links[serverPaging ? i : offset + i] : null;
       return '<tr><td class="nb-rownum">' + (offset + i + 1) + '</td>' + r.map(function (v, k) {
-        var col = cols[k], numeric = typeof v === 'number', style = '', text = NB.formatValue(v, col.type, (opts.formats || {})[col.name]);
+        var col = cols[k], numeric = typeof v === 'number' || (typeof v === 'string' && NB.isNumericType(col.type)), style = '', text = NB.formatValue(v, col.type, (opts.formats || {})[col.name]);
+        var tip = tipRow && tipRow[k], parts = linkRow && linkRow[k];
+        var inner = parts ? parts.map(function (p) {
+          return p.href ? '<a class="nb-link" href="' + NB.esc(p.href) + '" target="_blank" rel="noopener noreferrer">' + NB.esc(p.text) + '</a>' : NB.esc(p.text);
+        }).join(', ') : NB.esc(text);
         if (ranges[col.name] && numeric) {
           var range = ranges[col.name], t = (v - range[0]) / ((range[1] - range[0]) || 1);
           if ((opts.heat || []).indexOf(col.name) >= 0) style = 'background:' + heat(t * 0.8);
           else style = 'background:linear-gradient(90deg, var(--nb-bar) ' + Math.round(t * 100) + '%, transparent ' + Math.round(t * 100) + '%)';
         }
-        return '<td class="' + (v === null ? 'nb-null' : numeric ? 'nb-num' : '') + '" style="' + style + '">' + NB.esc(text) + '</td>';
+        var cls = (v === null ? 'nb-null' : numeric ? 'nb-num' : '') + (tip ? ' nb-has-tip' : '');
+        return '<td class="' + cls + '" style="' + style + '"' + (tip ? ' data-tip="' + NB.esc(tip) + '"' : '') + '>' + inner + '</td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody>';
     table.innerHTML = thead + '</thead>' + body;
@@ -4012,11 +4030,80 @@ var NB = (function () {
     cap.textContent = spec.label || '';
   };
 
+  // tip: {column: source or [sources]}: hovering a cell of the column shows the sources' values in its row,
+  // one 'source: value' line each.
+  // link: {column: url column or 'https://...{column}...'}: the cell's value links to the row's URL, or to the
+  // template with each {column} filled in from the row (URL-encoded). A list value links each item, and
+  // {column} of the linked column itself is the item. Only http(s) and mailto URLs are linked.
+  // Columns that only feed tips and links are left out of the table unless columns: lists them.
+  function placeholders(template) {
+    var names = [];
+    template.replace(/\{([^{}]+)\}/g, function (m, name) { names.push(name); return m; });
+    return names;
+  }
+  function tableView(ds, spec, formats) {
+    var tip = spec.tip, link = spec.link;
+    var isMap = function (m) { return m && typeof m === 'object' && !Array.isArray(m); };
+    if (!ds || !ds.columns || (!isMap(tip) && !isMap(link))) return { data: ds };
+    tip = isMap(tip) ? tip : {}; link = isMap(link) ? link : {};
+    var key = JSON.stringify([tip, link, spec.columns || null]);
+    if (ds.__nbView && ds.__nbView.key === key) return ds.__nbView;
+    var names = ds.columns.map(function (c) { return c.name; }), listed = [].concat(spec.columns || []);
+    var at = function (name) { return names.indexOf(name); };
+    var sources = {}, hidden = {};
+    var feeds = function (name) { if (at(name) >= 0 && listed.indexOf(name) < 0 && !tip.hasOwnProperty(name) && !link.hasOwnProperty(name)) hidden[name] = true; };
+    Object.keys(tip).forEach(function (shown) {
+      sources[shown] = [].concat(tip[shown]).map(String).filter(function (s) { return at(s) >= 0; });
+      sources[shown].forEach(feeds);
+    });
+    Object.keys(link).forEach(function (shown) {
+      var target = String(link[shown]);
+      (target.indexOf('{') >= 0 ? placeholders(target) : [target]).forEach(feeds);
+    });
+    var keep = names.map(function (n, k) { return hidden[n] ? -1 : k; }).filter(function (k) { return k >= 0; });
+    var safe = function (href) { return /^(https?:|mailto:)/i.test(href) ? href : null; };
+    var linksOf = function (r, shown) {
+      var target = link.hasOwnProperty(shown) ? String(link[shown]) : null, v = r[at(shown)];
+      if (target === null || v == null) return null;
+      var items = Array.isArray(v) ? v : [v], template = target.indexOf('{') >= 0, urls = template ? null : r[at(target)];
+      return items.map(function (item, i) {
+        var href = null;
+        if (template) {
+          var missing = false;
+          href = target.replace(/\{([^{}]+)\}/g, function (m, name) {
+            var x = name === shown ? item : (at(name) >= 0 ? r[at(name)] : null);
+            if (x == null || x === '') { missing = true; return ''; }
+            return encodeURIComponent(Array.isArray(x) ? x.join(',') : String(x));
+          });
+          if (missing) href = null;
+        } else if (urls != null) {
+          href = Array.isArray(urls) ? (Array.isArray(v) && urls.length === items.length ? urls[i] : null) : urls;
+        }
+        return { text: NB.formatValue(item, Array.isArray(v) ? '' : ds.columns[at(shown)].type, formats[shown]), href: href == null ? null : safe(String(href)) };
+      });
+    };
+    var tips = [], links = [];
+    (ds.rows || []).forEach(function (r) {
+      tips.push(keep.map(function (k) {
+        var lines = (sources[names[k]] || []).map(function (s) {
+          var v = r[at(s)];
+          return v == null || v === '' ? null : s + ': ' + NB.formatValue(v, ds.columns[at(s)].type, formats[s]);
+        }).filter(function (line) { return line; });
+        return lines.length ? lines.join('\n') : null;
+      }));
+      links.push(keep.map(function (k) { return linksOf(r, names[k]); }));
+    });
+    var view = { columns: keep.map(function (k) { return ds.columns[k]; }), rows: (ds.rows || []).map(function (r) { return keep.map(function (k) { return r[k]; }); }), total: ds.total };
+    ds.__nbView = { key: key, data: view, tips: tips, links: links };
+    return ds.__nbView;
+  }
+
   T.table = function (c, render, data, opts, chart) {
     var spec = render.spec || {}, formats = spec.format || {}, bars = [], heat = [];
     if (spec.bar) bars = [].concat(spec.bar);
     if (spec.heat) heat = [].concat(spec.heat);
-    NB.table(c, chart.datasets[0], { formats: formats, bars: bars, heat: heat });
+    var shown = tableView(chart.datasets[0], spec, formats);
+    NB.table(c, shown.data, { formats: formats, bars: bars, heat: heat, tips: shown.tips, links: shown.links });
   };
 
   T.pivot = function (c, render, data, opts, chart) {

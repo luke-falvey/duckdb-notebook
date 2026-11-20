@@ -19,7 +19,11 @@
 // A run never reads the result cache: it exists to compute from the data as it is now. With
 // cache := true it writes it, so the next person to open the notebook sees these results at once.
 //
-// The Runner's connection is created here and destroyed when the scan finishes. Never
+// The whole notebook runs before the first row is returned, so a LIMIT or a filter above the call
+// cannot decide how many cells run, and cache := true is always written. Databases the [notebook]
+// cell attached are detached when the run is over.
+//
+// The Runner's connection is created here and destroyed when the run finishes. Never
 // store a Connection (or anything else that owns the DatabaseInstance) in state that
 // outlives a query: it would keep the database open after the user closes it, so the
 // file stays locked and is not checkpointed.
@@ -38,19 +42,16 @@ struct RunBindData : public TableFunctionData {
 };
 
 struct RunState : public GlobalTableFunctionState {
-	SessionState session;
-	unique_ptr<Runner> runner;
-	//! Position in RunBindData::order.
+	//! Per cell, in run order: the cell index and what running it gave.
+	vector<std::pair<int, CellOutcome>> outcomes;
+	//! Position in outcomes.
 	idx_t next = 0;
-	//! With cache := true: the notebook's cache and what this run adds to it.
-	ResultCache cache;
-	vector<RanCell> ran;
 };
 
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
                               vector<Identifier> &names) {
 	auto result = make_uniq<RunBindData>();
-	result->path = input.inputs[0].GetValue<string>();
+	result->path = SourceArgument(input, 0, "notebook_run");
 	result->notebook = ReadNotebook(context, result->path);
 	ThrowIfInvalid(result->notebook, result->path);
 	result->order = notebook::RunOrder(result->notebook);
@@ -93,15 +94,67 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	return std::move(result);
 }
 
+//! Detaches what the run attached once the runner (whose connection may have USEd it) is gone.
+struct DetachOnExit {
+	DatabaseInstance &db;
+	vector<string> names;
+	~DetachOnExit() {
+		try {
+			DetachDatabases(db, names);
+		} catch (...) { // NOLINT: a destructor must not throw
+		}
+	}
+};
+
 unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 	auto state = make_uniq<RunState>();
-	// A separate connection gives the notebook its own temp views and variables, while sharing
-	// the caller's attached databases.
-	state->runner = make_uniq<Runner>(DatabaseInstance::GetDatabase(context), state->session);
 	auto &bind_data = input.bind_data->Cast<RunBindData>();
-	state->runner->Prepare(bind_data.notebook, bind_data.path, bind_data.params);
-	if (bind_data.cache) {
-		state->cache.Load(DatabaseInstance::GetDatabase(context), bind_data.path, bind_data.notebook);
+	auto &db = DatabaseInstance::GetDatabase(context);
+	auto &cells = bind_data.notebook.cells;
+	SessionState session;
+	ResultCache cache;
+	vector<RanCell> ran;
+	DetachOnExit detach {db, {}};
+	{
+		// A separate connection gives the notebook its own temp views and variables, while sharing
+		// the caller's attached databases.
+		Runner runner(db, session);
+		try {
+			runner.Prepare(bind_data.notebook, bind_data.path, bind_data.params);
+		} catch (...) {
+			detach.names = runner.Attached();
+			throw;
+		}
+		detach.names = runner.Attached();
+		if (bind_data.cache) {
+			cache.Load(db, bind_data.path, bind_data.notebook);
+		}
+		for (auto index : bind_data.order) {
+			auto &cell = cells[NumericCast<idx_t>(index)];
+			RunnerOptions options;
+			options.params = bind_data.params;
+			// Chart cells compile and query their data, so a broken spec fails the run.
+			options.charts = true;
+			CellOutcome outcome;
+			if (bind_data.cache) {
+				// The result the editor would be sent: a page of rows, chart data, marked {{ }} values.
+				options.page_rows = 100;
+				options.mark_values = true;
+				auto result = notebook::Json::Object();
+				outcome = RunForEditor(runner, bind_data.notebook, cell, options, result);
+				outcome.output =
+				    StringUtil::Replace(StringUtil::Replace(outcome.output, VALUE_OPEN, ""), VALUE_CLOSE, "");
+				ran.push_back(RanFromResult(cell.index, outcome.status, result));
+			} else {
+				outcome = runner.Run(bind_data.notebook, cell, options);
+			}
+			state->outcomes.emplace_back(cell.index, std::move(outcome));
+		}
+		if (bind_data.cache) {
+			runner.Save();
+			cache.Record(db, bind_data.path, bind_data.notebook, session, ran);
+		}
+		// The connection is released here, then the databases, before the first row is returned.
 	}
 	return std::move(state);
 }
@@ -110,43 +163,21 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = data.bind_data->Cast<RunBindData>();
 	auto &cells = bind_data.notebook.cells;
 	auto &state = data.global_state->Cast<RunState>();
-	if (state.next >= bind_data.order.size()) {
-		if (state.runner && bind_data.cache) {
-			state.runner->Save();
-			state.cache.Record(DatabaseInstance::GetDatabase(context), bind_data.path, bind_data.notebook,
-			                   state.session, state.ran);
-		}
-		// Release the connection as soon as the last cell has been reported.
-		state.runner.reset();
-		return;
+	idx_t count = 0;
+	while (state.next < state.outcomes.size() && count < STANDARD_VECTOR_SIZE) {
+		auto &entry = state.outcomes[state.next++];
+		auto &cell = cells[NumericCast<idx_t>(entry.first)];
+		auto &outcome = entry.second;
+		output.data[0].Append(Value::INTEGER(cell.index));
+		output.data[1].Append(Value(notebook::CellKindName(cell.kind)));
+		output.data[2].Append(cell.name.empty() ? Value(LogicalType::VARCHAR) : Value(cell.name));
+		output.data[3].Append(Value(outcome.status));
+		output.data[4].Append(outcome.status == "error" ? Value(outcome.error) : Value(LogicalType::VARCHAR));
+		output.data[5].Append(outcome.row_count >= 0 ? Value::BIGINT(outcome.row_count) : Value(LogicalType::BIGINT));
+		output.data[6].Append(outcome.elapsed_ms >= 0 ? Value::DOUBLE(outcome.elapsed_ms) : Value(LogicalType::DOUBLE));
+		output.data[7].Append(outcome.has_output ? Value(outcome.output) : Value(LogicalType::VARCHAR));
+		count++;
 	}
-	// One cell per call, so a caller reading the result incrementally sees progress.
-	auto &cell = cells[NumericCast<idx_t>(bind_data.order[state.next++])];
-	RunnerOptions options;
-	options.params = bind_data.params;
-	// Chart cells compile and query their data, so a broken spec fails the run.
-	options.charts = true;
-	CellOutcome outcome;
-	if (bind_data.cache) {
-		// The result the editor would be sent: a page of rows, chart data, marked {{ }} values.
-		options.page_rows = 100;
-		options.mark_values = true;
-		auto result = notebook::Json::Object();
-		outcome = RunForEditor(*state.runner, bind_data.notebook, cell, options, result);
-		outcome.output = StringUtil::Replace(StringUtil::Replace(outcome.output, VALUE_OPEN, ""), VALUE_CLOSE, "");
-		state.ran.push_back(RanFromResult(cell.index, outcome.status, result));
-	} else {
-		outcome = state.runner->Run(bind_data.notebook, cell, options);
-	}
-
-	output.data[0].Append(Value::INTEGER(cell.index));
-	output.data[1].Append(Value(notebook::CellKindName(cell.kind)));
-	output.data[2].Append(cell.name.empty() ? Value(LogicalType::VARCHAR) : Value(cell.name));
-	output.data[3].Append(Value(outcome.status));
-	output.data[4].Append(outcome.status == "error" ? Value(outcome.error) : Value(LogicalType::VARCHAR));
-	output.data[5].Append(outcome.row_count >= 0 ? Value::BIGINT(outcome.row_count) : Value(LogicalType::BIGINT));
-	output.data[6].Append(outcome.elapsed_ms >= 0 ? Value::DOUBLE(outcome.elapsed_ms) : Value(LogicalType::DOUBLE));
-	output.data[7].Append(outcome.has_output ? Value(outcome.output) : Value(LogicalType::VARCHAR));
 }
 
 } // namespace

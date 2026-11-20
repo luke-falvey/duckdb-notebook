@@ -5,6 +5,7 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "notebook/format.hpp"
 #include "notebook/graph.hpp"
+#include "notebook/source.hpp"
 
 // The SQL surface of the extension. One Register function per SQL function, each in
 // its own file under src/functions. To add a function: declare it here, implement it
@@ -39,13 +40,23 @@ unique_ptr<GlobalTableFunctionState> OnceInit(ClientContext &context, TableFunct
 string NamedString(TableFunctionBindInput &input, const char *key);
 bool NamedBool(TableFunctionBindInput &input, const char *key);
 
+//! Argument `index` as a string; throws "<function>: <what> must not be NULL" when it is NULL.
+string StringArgument(TableFunctionBindInput &input, idx_t index, const char *function, const char *what);
+//! A notebook source argument, checked at bind: not NULL or empty, and a well-formed `db:<name>[@<version>]`
+//! (notebook/source.hpp) when it names a stored notebook. Every function taking a notebook path reads it with this.
+string SourceArgument(TableFunctionBindInput &input, idx_t index, const char *function);
+//! The caller's current database (the one `USE` chose); empty if there is none.
+string CurrentDatabase(ClientContext &context);
+
 //! The text of a notebook source: a file path, or `db:<name>` / `db:<name>@<version>` for a notebook
-//! stored in the database. Throws if it cannot be read.
+//! stored in the caller's current database. Throws if it cannot be read.
 string ReadNotebookText(ClientContext &context, const string &source);
-//! Same, with an explicit file system and database, for code that has no ClientContext.
+//! Same, with an explicit file system and database, for code that has no ClientContext. A stored notebook is
+//! read from the database's default database.
 string ReadNotebookText(DatabaseInstance &db, const string &source);
 
-//! Writes (creating or replacing) a file through DuckDB's file system.
+//! Writes (creating or replacing) a file through DuckDB's file system, atomically: into a uniquely named file
+//! beside it, synced and closed, then moved over it. Where the file system cannot move files it is written in place.
 void WriteTextFile(ClientContext &context, const string &path, const string &content);
 void WriteTextFile(DatabaseInstance &db, const string &path, const string &content);
 

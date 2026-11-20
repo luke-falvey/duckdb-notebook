@@ -1,6 +1,6 @@
 # name: test/sql/notebook_cells.test
 # description: notebook_cells parses a notebook file into one row per cell
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

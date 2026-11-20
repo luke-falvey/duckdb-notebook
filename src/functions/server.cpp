@@ -5,6 +5,7 @@
 #include "duckdb/main/client_config.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "notebook/chart.hpp"
 #include "notebook/document.hpp"
@@ -15,6 +16,9 @@
 #include "notebook/session.hpp"
 
 #include <atomic>
+#include <cerrno>
+#include <climits>
+#include <cmath>
 #include <random>
 #include <thread>
 
@@ -121,6 +125,64 @@ string Param(const http::Request &req, const string &key) {
 	return req.has_param(key) ? req.get_param_value(key) : string();
 }
 
+// Numbers in requests are checked before they are cast: a negative, fractional, huge or non-numeric
+// value is refused (400) or clamped, never cast as it is (which is undefined for NaN or out of range).
+
+//! A number in a request body: `fallback` when absent or null, refused when it is not a number.
+double BodyNumber(const Json *value, const string &name, double fallback) {
+	if (!value || value->IsNull()) {
+		return fallback;
+	}
+	if (value->GetType() != Json::Type::NUMBER || !std::isfinite(value->Num())) {
+		throw InvalidInputException("%s must be a number", name);
+	}
+	return value->Num();
+}
+
+//! A count in a request body, clamped to [low, high].
+idx_t BodyCount(const Json *value, const string &name, idx_t fallback, idx_t low, idx_t high) {
+	auto number = BodyNumber(value, name, static_cast<double>(fallback));
+	number = MaxValue<double>(static_cast<double>(low), MinValue<double>(static_cast<double>(high), number));
+	return static_cast<idx_t>(number);
+}
+
+//! A cell index in a request body: a whole number that is not negative.
+int BodyIndex(const Json &value, const string &name) {
+	if (value.GetType() != Json::Type::NUMBER || !(value.Num() >= 0 && value.Num() <= INT_MAX) ||
+	    value.Num() != std::floor(value.Num())) {
+		throw InvalidInputException("%s must be cell indexes (whole numbers from 0)", name);
+	}
+	return static_cast<int>(value.Num());
+}
+
+//! A whole number in a query string parameter; false when it is not one or is out of range.
+bool ParseWhole(const string &text, int64_t &out) {
+	if (text.empty()) {
+		return false;
+	}
+	errno = 0;
+	char *end = nullptr;
+	auto value = std::strtoll(text.c_str(), &end, 10);
+	if (errno != 0 || end != text.c_str() + text.size()) {
+		return false;
+	}
+	out = static_cast<int64_t>(value);
+	return true;
+}
+
+//! A count in the query string: `fallback` when absent, refused when not a whole number, then clamped.
+idx_t ParamCount(const http::Request &req, const string &key, idx_t fallback, idx_t low, idx_t high) {
+	auto text = Param(req, key);
+	int64_t value = static_cast<int64_t>(fallback);
+	if (!text.empty() && !ParseWhole(text, value)) {
+		throw InvalidInputException("%s must be a whole number", key);
+	}
+	if (value < static_cast<int64_t>(low)) {
+		return low;
+	}
+	return MinValue<idx_t>(high, static_cast<idx_t>(value));
+}
+
 Json CellsJson(const notebook::Notebook &notebook) {
 	auto cells = Json::Array();
 	for (auto &cell : notebook.cells) {
@@ -148,7 +210,7 @@ Json NotebookJson(DatabaseInstance &db, Session &session, bool results = false) 
 		// Switched off in the [notebook] cell: whatever was kept goes at once.
 		session.cache.Record(db, session.source, notebook, session.state, {});
 	} else if (results) {
-		json.Set("cached", session.cache.CachedJson(notebook, session.state))
+		json.Set("cached", session.cache.CachedJson(db, notebook, session.state))
 		    .Set("variables", session.cache.ShownJson(notebook))
 		    .Set("ran", Json::Bool(session.ran));
 	}
@@ -190,7 +252,9 @@ shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 	auto db = Database(state);
 	auto session = make_shared_ptr<Session>();
 	session->source = source;
-	bool exists = source.compare(0, 3, "db:") == 0 || FileSystem::GetFileSystem(*db).FileExists(source);
+	// The session outlives its requests: materialize=table results and temp tables are kept, not recomputed.
+	session->state.keep_tables = true;
+	bool exists = notebook::IsStoredSource(source) || FileSystem::GetFileSystem(*db).FileExists(source);
 	if (exists) {
 		session->text = ReadNotebookText(*db, source);
 		LoadKept(*db, *session);
@@ -203,19 +267,22 @@ shared_ptr<Session> GetSession(ServerState &state, const string &source) {
 }
 
 const notebook::Cell &CellAt(const notebook::Notebook &notebook, const string &index) {
-	auto i = std::atoi(index.c_str());
-	if (index.empty() || i < 0 || i >= static_cast<int>(notebook.cells.size())) {
+	int64_t i = -1;
+	if (!ParseWhole(index, i) || i < 0 || i >= static_cast<int64_t>(notebook.cells.size())) {
 		throw InvalidInputException("No cell %s", index);
 	}
 	return notebook.cells[NumericCast<idx_t>(i)];
 }
+
+//! Said instead of running anything until the reader has run something (DESIGN section 3).
+const char *const NOT_TRUSTED = "nothing has been run yet";
 
 //! Remembers which context is running so /api/interrupt can stop it.
 struct RunningGuard {
 	Session &session;
 	RunningGuard(Session &session, Runner &runner) : session(session) {
 		std::lock_guard<std::mutex> guard(session.running_lock);
-		session.running = runner.Conn().context;
+		session.running = runner.Context();
 	}
 	~RunningGuard() {
 		std::lock_guard<std::mutex> guard(session.running_lock);
@@ -343,10 +410,9 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            }
 		            string note;
 		            if (body.Get("save") && body.Get("save")->Truthy()) {
-			            if (session->source.compare(0, 3, "db:") == 0) {
+			            if (notebook::IsStoredSource(session->source)) {
 				            Connection connection(*db);
-				            auto name = session->source.substr(3);
-				            name = name.substr(0, name.rfind('@'));
+				            auto name = notebook::ParseStoredSource(session->source).name;
 				            bool saved;
 				            auto version =
 				                SaveNotebookVersion(connection, string(), name, session->text,
@@ -383,21 +449,21 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            RunnerOptions options;
 		            options.charts = true;
 		            options.mark_values = true;
-		            options.page_rows = body.Get("page_rows") ? static_cast<idx_t>(body.Get("page_rows")->Num()) : 100;
+		            options.page_rows = BodyCount(body.Get("page_rows"), "page_rows", 100, 1, 10000);
 		            std::set<int> wanted, redraw;
 		            vector<RanCell> ran;
 		            auto cells = body.Get("cells");
 		            bool all = !cells || cells->IsNull();
 		            if (!all) {
 			            for (auto &item : cells->Items()) {
-				            wanted.insert(static_cast<int>(item.Num()));
+				            wanted.insert(BodyIndex(item, "cells"));
 			            }
 		            }
 		            // Cells whose charts are drawn again without running their SQL: a chart spec changed, or a
 		            // selection their charts filter on.
 		            if (auto list = body.Get("redraw")) {
 			            for (auto &item : list->Items()) {
-				            redraw.insert(static_cast<int>(item.Num()));
+				            redraw.insert(BodyIndex(item, "redraw"));
 			            }
 		            }
 		            auto results = Json::Array();
@@ -452,16 +518,26 @@ void Routes(shared_ptr<ServerState> &shared) {
 		            auto db = Database(state);
 		            Runner runner(*db, session->state);
 		            auto notebook = AnalyzeText(*runner.Conn().context, session->text);
-		            try { // setting an input never fails because of the [notebook] cell: a run reports that
-			            runner.ApplyMetadata(notebook, session->source);
-		            } catch (std::exception &) { // NOLINT
+		            // Until the reader runs something, the [notebook] cell's LOAD and ATTACH wait, and so does
+		            // any query that would give the value its type (an input's from=, a chart's relation).
+		            bool trusted = session->trusted;
+		            if (trusted) {
+			            try { // setting an input never fails because of the [notebook] cell: a run reports that
+				            runner.ApplyMetadata(notebook, session->source);
+			            } catch (std::exception &) { // NOLINT
+			            }
 		            }
 		            string type;
 		            if (auto cell = body.Get("cell")) {
 			            if (!cell->IsNull()) {
-				            type =
-				                VariableSqlType(runner.Conn(), notebook,
-				                                CellAt(notebook, std::to_string(static_cast<int>(cell->Num()))), name);
+				            auto index = std::to_string(BodyIndex(*cell, "cell"));
+				            auto &target = CellAt(notebook, index);
+				            string relation, column;
+				            bool without_sql =
+				                target.kind == notebook::CellKind::INPUT && !target.InputFrom(relation, column);
+				            if (trusted || without_sql) {
+					            type = VariableSqlType(runner.Conn(), notebook, target, name);
+				            }
 			            }
 		            }
 		            auto value = body.Get("value") ? *body.Get("value") : Json();
@@ -490,17 +566,16 @@ void Routes(shared_ptr<ServerState> &shared) {
 			            SendJson(res, Json::Object().Set("reason", Json::String(reason)));
 		            };
 		            if (!session->trusted) {
-			            nothing("nothing has been run yet");
+			            nothing(NOT_TRUSTED);
 			            return;
 		            }
 		            auto sql = body.Get("sql") ? body.Get("sql")->Str() : string();
-		            auto cursor = body.Get("cursor") ? body.Get("cursor")->Num() : -1;
+		            auto cursor = BodyNumber(body.Get("cursor"), "cursor", -1);
 		            if (sql.empty() || cursor < 0 || cursor > static_cast<double>(sql.size())) {
 			            nothing("no SQL or cursor position");
 			            return;
 		            }
-		            auto rows = body.Get("rows") ? static_cast<idx_t>(body.Get("rows")->Num()) : 5;
-		            rows = MaxValue<idx_t>(1, MinValue<idx_t>(rows, 20));
+		            auto rows = BodyCount(body.Get("rows"), "rows", 5, 1, 20);
 		            // The newest peek wins: it stops the one that is running and takes its place.
 		            auto ticket = ++session->peeks;
 		            session->InterruptPeek();
@@ -517,7 +592,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 			            Runner runner(*db, scratch);
 			            {
 				            std::lock_guard<std::mutex> running(session->running_lock);
-				            session->peeking = runner.Conn().context;
+				            session->peeking = runner.Context();
 			            }
 			            try {
 				            result = runner.Peek(sql, static_cast<idx_t>(cursor), rows, 1500);
@@ -533,6 +608,14 @@ void Routes(shared_ptr<ServerState> &shared) {
 	server.Get("/api/page", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
 		           auto session = GetSession(state, Param(req, "nb"));
 		           std::lock_guard<std::mutex> guard(session->lock);
+		           // A page runs the cell's SQL: only once the reader has run something (DESIGN section 3).
+		           if (!session->trusted) {
+			           throw InvalidInputException("Paging runs the cell's query, and %s in this session: run the "
+			                                       "notebook first",
+			                                       NOT_TRUSTED);
+		           }
+		           auto limit = ParamCount(req, "limit", 100, 1, 10000);
+		           auto offset = ParamCount(req, "offset", 0, 0, static_cast<idx_t>(NumericLimits<int64_t>::Maximum()));
 		           auto db = Database(state);
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
@@ -541,8 +624,6 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           if (sql.empty()) {
 			           throw InvalidInputException("That cell has no result to page through");
 		           }
-		           auto limit = std::max<idx_t>(1, std::min<idx_t>(10000, std::atoll(Param(req, "limit").c_str())));
-		           auto offset = std::atoll(Param(req, "offset").c_str());
 		           string error;
 		           auto page = runner.Page("SELECT * FROM (" + sql + ") LIMIT " + std::to_string(limit) + " OFFSET " +
 		                                       std::to_string(offset),
@@ -557,10 +638,28 @@ void Routes(shared_ptr<ServerState> &shared) {
 		           auto session = GetSession(state, Param(req, "nb"));
 		           std::lock_guard<std::mutex> guard(session->lock);
 		           auto db = Database(state);
+		           auto values = Json::Array();
+		           if (!session->trusted) {
+			           // An options= list needs no SQL. Choices from= a query wait for the reader's first run, which
+			           // sends them; until then the [notebook] cell's LOAD and ATTACH do not run either.
+			           auto notebook = AnalyzeText(*db, session->text);
+			           auto index = Param(req, "cell");
+			           auto &cell = CellAt(notebook, index);
+			           auto json = Json::Object();
+			           if (!cell.Option("options").empty()) {
+				           Connection connection(*db);
+				           for (auto &value : InputChoices(connection, cell, 1000)) {
+					           values.Push(ValueToJson(value));
+				           }
+			           } else {
+				           json.Set("reason", Json::String(NOT_TRUSTED));
+			           }
+			           SendJson(res, json.Set("values", values));
+			           return;
+		           }
 		           Runner runner(*db, session->state);
 		           auto notebook = AnalyzeText(*runner.Conn().context, session->text);
 		           runner.ApplyMetadata(notebook, session->source);
-		           auto values = Json::Array();
 		           for (auto &value : InputChoices(runner.Conn(), CellAt(notebook, Param(req, "cell")), 1000)) {
 			           values.Push(ValueToJson(value));
 		           }
@@ -572,13 +671,23 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    auto session = GetSession(state, Param(req, "nb"));
 		    std::lock_guard<std::mutex> guard(session->lock);
 		    auto db = Database(state);
-		    Runner runner(*db, session->state);
-		    try { // the catalog lists what is there: a metadata failure is reported by a run, not here
-			    runner.ApplyMetadata(AnalyzeText(*runner.Conn().context, session->text), session->source);
-		    } catch (std::exception &) { // NOLINT
+		    // Until the reader runs something the catalog is the database's own: the session's views are not
+		    // replayed and the [notebook] cell's LOAD and ATTACH wait for the first run (DESIGN section 3).
+		    bool trusted = session->trusted;
+		    unique_ptr<Runner> runner;
+		    unique_ptr<Connection> plain;
+		    if (trusted) {
+			    runner = make_uniq<Runner>(*db, session->state);
+			    try { // the catalog lists what is there: a metadata failure is reported by a run, not here
+				    runner->ApplyMetadata(AnalyzeText(*runner->Conn().context, session->text), session->source);
+			    } catch (std::exception &) { // NOLINT
+			    }
+		    } else {
+			    plain = make_uniq<Connection>(*db);
 		    }
+		    auto &connection = trusted ? runner->Conn() : *plain;
 		    auto tables = Json::Array();
-		    auto result = runner.Conn().Query(
+		    auto result = connection.Query(
 		        "SELECT t.database_name, t.schema_name, t.table_name, t.kind, list({'name': c.column_name, 'type': "
 		        "c.data_type} ORDER BY c.column_index) FROM (SELECT database_name, schema_name, table_name, 'table' AS "
 		        "kind "
@@ -589,7 +698,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 		    if (result->HasError()) {
 			    throw InvalidInputException("%s", result->GetError());
 		    }
-		    auto current = runner.Conn().Query("SELECT current_database()");
+		    auto current = connection.Query("SELECT current_database()");
 		    string current_db = current->HasError() ? "" : current->Fetch()->GetValue(0, 0).ToString();
 		    while (auto chunk = result->Fetch()) {
 			    for (idx_t r = 0; r < chunk->size(); r++) {
@@ -609,7 +718,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 				                    .Set("columns", ValueToJson(chunk->GetValue(4, r))));
 			    }
 		    }
-		    SendJson(res, Json::Object().Set("tables", tables));
+		    SendJson(res, Json::Object().Set("tables", tables).Set("trusted", Json::Bool(trusted)));
 	    }));
 
 	server.Get("/api/notebooks", Handler(weak, [](ServerState &state, const http::Request &req, http::Response &res) {
@@ -708,7 +817,7 @@ void Routes(shared_ptr<ServerState> &shared) {
 				           sink.write("retry: 1000\n\n", 13);
 			           }
 			           std::this_thread::sleep_for(std::chrono::milliseconds(500));
-			           if (source.compare(0, 3, "db:") == 0) {
+			           if (notebook::IsStoredSource(source)) {
 				           sink.write(": ping\n\n", 8);
 				           return true;
 			           }
@@ -849,6 +958,16 @@ struct StartBindData : public TableFunctionData {
 
 unique_ptr<FunctionData> StartBind(ClientContext &context, TableFunctionBindInput &input,
                                    vector<LogicalType> &return_types, vector<Identifier> &names) {
+	// The server listens on a port, runs any SQL its page sends and opens a browser: none of that is for a
+	// database whose configuration is locked or that may not reach outside itself.
+	if (Settings::Get<LockConfigurationSetting>(context)) {
+		throw PermissionException("notebook_start: the notebook server cannot be started while the configuration "
+		                          "is locked (lock_configuration is set)");
+	}
+	if (!Settings::Get<EnableExternalAccessSetting>(context)) {
+		throw PermissionException("notebook_start: the notebook server cannot be started with external access "
+		                          "disabled (enable_external_access is false)");
+	}
 	auto result = make_uniq<StartBindData>();
 	if (!input.inputs.empty() && !input.inputs[0].IsNull()) {
 		result->source = input.inputs[0].GetValue<string>();
@@ -860,6 +979,9 @@ unique_ptr<FunctionData> StartBind(ClientContext &context, TableFunctionBindInpu
 		}
 		if (key == "port") {
 			result->port = entry.second.GetValue<int32_t>();
+			if (result->port < 0 || result->port > 65535) {
+				throw InvalidInputException("notebook_start: port must be between 0 (any free port) and 65535");
+			}
 		} else if (key == "open") {
 			result->open = entry.second.GetValue<bool>();
 		}

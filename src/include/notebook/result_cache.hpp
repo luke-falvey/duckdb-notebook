@@ -24,7 +24,8 @@ public:
 	//! `legacy`: the place caches were kept before the extension was renamed.
 	ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy = false);
 
-	//! False for a notebook with nowhere to keep a cache: a remote file, or one not saved yet.
+	//! False for a notebook with nowhere to keep a cache: a file that is not on the local file system (a URL,
+	//! an object store, HDFS), or one not saved yet.
 	bool Available() const {
 		return available;
 	}
@@ -109,9 +110,11 @@ public:
 	//! Forgets everything, here and in the store. Returns how many cell results there were.
 	idx_t Clear(DatabaseInstance &db, const string &source);
 
-	//! `[{idx, stale, saved_at, result}]` for the cells that have a result, and `{name: value}` for
-	//! the input and selection values that go with them.
-	notebook::Json CachedJson(const notebook::Notebook &notebook, const SessionState &session) const;
+	//! `[{idx, stale, unverified, saved_at, result}]` for the cells that have a result, and `{name: value}`
+	//! for the input and selection values that go with them. Looks at the files the cells name
+	//! (CacheFileVersions).
+	notebook::Json CachedJson(DatabaseInstance &db, const notebook::Notebook &notebook,
+	                          const SessionState &session) const;
 	notebook::Json ShownJson(const notebook::Notebook &notebook) const;
 
 	const std::map<string, notebook::CacheEntry> &Entries() const {
@@ -133,6 +136,11 @@ private:
 //! What a cell that ran (RunForEditor) leaves for the cache: its status, its result serialised once,
 //! and an input's value.
 RanCell RanFromResult(int index, const string &status, const notebook::Json &result);
+
+//! The version of every file the notebook's cells name (notebook::CacheSourceFiles), for CacheKeys: size,
+//! modified time, file id and version tag as DuckDB's file system reports them, "" when it cannot tell.
+//! Opens each file (remote ones too: a HEAD request) and reads none of it.
+std::map<string, string> CacheFileVersions(DatabaseInstance &db, const notebook::Notebook &notebook);
 
 //! notebook_cache(path) and notebook_cache_clear(path).
 void RegisterNotebookCache(ExtensionLoader &loader);

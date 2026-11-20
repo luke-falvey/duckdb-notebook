@@ -13,7 +13,7 @@ struct SqlBindData : public TableFunctionData {
 
 unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &return_types,
                               vector<Identifier> &names) {
-	auto path = input.inputs[0].GetValue<string>();
+	auto path = SourceArgument(input, 0, "notebook_sql");
 	auto notebook = ReadNotebook(context, path);
 	ThrowIfInvalid(notebook, path);
 

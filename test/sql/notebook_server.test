@@ -1,6 +1,6 @@
 # name: test/sql/notebook_server.test
 # description: notebook_start and notebook_stop run the HTTP server on 127.0.0.1
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

@@ -1,6 +1,6 @@
 # name: test/sql/legacy_names.test
 # description: Data written before the extension was renamed from notebook to sketchbook is still read
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

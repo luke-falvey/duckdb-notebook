@@ -71,6 +71,11 @@ private:
 //! `"text"` with JSON escapes; safe to embed in HTML because `<` is escaped too.
 std::string JsonQuote(const std::string &text);
 
+//! A double as Json::Dump writes it: whole numbers below 1e15 without a fraction, others with the fewest
+//! digits that read back as the same double (`268.18`, not `268.18000000000001`). Infinity and NaN
+//! are `Infinity`, `-Infinity` and `NaN`, which Dump writes as JSON strings.
+std::string FormatNumber(double number);
+
 //! Parses JSON text (request bodies). Sets `error` and returns null on failure.
 Json ParseJson(const std::string &text, std::string &error);
 

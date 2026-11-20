@@ -159,7 +159,17 @@ it.
 
 **Trust.** Opening a notebook does not run it. SQL can read local files and reach the network through
 `httpfs`, so a notebook from someone else stays inert, showing cached output if any, until the user
-chooses to run it.
+chooses to run it. That includes the `[notebook]` cell's `extensions:` and `attach:` and an input's
+`from=` query: until the reader has run something in the session (`Session::trusted`, cleared again
+when the text is reloaded from disk), the server's catalog lists the database as it is, a select
+input offers only its `options=` list (`/api/options` answers `reason: "nothing has been run yet"`),
+paging is refused, and setting an input gives it a type only where that needs no query. Peeks wait
+too (§19).
+
+Functions that reach outside DuckDB respect its own switches: `notebook_start` (a listener on a
+port, and a browser opened with the shell) refuses when `enable_external_access` is false or
+`lock_configuration` is set, and `notebook_export(format := 'pdf')`, which starts a browser,
+refuses when `enable_external_access` is false.
 
 ## 4. Runtime architecture
 
@@ -657,8 +667,46 @@ lock held, so releasing a connection there deadlocks. Instead a session is data:
 back from the connection after each request, and per cell the statements that rebuild what a fresh
 connection lacks (the temporary view of a query cell, `CREATE TEMP`, `SET`, `USE`), from
 `notebook::ReplaySql` in `src/core/script.cpp` (unit-tested without a database). Each request opens a
-connection, replays that, runs, and closes it. Replaying views is cheap because they are lazy;
-`materialize=table` cells recompute, which is the cost of this model.
+connection, replays that, runs, and closes it. Replaying views is cheap because they are lazy.
+
+Replaying a table is not, and replaying statements loses rows: a `materialize=table` cell was
+recomputed on every request (paging, an input's choices, the catalog, a peek), and a temp table came
+back empty of what `INSERT`, `UPDATE` or `DELETE` had put in it. So the server's sessions
+(`SessionState::keep_tables`) have a *store*: `ATTACH ':memory:' AS _sketchbook_session_<n> (HIDDEN true)`,
+made by the first cell that needs it. An attached database belongs to the `DatabaseInstance`, not to a
+connection, so it survives the request without holding a `Connection`; `HIDDEN` keeps it out of
+`duckdb_databases()`, `duckdb_tables()` and the editor's catalog. A `materialize=table` cell creates its
+table there and a temp view of it under its own name, and its replay is only that view: the query runs
+again only when the cell is run again. After a cell that may change tables (anything but queries,
+`SET`, `USE` and `SET VARIABLE`, `notebook::MayWrite`), the temp tables it names or newly made are
+copied into the store with their rows, and every new connection copies them back
+(`Runner::KeepTempTables`, `Runner::Restore`); `CREATE TEMP TABLE` is then left out of the replay. The
+remaining cost: those copies are made on every request, so a large *temp table* (not a
+`materialize=table` cell) is still copied per request, and the copy keeps columns and rows but not
+constraints or defaults. The store is detached when the last copy of the session's state goes (the
+server stops, or `notebook_stop`), and simply disappears with the database when it closes. If it
+cannot be attached, the session falls back to replaying the SQL. `notebook_run` and the exports run in
+one connection and need no store.
+
+The replay runs on the connection's first use (`Runner::Restore`), not when the `Runner` is made, so
+the server registers the connection for `/api/interrupt` (`Runner::Context`) before it, and a peek sets
+its `max_execution_time` before it.
+
+### Executions per cell
+
+A named query cell executes its query once to count its rows (creating the view only binds it), once
+more with a `LIMIT` for the page the editor is sent, and once per chart query: the count is shared with
+its charts, which describe the relation once per cell rather than once per chart. An unnamed query is
+one streamed execution (`Connection::Submit` and `QueryResultStream`) that counts every row and keeps
+the first page, never holding the whole result, then its chart queries. A `materialize=table` cell
+executes once. `test/sql/notebook_exec_counts.test` pins these numbers with a sequence each query
+advances (it was 1 + 2k executions for k charts, plus an unlimited page, before).
+
+`notebook_run` runs the whole notebook before returning its first row, so a `LIMIT` or a filter above
+it cannot change how many cells run, and `cache := true` is always written. It detaches the databases
+its `[notebook]` cell attached when it returns. An `attach:` whose name is already attached to another
+path, or in the other mode, is an error rather than a silent reuse; the same database in the same mode
+is used and left attached.
 
 The server object lives in the database's object cache as a non-evictable entry. The cache is
 destroyed with the database, which stops the server. Checked end to end: a shell running the server
@@ -676,7 +724,13 @@ built separately and optionally.
 
 Results reach the browser after aggregation or as one page, so they are small. JSON needs nothing in
 the browser to decode, keeps the server simple, and is what the exports embed (gzip-compressed). Large
-integers beyond 2^53 travel as strings; temporal values as `YYYY-MM-DD HH:MM:SS` text.
+integers beyond 2^53 travel as strings; temporal values as `YYYY-MM-DD HH:MM:SS` text. `DECIMAL` values
+in result pages are exact strings (`"268.18"`), and a table shows them as they are unless the cell gives
+a format; chart data keeps them numeric. Doubles are written with the fewest digits that read back as
+the same double (`notebook::FormatNumber`: 15, 16 or 17 significant digits), so the Markdown export
+shows `268.18`, not `268.18000000000001`; a `FLOAT` is first rounded to its own shortest decimal.
+JSON has no infinity or NaN, so they travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`,
+which JavaScript's `Number()` reads back and the table shows as text.
 
 ### Variables need types from the browser
 
@@ -855,6 +909,12 @@ tested) and `src/functions/result_cache.cpp` (where entries live, and the sessio
   would give every scripted run a side effect in the working directory. `cache := true` covers the case
   of a job that prepares a notebook for readers. An export is a document of the data at export time, and
   a stale entry must never leak into one.
+- **Fresh means checked, so there is a third state.** The first keys covered only SQL text and
+  variables, so a cell stayed "fresh" after the CSV it reads was replaced. Keys now include each literal
+  file a cell reads (size, modified time, file id, version tag; a glob's matches), and a cell whose
+  inputs cannot be checked (a table no cell defines, a non-literal path, a scan of another system) is
+  `unverified` rather than `fresh`. The editor still draws unverified results like fresh ones; the
+  states are visible in `notebook_cache()`.
 - **Unnamed cells hash their text.** A position would hand a moved cell another cell's result. A hash of
   the text means an edited unnamed cell loses its result, which is the honest outcome; named cells keep
   theirs and go stale.
@@ -961,10 +1021,14 @@ show their own results, so what was missing was a look inside one.
 - **Safety.** Only a plain `SELECT` statement is looked into: `INSERT ... SELECT`, `CREATE TABLE AS`, a
   CTE holding `INSERT ... RETURNING` are refused wherever the caret is. A part that calls a volatile
   scalar function (`nextval`, `setval`, `write_log`...; `random()` and `uuid()` are allowed), or a table
-  function on a short list of ones that change something (`checkpoint`, `copy_database`, the
-  `notebook_*` functions that write, `enable_*`/`disable_*`), is refused before it runs. Anything the list misses
-  in the local database is stopped by the read-only transaction: a macro that hides `nextval` fails with
-  "cannot write". Effects outside it (an extension's function that writes to a remote system) are not.
+  function that is not on a list of ones known to only read, is refused before it runs. The list
+  (`READ_ONLY_TABLE_FUNCTIONS` in `peek.cpp`) has DuckDB's generators and readers (`range`,
+  `generate_series`, `unnest`, `glob`, `read_csv`, `read_parquet`, `read_json`...), its `duckdb_*` and
+  `pragma_*` information functions and the `notebook_*` functions that only read. DuckDB records no
+  side-effect property for table functions, so another extension's (`postgres_execute`), a table
+  macro, `query()` and any function added later are refused until they are listed. What the scalar
+  check misses in the local database is stopped by the read-only transaction: a macro that hides
+  `nextval` fails with "cannot write".
 - **Trust.** Opening a notebook does not run it (§3), so the server refuses to peek in a session until
   the reader has run something, and again after the text has been replaced from the file on disk. Its
   own flag (`Session::trusted`) is separate from the result cache's `ran` (§17): a notebook reopened

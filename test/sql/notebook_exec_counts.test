@@ -1,0 +1,108 @@
+# name: test/sql/notebook_exec_counts.test
+# description: How many times a run executes each cell's query. Every query in exec_counts.sql calls
+# group: [sql]
+
+#              nextval() once per execution, so currval() is the number of executions.
+
+require sketchbook
+
+# Before DESIGN §12 "Executions per cell": a named query cell ran a count, then (for the editor)
+# an unlimited page, then per chart a DESCRIBE, another count and the chart's query: 1, 5 with two
+# charts, and 2 and 6 with cache := true; an unnamed query ran once, then a count and its query per
+# chart (3). Now the count is shared with the charts and the page reads only its rows.
+
+statement ok
+CREATE SEQUENCE nb_exec_plain;
+
+statement ok
+CREATE SEQUENCE nb_exec_charted;
+
+statement ok
+CREATE SEQUENCE nb_exec_table;
+
+statement ok
+CREATE SEQUENCE nb_exec_unnamed;
+
+query IIII
+SELECT idx, name, status, row_count FROM notebook_run('test/notebooks/exec_counts.sql') WHERE kind = 'sql' ORDER BY idx
+----
+1	plain_view	ok	3
+2	charted_view	ok	3
+3	charted_table	ok	3
+4	NULL	ok	3
+5	from_table	ok	1
+
+# A named query cell with no charts: one count. With two charts: the count, then one query per chart
+# (DESCRIBE binds, it does not execute). materialize=table: once, whatever reads it afterwards.
+# An unnamed query: one streamed execution that counts its rows, then its chart's query.
+query IIII
+SELECT currval('nb_exec_plain'), currval('nb_exec_charted'), currval('nb_exec_table'), currval('nb_exec_unnamed')
+----
+1	3	1	2
+
+# cache := true also keeps the page the editor is sent: one more execution, with a LIMIT, for a
+# named query; none for an unnamed one, whose rows come from the same stream
+statement ok
+DROP SEQUENCE nb_exec_plain;
+
+statement ok
+DROP SEQUENCE nb_exec_charted;
+
+statement ok
+DROP SEQUENCE nb_exec_table;
+
+statement ok
+DROP SEQUENCE nb_exec_unnamed;
+
+statement ok
+CREATE SEQUENCE nb_exec_plain;
+
+statement ok
+CREATE SEQUENCE nb_exec_charted;
+
+statement ok
+CREATE SEQUENCE nb_exec_table;
+
+statement ok
+CREATE SEQUENCE nb_exec_unnamed;
+
+statement ok
+FROM notebook_cache_clear('test/notebooks/exec_counts.sql')
+
+# kryonix C5: a LIMIT above notebook_run does not decide how much of the notebook runs. Every cell
+# runs and the cache is written, though only one row is read.
+query I
+SELECT count(*) FROM (FROM notebook_run('test/notebooks/exec_counts.sql', cache := true) LIMIT 1)
+----
+1
+
+query IIII
+SELECT currval('nb_exec_plain'), currval('nb_exec_charted'), currval('nb_exec_table'), currval('nb_exec_unnamed')
+----
+2	4	1	2
+
+query I
+SELECT count(*) FILTER (status = 'fresh') FROM notebook_cache('test/notebooks/exec_counts.sql') WHERE kind = 'sql'
+----
+5
+
+# The page kept for a named query is read with a LIMIT, and still reports the whole result
+query III
+SELECT content LIKE '%"rows":[[0],[1],[2]]%', content LIKE '%"total":3,%', content LIKE '%"truncated":false%' FROM read_text('test/notebooks/.duckdb-sketchbook/exec_counts/plain_view.json')
+----
+true	true	true
+
+statement ok
+FROM notebook_cache_clear('test/notebooks/exec_counts.sql')
+
+statement ok
+DROP SEQUENCE nb_exec_plain;
+
+statement ok
+DROP SEQUENCE nb_exec_charted;
+
+statement ok
+DROP SEQUENCE nb_exec_table;
+
+statement ok
+DROP SEQUENCE nb_exec_unnamed;

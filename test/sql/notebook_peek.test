@@ -1,6 +1,6 @@
 # name: test/sql/notebook_peek.test
 # description: notebook_peek finds the CTE or sub-query under a cursor position and the query that selects from it
-# group: [notebook]
+# group: [sql]
 
 require sketchbook
 

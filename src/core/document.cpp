@@ -22,7 +22,9 @@ std::string Cellish(const Json &value) {
 	if (value.IsNull()) {
 		return "";
 	}
-	std::string text = value.GetType() == Json::Type::STRING ? value.Str() : value.Dump();
+	std::string text = value.GetType() == Json::Type::STRING   ? value.Str()
+	                   : value.GetType() == Json::Type::NUMBER ? FormatNumber(value.Num())
+	                                                           : value.Dump();
 	return ReplaceAll(ReplaceAll(text, "|", "\\|"), "\n", " ");
 }
 

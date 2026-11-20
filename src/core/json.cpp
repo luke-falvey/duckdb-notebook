@@ -108,23 +108,37 @@ std::string JsonQuote(const std::string &text) {
 	return out + "\"";
 }
 
+std::string FormatNumber(double number) {
+	if (std::isnan(number)) {
+		return "NaN";
+	}
+	if (std::isinf(number)) {
+		return number > 0 ? "Infinity" : "-Infinity";
+	}
+	if (number == std::floor(number) && std::fabs(number) < 1e15) {
+		return std::to_string(static_cast<long long>(number));
+	}
+	// The shortest of 15, 16 or 17 significant digits that reads back as the same double: any double
+	// within 15 digits of a shorter decimal prints as that decimal (0.1, 268.18), never 0.10000000000000001.
+	char buf[32];
+	for (int precision = 15; precision <= 17; precision++) {
+		snprintf(buf, sizeof(buf), "%.*g", precision, number);
+		if (precision == 17 || std::strtod(buf, nullptr) == number) {
+			break;
+		}
+	}
+	return buf;
+}
+
 std::string Json::Dump() const {
 	switch (type) {
 	case Type::NUL:
 		return "null";
 	case Type::BOOL:
 		return boolean ? "true" : "false";
-	case Type::NUMBER: {
-		if (!std::isfinite(number)) {
-			return "null";
-		}
-		if (number == std::floor(number) && std::fabs(number) < 1e15) {
-			return std::to_string(static_cast<long long>(number));
-		}
-		char buf[32];
-		snprintf(buf, sizeof(buf), "%.17g", number);
-		return buf;
-	}
+	case Type::NUMBER:
+		// JSON has no infinity or NaN: they travel as the strings JavaScript's Number() reads back.
+		return std::isfinite(number) ? FormatNumber(number) : JsonQuote(FormatNumber(number));
 	case Type::STRING:
 		return JsonQuote(text);
 	case Type::RAW:
@@ -149,12 +163,26 @@ std::string Json::Dump() const {
 
 namespace {
 
+//! How deeply arrays and objects may nest in parsed JSON.
+constexpr int JSON_MAX_DEPTH = 256;
+
 struct JsonParser {
 	explicit JsonParser(const std::string &s) : s(s) {
 	}
 	const std::string &s;
 	size_t pos = 0;
 	std::string error;
+	//! Arrays and objects open around the value being parsed. Parse recurses once per level, so
+	//! nesting is bounded (JSON_MAX_DEPTH) to keep a crafted request or cache file off the stack's end.
+	int depth = 0;
+
+	//! Enters an array or object; false (with the error set) when that is one level too many.
+	bool Enter() {
+		if (++depth > JSON_MAX_DEPTH) {
+			return Fail("JSON nested more than " + std::to_string(JSON_MAX_DEPTH) + " levels deep");
+		}
+		return true;
+	}
 
 	void Space() {
 		while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\n' || s[pos] == '\r' || s[pos] == '\t')) {
@@ -246,70 +274,13 @@ struct JsonParser {
 			return Fail("unexpected end of JSON");
 		}
 		char c = s[pos];
-		if (c == '{') {
-			pos++;
-			out = Json::Object();
-			Space();
-			if (pos < s.size() && s[pos] == '}') {
-				pos++;
-				return true;
+		if (c == '{' || c == '[') {
+			if (!Enter()) {
+				return false;
 			}
-			while (true) {
-				Space();
-				if (pos >= s.size() || s[pos] != '"') {
-					return Fail("expected a key");
-				}
-				std::string key;
-				if (!ParseString(key)) {
-					return false;
-				}
-				Space();
-				if (pos >= s.size() || s[pos] != ':') {
-					return Fail("expected ':'");
-				}
-				pos++;
-				Json value;
-				if (!Parse(value)) {
-					return false;
-				}
-				out.Set(key, std::move(value));
-				Space();
-				if (pos < s.size() && s[pos] == ',') {
-					pos++;
-					continue;
-				}
-				if (pos < s.size() && s[pos] == '}') {
-					pos++;
-					return true;
-				}
-				return Fail("expected ',' or '}'");
-			}
-		}
-		if (c == '[') {
-			pos++;
-			out = Json::Array();
-			Space();
-			if (pos < s.size() && s[pos] == ']') {
-				pos++;
-				return true;
-			}
-			while (true) {
-				Json value;
-				if (!Parse(value)) {
-					return false;
-				}
-				out.Push(std::move(value));
-				Space();
-				if (pos < s.size() && s[pos] == ',') {
-					pos++;
-					continue;
-				}
-				if (pos < s.size() && s[pos] == ']') {
-					pos++;
-					return true;
-				}
-				return Fail("expected ',' or ']'");
-			}
+			auto parsed = c == '{' ? ParseObject(out) : ParseArray(out);
+			depth--;
+			return parsed;
 		}
 		if (c == '"') {
 			std::string text;
@@ -334,14 +305,90 @@ struct JsonParser {
 			out = Json::Null();
 			return true;
 		}
+		// JSON numbers only: strtod alone would also take nan, inf, hex and a leading '+'.
+		auto digits = pos + (c == '-' ? 1 : 0);
+		if ((c != '-' && (c < '0' || c > '9')) ||
+		    (digits + 1 < s.size() && s[digits] == '0' && (s[digits + 1] == 'x' || s[digits + 1] == 'X'))) {
+			return Fail("unexpected character");
+		}
 		char *end = nullptr;
 		double number = std::strtod(s.c_str() + pos, &end);
 		if (end == s.c_str() + pos) {
 			return Fail("unexpected character");
 		}
+		if (!std::isfinite(number)) {
+			return Fail("number out of range");
+		}
 		pos = static_cast<size_t>(end - s.c_str());
 		out = Json::Number(number);
 		return true;
+	}
+
+	bool ParseObject(Json &out) {
+		pos++;
+		out = Json::Object();
+		Space();
+		if (pos < s.size() && s[pos] == '}') {
+			pos++;
+			return true;
+		}
+		while (true) {
+			Space();
+			if (pos >= s.size() || s[pos] != '"') {
+				return Fail("expected a key");
+			}
+			std::string key;
+			if (!ParseString(key)) {
+				return false;
+			}
+			Space();
+			if (pos >= s.size() || s[pos] != ':') {
+				return Fail("expected ':'");
+			}
+			pos++;
+			Json value;
+			if (!Parse(value)) {
+				return false;
+			}
+			out.Set(key, std::move(value));
+			Space();
+			if (pos < s.size() && s[pos] == ',') {
+				pos++;
+				continue;
+			}
+			if (pos < s.size() && s[pos] == '}') {
+				pos++;
+				return true;
+			}
+			return Fail("expected ',' or '}'");
+		}
+	}
+
+	bool ParseArray(Json &out) {
+		pos++;
+		out = Json::Array();
+		Space();
+		if (pos < s.size() && s[pos] == ']') {
+			pos++;
+			return true;
+		}
+		while (true) {
+			Json value;
+			if (!Parse(value)) {
+				return false;
+			}
+			out.Push(std::move(value));
+			Space();
+			if (pos < s.size() && s[pos] == ',') {
+				pos++;
+				continue;
+			}
+			if (pos < s.size() && s[pos] == ']') {
+				pos++;
+				return true;
+			}
+			return Fail("expected ',' or ']'");
+		}
 	}
 };
 
