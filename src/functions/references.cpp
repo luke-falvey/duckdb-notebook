@@ -103,6 +103,11 @@ public:
 		case StatementType::DROP_STATEMENT:
 			AddRead(NormalizeName(statement.Cast<DropStatement>().info->GetQualifiedName()));
 			break;
+		case StatementType::ALTER_STATEMENT:
+			// ALTER TABLE t ... changes t: the cell depends on the one that made it, and the session store copies
+			// it again (Runner::KeepTempTables).
+			AddRead(NormalizeName(statement.Cast<AlterStatement>().info->GetQualifiedName()));
+			break;
 		case StatementType::EXPLAIN_STATEMENT:
 			Statement(*statement.Cast<ExplainStatement>().stmt);
 			break;
@@ -177,6 +182,15 @@ private:
 			auto &subquery = ref.Cast<SubqueryRef>();
 			for (auto &cte : subquery.subquery->node->cte_map.map) {
 				cte_names.insert(StringUtil::Lower(cte.first.GetIdentifierName()));
+			}
+			break;
+		}
+		case TableReferenceType::TABLE_FUNCTION: {
+			// The iterator descends into its arguments; the cache needs to know what it reads (CellSources).
+			auto &function = ref.Cast<TableFunctionRef>().function;
+			if (function && function->GetExpressionClass() == ExpressionClass::FUNCTION) {
+				Add(result.table_functions,
+				    StringUtil::Lower(function->Cast<FunctionExpression>().FunctionName().GetIdentifierName()));
 			}
 			break;
 		}

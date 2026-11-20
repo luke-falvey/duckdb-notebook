@@ -156,6 +156,18 @@ SELECT count(*) FROM notebook_cache('{TEST_DIR}/nb_cache.sql')
 ----
 8
 
+# Another writer's temporary file, about to be moved into place, is left alone by a run
+statement ok
+COPY (SELECT 1 AS x) TO '{TEST_DIR}/.duckdb-sketchbook/nb_cache/gone.json.0123.tmp' (FORMAT csv)
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_cache.sql', cache := true)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/.duckdb-sketchbook/nb_cache/gone.json.0123.tmp')
+----
+1
+
 # cache: false in the [notebook] cell: nothing is shown, and a run removes what was kept
 statement ok
 FROM notebook_checkout('nb_cache_off', file := '{TEST_DIR}/nb_cache.sql', force := true)

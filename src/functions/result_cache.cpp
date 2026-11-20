@@ -45,10 +45,12 @@ unique_ptr<QueryResult> Execute(Connection &connection, const string &sql, vecto
 	return result;
 }
 
-bool CacheTableExists(Connection &connection, const string &schema) {
-	auto result = connection.Query("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() AND "
-	                               "schema_name = " +
-	                               notebook::QuoteString(schema) + " AND table_name = 'cache'");
+//! True if `schema.cache` exists in `database` (the default one when empty).
+bool CacheTableExists(Connection &connection, const string &database, const string &schema) {
+	auto result =
+	    connection.Query("SELECT 1 FROM duckdb_tables() WHERE lower(database_name) = lower(" +
+	                     (database.empty() ? string("current_database()") : notebook::QuoteString(database)) +
+	                     ") AND schema_name = " + notebook::QuoteString(schema) + " AND table_name = 'cache'");
 	if (result->HasError()) {
 		return false;
 	}
@@ -119,6 +121,22 @@ bool IsCacheTemporary(const string &file) {
 	return StringUtil::EndsWith(file, ".tmp") && StringUtil::Contains(file, ".json.");
 }
 
+//! True for a temporary file no writer is still writing: one older than any write takes (ten minutes), left behind
+//! by a writer that stopped.
+bool LeftBehind(FileSystem &fs, const string &path) {
+	try {
+		auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS);
+		if (!handle) {
+			return false;
+		}
+		auto modified = handle->Stats().last_modification_time.value;
+		const int64_t TEN_MINUTES = 600LL * 1000000LL;
+		return modified > 0 && modified < Timestamp::GetCurrentTimestamp().value - TEN_MINUTES;
+	} catch (...) { // NOLINT: when in doubt, leave it
+		return false;
+	}
+}
+
 //! A file the store wrote: an entry, or a temporary file.
 bool IsCacheFile(const string &file) {
 	return StringUtil::EndsWith(file, ".json") || IsCacheTemporary(file);
@@ -137,6 +155,11 @@ string OneFileVersion(FileSystem &fs, const string &path) {
 	if (!modified && stats.version_tag.empty()) {
 		return string();
 	}
+	if (modified &&
+	    notebook::ModifiedTooRecently(stats.last_modification_time.value, Timestamp::GetCurrentTimestamp().value)) {
+		// Modified times are whole seconds: a same-size rewrite later in this second would not change them.
+		return string();
+	}
 	return std::to_string(stats.file_size) + ":" +
 	       (modified ? std::to_string(stats.last_modification_time.value) : string()) + ":" +
 	       (stats.file_id.IsValid() ? std::to_string(stats.file_id.GetIndex()) : string()) + ":" + stats.version_tag;
@@ -147,6 +170,11 @@ const idx_t MAX_GLOB_FILES = 1000;
 
 //! A file's or a glob's version for the cache keys (notebook::CacheKeys), "" when it cannot be told.
 string FileVersion(FileSystem &fs, const string &path) {
+	if (!notebook::IsLocalPath(path)) {
+		// Not looked at: a remote file would cost a request (a glob, a listing and one per match) on every open
+		// and run, before the reader has trusted the notebook.
+		return string();
+	}
 	try {
 		if (!FileSystem::HasGlob(path)) {
 			return OneFileVersion(fs, path);
@@ -158,6 +186,9 @@ string FileVersion(FileSystem &fs, const string &path) {
 		}
 		string version = "glob";
 		for (auto &match : matches) {
+			if (!notebook::IsLocalPath(match.path)) {
+				return string();
+			}
 			auto one = OneFileVersion(fs, match.path);
 			if (one.empty()) {
 				return string();
@@ -187,9 +218,10 @@ std::map<string, string> CacheFileVersions(DatabaseInstance &db, const notebook:
 
 // ---- The store -------------------------------------------------------------------------------------
 
-ResultCacheStore::ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy)
-    : db(db), source(source), legacy(legacy) {
-	table = string(legacy ? LEGACY_CACHE_SCHEMA : CACHE_SCHEMA) + ".cache";
+ResultCacheStore::ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy, const string &database)
+    : db(db), source(source), legacy(legacy), database(database) {
+	schema = legacy ? LEGACY_CACHE_SCHEMA : CACHE_SCHEMA;
+	table = (database.empty() ? string() : notebook::QuoteIdentifier(database) + ".") + schema + ".cache";
 	if (notebook::IsStoredSource(source)) {
 		in_database = true;
 		auto stored = notebook::ParseStoredSource(source);
@@ -231,7 +263,9 @@ bool ResultCacheStore::Prepare() {
 	try {
 		if (in_database) {
 			Connection connection(db);
-			Execute(connection, string("CREATE SCHEMA IF NOT EXISTS ") + CACHE_SCHEMA);
+			Execute(connection, "CREATE SCHEMA IF NOT EXISTS " +
+			                        (database.empty() ? string() : notebook::QuoteIdentifier(database) + ".") +
+			                        CACHE_SCHEMA);
 			Execute(connection,
 			        string("CREATE TABLE IF NOT EXISTS ") + table +
 			            " (name VARCHAR NOT NULL, cell VARCHAR NOT NULL, format INTEGER NOT NULL, key "
@@ -270,7 +304,7 @@ void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, Cac
 		return;
 	}
 	// Nothing here yet: a notebook cached before the extension was renamed.
-	ResultCacheStore(db, source, true).Read(ids, entries, state);
+	ResultCacheStore(db, source, true, database).Read(ids, entries, state);
 }
 
 bool ResultCacheStore::Read(const std::vector<string> &ids, std::map<string, CacheEntry> &entries, CacheState &state) {
@@ -281,7 +315,7 @@ bool ResultCacheStore::Read(const std::vector<string> &ids, std::map<string, Cac
 	try {
 		if (in_database) {
 			Connection connection(db);
-			if (!CacheTableExists(connection, table.substr(0, table.find('.')))) {
+			if (!CacheTableExists(connection, database, schema)) {
 				return found;
 			}
 			auto result = Execute(
@@ -363,7 +397,7 @@ void ResultCacheStore::Remove(const string &id) {
 	try {
 		if (in_database) {
 			Connection connection(db);
-			if (CacheTableExists(connection, table.substr(0, table.find('.')))) {
+			if (CacheTableExists(connection, database, schema)) {
 				Execute(connection, string("DELETE FROM ") + table + " WHERE name = ? AND cell = ?",
 				        {Value(name), Value(id)});
 			}
@@ -379,7 +413,7 @@ vector<string> ResultCacheStore::StoredIds() {
 	vector<string> stored;
 	if (in_database) {
 		Connection connection(db);
-		if (CacheTableExists(connection, table.substr(0, table.find('.')))) {
+		if (CacheTableExists(connection, database, schema)) {
 			auto result = Execute(connection, string("SELECT cell FROM ") + table + " WHERE name = ?", {Value(name)});
 			while (auto chunk = result->Fetch()) {
 				for (idx_t r = 0; r < chunk->size(); r++) {
@@ -418,9 +452,15 @@ void ResultCacheStore::Prune(const std::vector<string> &ids) {
 			}
 			if (in_database) {
 				Remove(stored);
-			} else {
-				FileSystem::GetFileSystem(db).TryRemoveFile(directory + "/" + stored);
+				continue;
 			}
+			auto &fs = FileSystem::GetFileSystem(db);
+			auto path = directory + "/" + stored;
+			if (IsCacheTemporary(stored) && !LeftBehind(fs, path)) {
+				// Another writer's (a notebook_run beside the editor), about to be moved into place.
+				continue;
+			}
+			fs.TryRemoveFile(path);
 		}
 	} catch (...) { // NOLINT
 	}
@@ -429,7 +469,7 @@ void ResultCacheStore::Prune(const std::vector<string> &ids) {
 idx_t ResultCacheStore::Clear() {
 	idx_t removed = ClearHere();
 	if (!legacy && available) {
-		removed = MaxValue<idx_t>(removed, ResultCacheStore(db, source, true).ClearHere());
+		removed = MaxValue<idx_t>(removed, ResultCacheStore(db, source, true, database).ClearHere());
 	}
 	return removed;
 }
@@ -478,7 +518,7 @@ void ResultCache::Load(DatabaseInstance &db, const string &source, const noteboo
 	if (!notebook::CacheEnabled(notebook)) {
 		return;
 	}
-	ResultCacheStore store(db, source);
+	ResultCacheStore store(db, source, false, database);
 	store.Load(notebook::CacheCellIds(notebook), entries, state);
 }
 
@@ -535,7 +575,8 @@ void ResultCache::SetShown(const string &name, const Json &value) {
 }
 
 void ResultCache::Record(DatabaseInstance &db, const string &source, const notebook::Notebook &notebook,
-                         const SessionState &session, const vector<RanCell> &ran) {
+                         const SessionState &session, const vector<RanCell> &ran,
+                         const std::map<string, string> *versions) {
 	if (!notebook::CacheEnabled(notebook)) {
 		if (!entries.empty() || !emptied) {
 			Clear(db, source);
@@ -550,9 +591,18 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 		}
 	}
 	UpdateVariables(session);
-	auto keys = notebook::CacheKeys(notebook, notebook::CacheVariableKeys(state), CacheFileVersions(db, notebook));
+	if (ran.empty()) {
+		// Nothing new to store (an input changed): keep the variables, look at no files.
+		if (!entries.empty()) {
+			ResultCacheStore store(db, source, false, database);
+			store.PutState(state);
+		}
+		return;
+	}
+	auto keys = notebook::CacheKeys(notebook, notebook::CacheVariableKeys(state),
+	                                versions ? *versions : CacheFileVersions(db, notebook));
 	auto ids = notebook::CacheCellIds(notebook);
-	ResultCacheStore store(db, source);
+	ResultCacheStore store(db, source, false, database);
 	auto now = Now();
 	for (auto &cell : ran) {
 		if (cell.index < 0 || NumericCast<idx_t>(cell.index) >= ids.size()) {
@@ -603,7 +653,7 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 idx_t ResultCache::Clear(DatabaseInstance &db, const string &source) {
 	auto held = entries.size();
 	entries.clear();
-	ResultCacheStore store(db, source);
+	ResultCacheStore store(db, source, false, database);
 	return MaxValue<idx_t>(held, store.Clear());
 }
 
@@ -673,6 +723,7 @@ unique_ptr<FunctionData> CacheBind(ClientContext &context, TableFunctionBindInpu
 	auto notebook = ReadNotebook(context, result->path);
 	auto &db = DatabaseInstance::GetDatabase(context);
 	ResultCache cache;
+	cache.database = CurrentDatabase(context);
 	cache.Load(db, result->path, notebook);
 	auto ids = notebook::CacheCellIds(notebook);
 	SessionState none;
@@ -736,7 +787,8 @@ void ClearScan(ClientContext &context, TableFunctionInput &data, DataChunk &outp
 	if (state.next++ > 0) {
 		return;
 	}
-	ResultCacheStore store(DatabaseInstance::GetDatabase(context), data.bind_data->Cast<ClearBindData>().path);
+	ResultCacheStore store(DatabaseInstance::GetDatabase(context), data.bind_data->Cast<ClearBindData>().path, false,
+	                       CurrentDatabase(context));
 	output.data[0].Append(Value::BIGINT(NumericCast<int64_t>(store.Clear())));
 }
 

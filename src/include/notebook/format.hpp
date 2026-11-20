@@ -51,6 +51,8 @@ struct Cell {
 	//! names (`monthly`, `wh.orders`) or variables written with a leading `$` (`$region`).
 	std::vector<std::string> defines;
 	std::vector<std::string> reads;
+	//! The table functions its SQL reads from (References::table_functions); filled by AnalyzeNotebook.
+	std::vector<std::string> table_functions;
 	//! Indexes of the cells that define something this cell reads, ascending.
 	std::vector<int> depends_on;
 	//! 1-based line of the `-- %%` marker and of the cell's last line.

@@ -21,8 +21,10 @@ namespace duckdb {
 //! Where one notebook's entries are kept.
 class ResultCacheStore {
 public:
-	//! `legacy`: the place caches were kept before the extension was renamed.
-	ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy = false);
+	//! `legacy`: the place caches were kept before the extension was renamed. `database`: for a stored notebook
+	//! (`db:`), the database it is stored in, whose `_sketchbook.cache` holds its cache (empty: the default one).
+	ResultCacheStore(DatabaseInstance &db, const string &source, bool legacy = false,
+	                 const string &database = string());
 
 	//! False for a notebook with nowhere to keep a cache: a file that is not on the local file system (a URL,
 	//! an object store, HDFS), or one not saved yet.
@@ -47,8 +49,9 @@ private:
 	DatabaseInstance &db;
 	string source;
 	bool legacy;
-	//! Database: the cache table, schema-qualified.
-	string table;
+	string database;
+	//! Database: the cache's schema, and its table, qualified.
+	string schema, table;
 	bool available = false;
 	bool in_database = false;
 	//! Files: the notebook's directory inside the cache directory, and the cache directory.
@@ -86,6 +89,10 @@ struct RanCell {
 //! even where nothing can be written.
 class ResultCache {
 public:
+	//! For a stored notebook (`db:`): the database it is read from, whose `_sketchbook.cache` holds its cache. Set
+	//! it before Load, from the caller's current database (the one USE chose); empty means the default database.
+	string database;
+
 	//! Reads the notebook's entries, unless the notebook switches the cache off.
 	void Load(DatabaseInstance &db, const string &source, const notebook::Notebook &notebook);
 
@@ -100,9 +107,12 @@ public:
 	std::map<string, string> Variables(const SessionState &session) const;
 
 	//! Stores the results of the cells that ran, drops entries of cells that no longer exist, and
-	//! records the session's variables. With `cache: false` it removes the cache instead.
+	//! records the session's variables. With `cache: false` it removes the cache instead. `versions` are the files'
+	//! versions from before the cells ran (CacheFileVersions): a file that changed while they ran then makes them
+	//! stale. Without it, they are looked up now. With nothing in `ran`, no file is looked at.
 	void Record(DatabaseInstance &db, const string &source, const notebook::Notebook &notebook,
-	            const SessionState &session, const vector<RanCell> &ran);
+	            const SessionState &session, const vector<RanCell> &ran,
+	            const std::map<string, string> *versions = nullptr);
 
 	//! The browser set a variable: remembers the value it holds.
 	void SetShown(const string &name, const notebook::Json &value);
@@ -139,7 +149,8 @@ RanCell RanFromResult(int index, const string &status, const notebook::Json &res
 
 //! The version of every file the notebook's cells name (notebook::CacheSourceFiles), for CacheKeys: size,
 //! modified time, file id and version tag as DuckDB's file system reports them, "" when it cannot tell.
-//! Opens each file (remote ones too: a HEAD request) and reads none of it.
+//! Opens each local file and reads none of it. A remote file (any `scheme://` but `file://`) is not looked at and
+//! has no known version, nor has a file modified in the last two seconds (notebook::ModifiedTooRecently).
 std::map<string, string> CacheFileVersions(DatabaseInstance &db, const notebook::Notebook &notebook);
 
 //! notebook_cache(path) and notebook_cache_clear(path).
