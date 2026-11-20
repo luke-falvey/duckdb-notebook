@@ -1,0 +1,123 @@
+# name: test/sql/notebook_security.test
+# description: What a peek may run, and the functions that reach outside DuckDB refusing to when that is not allowed
+# group: [sql]
+
+require sketchbook
+
+# ---- Peek runs only table functions known to read (an allow-list): anything else waits for a run ----
+
+statement ok
+CREATE MACRO nb_sec_peek(s, needle) AS TABLE
+SELECT kind, reason FROM notebook_peek(s, strpos(s, needle) - 1);
+
+statement ok
+CREATE MACRO nb_sec_rows() AS TABLE SELECT 1 AS x;
+
+# DuckDB's readers, generators and system functions are known to only read
+query II
+SELECT p.kind, p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM range(3)) q', 'range') p
+----
+subquery	NULL
+
+query II
+SELECT p.kind, p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM generate_series(1, 3) JOIN duckdb_tables() ON true) q', 'generate') p
+----
+subquery	NULL
+
+query II
+SELECT p.kind, p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM read_csv(''x.csv'') UNION ALL SELECT * FROM read_parquet(''x.parquet'')) q', 'read_csv') p
+----
+subquery	NULL
+
+query II
+SELECT p.kind, p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM notebook_cells(''x.sql'')) q', 'notebook_cells') p
+----
+subquery	NULL
+
+# Another extension's table function, one that runs SQL text, and a table macro are not known: no peek
+query I
+SELECT p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM postgres_execute(''db'', ''DROP TABLE t'')) q', 'postgres_execute') p
+----
+it calls postgres_execute(), which may have side effects
+
+query I
+SELECT p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM query(''SELECT 1'')) q', 'query(') p
+----
+it calls query(), which may have side effects
+
+query I
+SELECT p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM nb_sec_rows()) q', 'nb_sec_rows') p
+----
+it calls nb_sec_rows(), which may have side effects
+
+# Table functions that change something stay refused, whatever their name looks like
+query I
+SELECT p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM force_checkpoint()) q', 'force_checkpoint') p
+----
+it calls force_checkpoint(), which may have side effects
+
+query I
+SELECT p.reason FROM nb_sec_peek('SELECT * FROM (SELECT * FROM notebook_save(''x'', ''y.sql'')) q', 'notebook_save') p
+----
+it calls notebook_save(), which may have side effects
+
+# A refused function in a CTE blocks only the parts that read it
+query I
+SELECT p.reason IS NULL FROM nb_sec_peek('WITH a AS (SELECT * FROM postgres_execute(''db'', ''x'')), b AS (SELECT 1 AS k) SELECT * FROM a, b', 'SELECT 1 AS k') p
+----
+true
+
+statement ok
+DROP MACRO TABLE nb_sec_rows;
+
+statement ok
+DROP MACRO TABLE nb_sec_peek;
+
+# ---- notebook_start checks its port ----
+
+statement error
+SELECT * FROM notebook_start(port := 70000, open := false)
+----
+port must be between 0 (any free port) and 65535
+
+statement error
+SELECT * FROM notebook_start(port := -1, open := false)
+----
+port must be between 0 (any free port) and 65535
+
+# ---- With external access disabled, nothing starts a program or a server ----
+# This cannot be switched back on, so it comes last in a file of its own.
+
+statement ok
+SET enable_external_access = false;
+
+# Printing a PDF runs a browser: refused before anything is read or written, chrome := or not
+statement error
+SELECT * FROM notebook_export('test/notebooks/basic.sql', format := 'pdf', file := 'nb_security.pdf')
+----
+format 'pdf' runs a browser to print the page, which is not allowed with external access disabled
+
+statement error
+SELECT * FROM notebook_export('test/notebooks/basic.sql', format := 'pdf', chrome := '/bin/sh')
+----
+format 'pdf' runs a browser to print the page, which is not allowed with external access disabled
+
+# The server listens on a port and opens a browser
+statement error
+SELECT * FROM notebook_start('test/notebooks/basic.sql', open := false)
+----
+the notebook server cannot be started with external access disabled
+
+statement error
+SELECT * FROM notebook_start()
+----
+the notebook server cannot be started with external access disabled
+
+# A locked configuration refuses it too
+statement ok
+SET lock_configuration = true;
+
+statement error
+SELECT * FROM notebook_start(open := false)
+----
+the notebook server cannot be started while the configuration is locked

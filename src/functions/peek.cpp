@@ -250,11 +250,23 @@ public:
 	std::set<string> tables;
 	//! Functions by lower-case name, table functions included.
 	std::set<string> functions;
+	//! The table functions alone (and table macros, which look the same before binding).
+	std::set<string> table_functions;
 	QueryLocation span;
 
 protected:
 	void OnRef(TableRef &ref) override {
 		span = span.Merge(ref.query_location);
+		if (ref.type == TableReferenceType::TABLE_FUNCTION) {
+			auto &function = ref.Cast<TableFunctionRef>().function;
+			if (function && function->GetExpressionClass() == ExpressionClass::FUNCTION) {
+				table_functions.insert(
+				    StringUtil::Lower(function->Cast<FunctionExpression>().FunctionName().GetIdentifierName()));
+			} else {
+				// Not a plain call: nothing to judge it by.
+				unknown = true;
+			}
+		}
 		if (ref.type == TableReferenceType::BASE_TABLE) {
 			auto &name = ref.Cast<BaseTableRef>().GetQualifiedName();
 			if (name.Catalog().GetIdentifierName().empty() && name.Schema().GetIdentifierName().empty()) {
@@ -413,24 +425,50 @@ void StartAtNames(const string &sql, idx_t statement_start, vector<Part> &parts)
 	}
 }
 
-//! Table functions that change something: DuckDB's own, and every one of this extension's (notebook_*) but
-//! those that only read, so a new one is refused until it is known to be safe. DuckDB records no such property
-//! for table functions, so ones from other extensions cannot be judged. Scalar functions are judged by their
-//! stability instead.
-const char *const CHANGING_TABLE_FUNCTIONS[] = {
-    "checkpoint",      "force_checkpoint",     "copy_database",           "import_database",
-    "export_database", "truncate_duckdb_logs", "create_external_resource"};
+//! Table functions known to only read: DuckDB's own (with parquet and json) and this extension's read-only ones.
+//! DuckDB records no side-effect property for table functions, so any other one, from another extension
+//! (postgres_execute, say), a table macro or one added later, is refused until it is listed here.
+//! Every duckdb_* function is also allowed: they list the catalog and the system's state.
+const char *const READ_ONLY_TABLE_FUNCTIONS[] = {
+    // Generators and lists.
+    "range", "generate_series", "unnest", "repeat", "repeat_row", "glob", "summary", "test_all_types",
+    "test_vector_types",
+    // Readers.
+    "read_csv", "read_csv_auto", "sniff_csv", "read_text", "read_blob", "read_parquet", "parquet_scan",
+    "parquet_metadata", "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata", "parquet_bloom_probe",
+    "read_json", "read_json_auto", "read_json_objects", "read_json_objects_auto", "read_ndjson", "read_ndjson_auto",
+    "read_ndjson_objects", "json_each", "json_tree",
+    // Information about the database.
+    "pragma_table_info", "pragma_show", "pragma_storage_info", "pragma_metadata_info", "pragma_database_size",
+    "pragma_version", "pragma_platform", "pragma_collations", "pragma_user_agent", "pragma_functions",
+    "pg_timezone_names", "icu_calendar_names",
+    // This extension's functions that only read.
+    "notebook_cells", "notebook_sql", "notebook_chart_query", "notebook_peek", "notebook_cache"};
+const char *const READ_ONLY_TABLE_PREFIX = "duckdb_";
+//! Scalar functions with these prefixes switch something on or off, or are this extension's.
 const char *const CHANGING_PREFIXES[] = {"enable_", "disable_", "notebook_"};
 const char *const READ_ONLY_NOTEBOOK_FUNCTIONS[] = {"notebook_cells", "notebook_sql", "notebook_chart_query",
                                                     "notebook_peek", "notebook_cache"};
+
+bool ReadOnlyTableFunction(const string &name) {
+	if (StringUtil::StartsWith(name, READ_ONLY_TABLE_PREFIX)) {
+		return true;
+	}
+	for (auto known : READ_ONLY_TABLE_FUNCTIONS) {
+		if (name == known) {
+			return true;
+		}
+	}
+	return false;
+}
 
 //! Volatile functions that only compute a value.
 const char *const HARMLESS_VOLATILE[] = {"random", "uuid", "gen_random_uuid", "uuidv4", "uuidv7"};
 
 //! The first function in `reads` whose evaluation may have a side effect, or empty.
 string SideEffect(ClientContext &context, const Reads &reads) {
-	for (auto name : CHANGING_TABLE_FUNCTIONS) {
-		if (reads.functions.count(name)) {
+	for (auto &name : reads.table_functions) {
+		if (!ReadOnlyTableFunction(name)) {
 			return name;
 		}
 	}

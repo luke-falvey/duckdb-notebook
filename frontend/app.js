@@ -91,7 +91,9 @@ var App = (function () {
   // A remembered result goes: the cell waits to run again.
   function dropKept(c) { c.result = null; c.kept = null; c.state = 'stale'; }
   A.kept = function (data) {
-    A.live = !!data.ran;
+    // Live once the reader has run something in this session and the text is still what they ran: text
+    // reloaded from disk is not trusted (DESIGN §3), and the server pages and offers choices only when it is.
+    A.live = !!data.ran && !!data.trusted;
     (data.cached || []).forEach(function (item) {
       var c = A.cells[item.idx];
       if (!c || !item.result) return;
