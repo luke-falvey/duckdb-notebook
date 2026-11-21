@@ -284,9 +284,8 @@ struct KeyBuilder {
 			auto version = found == versions.end() ? std::string() : found->second;
 			// `?` marks a version that may still change (ModifiedTooRecently): the key covers it, but cannot vouch
 			// for it.
-			bool unsure = version.empty() || version[0] == '?';
-			verified = verified && !unsure;
-			data.Add("file").Add(path).Add(!version.empty() && version[0] == '?' ? version.substr(1) : version);
+			verified = verified && !version.empty() && !IsUnsure(version);
+			data.Add("file").Add(path).Add(StripUnsure(version));
 		}
 		for (int dependency : cell.depends_on) {
 			if (dependency >= 0 && static_cast<size_t>(dependency) < notebook.cells.size()) {
@@ -483,9 +482,15 @@ bool IsLocalPath(const std::string &path) {
 		return false;
 	}
 	// `\\host\share\x` and `//host/share/x` name a file on another machine (Windows UNC paths): opening one
-	// connects to the host.
+	// connects to the host. `\\?\C:\x` (an extended-length local path) and `\\.\x` (a device) do not. POSIX
+	// reads `//x` as `/x`, but it is refused too: a path cannot say which system it was written for.
 	if (path.size() >= 2 && (path[0] == '\\' || path[0] == '/') && (path[1] == '\\' || path[1] == '/')) {
-		return false;
+		bool extended_local = path.size() >= 6 && path[2] == '?' && (path[3] == '\\' || path[3] == '/') &&
+		                      std::isalpha(static_cast<unsigned char>(path[4])) && path[5] == ':';
+		bool device = path.size() >= 4 && path[2] == '.' && (path[3] == '\\' || path[3] == '/');
+		if (!extended_local && !device) {
+			return false;
+		}
 	}
 	auto scheme = path.find("://");
 	if (scheme == std::string::npos) {
@@ -510,6 +515,47 @@ std::vector<std::string> CacheSourceFiles(const Notebook &notebook) {
 	return files;
 }
 
+std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index) {
+	std::vector<size_t> views;
+	if (index >= notebook.cells.size()) {
+		return views;
+	}
+	std::set<size_t> seen;
+	std::vector<int> pending = notebook.cells[index].depends_on;
+	while (!pending.empty()) {
+		auto dependency = pending.back();
+		pending.pop_back();
+		if (dependency < 0 || static_cast<size_t>(dependency) >= notebook.cells.size() ||
+		    !seen.insert(static_cast<size_t>(dependency)).second) {
+			continue;
+		}
+		auto &cell = notebook.cells[static_cast<size_t>(dependency)];
+		// A named query is a view, read when a later cell selects from it; materialize=table reads as it runs.
+		if (cell.kind != CellKind::SQL || !cell.is_query || cell.name.empty() ||
+		    cell.Option("materialize", "view") == "table") {
+			continue;
+		}
+		views.push_back(static_cast<size_t>(dependency));
+		pending.insert(pending.end(), cell.depends_on.begin(), cell.depends_on.end());
+	}
+	std::sort(views.begin(), views.end());
+	return views;
+}
+
+std::vector<std::string> CacheReadFiles(const Notebook &notebook, size_t index) {
+	std::vector<std::string> files;
+	if (index >= notebook.cells.size()) {
+		return files;
+	}
+	files = CellSources(notebook.cells[index]).files;
+	for (auto view : CacheViewClosure(notebook, index)) {
+		for (auto &path : CellSources(notebook.cells[view]).files) {
+			AddUnique(files, path);
+		}
+	}
+	return files;
+}
+
 std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables,
                                 const std::map<std::string, std::string> &files,
                                 const std::map<size_t, std::map<std::string, std::string>> &cell_files) {
@@ -517,7 +563,22 @@ std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::st
 	for (size_t i = 0; i < notebook.cells.size(); i++) {
 		builder.DataKey(i);
 	}
-	return builder.keys;
+	auto keys = builder.keys;
+	// A cell that reads views reads their files as it runs: its key takes those views with its own versions.
+	for (auto &own : cell_files) {
+		auto views = CacheViewClosure(notebook, own.first);
+		if (views.empty()) {
+			continue;
+		}
+		auto overlay = cell_files;
+		for (auto view : views) {
+			overlay[view] = own.second;
+		}
+		KeyBuilder reader(notebook, variables, files, overlay);
+		reader.DataKey(own.first);
+		keys[own.first] = reader.keys[own.first];
+	}
+	return keys;
 }
 
 std::vector<std::string> CacheCellIds(const Notebook &notebook) {
@@ -685,8 +746,20 @@ std::map<std::string, std::string> CacheVariableKeys(const CacheState &state) {
 	return keys;
 }
 
+bool IsUnsure(const std::string &text) {
+	return !text.empty() && text[0] == '?';
+}
+
+std::string StripUnsure(const std::string &text) {
+	return IsUnsure(text) ? text.substr(1) : text;
+}
+
+std::string MarkUnsure(const std::string &text) {
+	return IsUnsure(text) ? text : "?" + text;
+}
+
 std::string CacheEntryKey(const CacheKey &key) {
-	return key.verified ? key.result : "?" + key.result;
+	return key.verified ? key.result : MarkUnsure(key.result);
 }
 
 std::vector<CachedCell> MatchCache(const Notebook &notebook, const std::map<std::string, std::string> &variables,
@@ -708,9 +781,8 @@ std::vector<CachedCell> MatchCache(const Notebook &notebook, const std::map<std:
 		match.index = cell.index;
 		// `?` before the key: the result was made from data the key could not vouch for then (CacheEntryKey).
 		auto &key = found->second.key;
-		bool unsure = !key.empty() && key[0] == '?';
-		match.stale = (unsure ? key.substr(1) : key) != keys[i].result;
-		match.verified = keys[i].verified && !unsure;
+		match.stale = StripUnsure(key) != keys[i].result;
+		match.verified = keys[i].verified && !IsUnsure(key);
 		match.entry = &found->second;
 		cached.push_back(match);
 	}

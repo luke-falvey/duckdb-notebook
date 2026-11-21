@@ -388,6 +388,30 @@ static void TestCacheSources() {
 	CHECK(per_cell[7].result == CacheKeys(nb, {}, changed)[7].result);
 	CHECK(Changed(keys, per_cell) == "7d 7r ");
 
+	// A view is read when a cell selects from it: the reader's versions key the views it reads too.
+	auto views = Analyzed("-- %% v\nSELECT * FROM 'x.csv';\n"
+	                      "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+	                      "-- %% r\nSELECT count(*) AS n FROM v;\n"
+	                      "-- %% m materialize=table\nSELECT * FROM 'x.csv';\n"
+	                      "-- %% s\nSELECT count(*) AS n FROM m;\n");
+	CHECK(!views.HasErrors());
+	CHECK(CacheViewClosure(views, 2) == std::vector<size_t> {0});
+	CHECK(CacheViewClosure(views, 4).empty());
+	CHECK(CacheReadFiles(views, 2) == std::vector<std::string> {"x.csv"});
+	CHECK(CacheReadFiles(views, 4).empty());
+	std::map<std::string, std::string> old_x {{"x.csv", "1:1"}}, new_x {{"x.csv", "2:2"}};
+	std::map<size_t, std::map<std::string, std::string>> run {{0, old_x}, {2, new_x}};
+	auto ran = CacheKeys(views, {}, old_x, run);
+	// r ran after w wrote x.csv: its key is that of the notebook with the new file, as it is when it is opened next.
+	CHECK(ran[2].result == CacheKeys(views, {}, new_x)[2].result);
+	// v read the old file, and keeps the key it ran with.
+	CHECK(ran[0].result == CacheKeys(views, {}, old_x)[0].result);
+
+	// The mark's helpers.
+	CHECK(IsUnsure("?1:1") && !IsUnsure("1:1") && !IsUnsure(""));
+	CHECK(StripUnsure("?glob|a=1") == "glob|a=1" && StripUnsure("1:1") == "1:1" && StripUnsure("?") == "");
+	CHECK(MarkUnsure("1:1") == "?1:1" && MarkUnsure("?1:1") == "?1:1");
+
 	// Only files on this machine are looked at.
 	CHECK(IsLocalPath("data/x.csv"));
 	CHECK(IsLocalPath("/abs/x.csv"));
@@ -401,6 +425,9 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("\\\\host\\share\\x.csv"));
 	CHECK(!IsLocalPath("//host/share/x.csv"));
 	CHECK(IsLocalPath("/x.csv"));
+	CHECK(IsLocalPath("\\\\?\\C:\\data\\x.csv"));
+	CHECK(IsLocalPath("\\\\.\\pipe\\x"));
+	CHECK(!IsLocalPath("\\\\?\\UNC\\host\\share\\x.csv"));
 	// A file modified within the last two seconds may still change without its modified time changing.
 	CHECK(ModifiedTooRecently(10000000, 10500000));
 	CHECK(ModifiedTooRecently(10000000, 11999999));

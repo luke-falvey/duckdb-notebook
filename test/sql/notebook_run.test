@@ -189,20 +189,20 @@ DROP TABLE orders
 statement ok
 DROP TABLE nb_test_numbers
 
-# The caller's max_execution_time bounds each of the notebook's queries, which run on a connection of their own
+# The caller's max_execution_time bounds the whole call: every query the notebook's connection starts ends by the
+# call's deadline, and the call fails once it has passed, whichever cell ran out of time (the last one here)
 statement ok
 COPY (SELECT '-- %% slow' || chr(10) || 'SELECT sum(a.range * b.range) FROM range(100000) a, range(100000) b;' || chr(10)) TO '__TEST_DIR__/nb_slow.sql' (FORMAT csv, HEADER false, QUOTE '')
 
 statement ok
 SET max_execution_time = 200
 
-query II
-SELECT status, error LIKE '%time%' FROM notebook_run('__TEST_DIR__/nb_slow.sql')
+statement error
+FROM notebook_run('__TEST_DIR__/nb_slow.sql')
 ----
-error	true
+maximum execution time
 
-# The limit is the call's, not each cell's: a cell gets the time the call has left, and the run stops once it is
-# spent, so two slow cells do not take twice the limit
+# Two slow cells: the second is not given the limit again
 statement ok
 COPY (SELECT '-- %% slow' || chr(10) || 'SELECT sum(a.range * b.range) FROM range(100000) a, range(100000) b;' || chr(10) || chr(10) || '-- %% slower' || chr(10) || 'SELECT sum(a.range + b.range) FROM range(100000) a, range(100000) b;' || chr(10)) TO '__TEST_DIR__/nb_slow2.sql' (FORMAT csv, HEADER false, QUOTE '')
 
@@ -211,20 +211,38 @@ FROM notebook_run('__TEST_DIR__/nb_slow2.sql')
 ----
 maximum execution time
 
-# A cell's own SET max_execution_time lasts until the next cell: the call's limit still holds
+# A cell's own SET max_execution_time = 0 does not lift the call's deadline, in a cell before or in the same cell
 statement ok
 COPY (SELECT '-- %%' || chr(10) || 'SET max_execution_time = 0;' || chr(10) || chr(10) || '-- %% slow' || chr(10) || 'SELECT sum(a.range * b.range) FROM range(100000) a, range(100000) b;' || chr(10)) TO '__TEST_DIR__/nb_slow_unset.sql' (FORMAT csv, HEADER false, QUOTE '')
 
-query II
-SELECT status, error LIKE '%time%' FROM notebook_run('__TEST_DIR__/nb_slow_unset.sql') WHERE name = 'slow'
+statement error
+FROM notebook_run('__TEST_DIR__/nb_slow_unset.sql')
 ----
-error	true
+maximum execution time
 
-# Exports run the notebook too, under the same limit
+statement ok
+COPY (SELECT '-- %% slow' || chr(10) || 'SET max_execution_time = 0;' || chr(10) || 'SELECT sum(a.range * b.range) FROM range(100000) a, range(100000) b;' || chr(10)) TO '__TEST_DIR__/nb_slow_same.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement error
+FROM notebook_run('__TEST_DIR__/nb_slow_same.sql')
+----
+maximum execution time
+
+# Exports run the notebook too, under the same limit, and write nothing
 statement error
 FROM notebook_export('__TEST_DIR__/nb_slow2.sql', file := '__TEST_DIR__/nb_slow2.html')
 ----
 maximum execution time
+
+statement error
+FROM notebook_export('__TEST_DIR__/nb_slow.sql', file := '__TEST_DIR__/nb_slow.html')
+----
+maximum execution time
+
+query I
+SELECT count(*) FROM glob('__TEST_DIR__/nb_slow*.html')
+----
+0
 
 statement ok
 RESET max_execution_time

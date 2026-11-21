@@ -79,11 +79,26 @@ std::vector<std::string> CacheSourceFiles(const Notebook &notebook);
 //! `files` maps each path of CacheSourceFiles to a text that identifies its version (size, modified
 //! time, ETag); a path that is missing or maps to "" has no known version, and one that starts with `?`
 //! is a version that may still change (ModifiedTooRecently): the key covers it but is not verified.
-//! `cell_files`, by cell index, replaces `files` for that cell: the versions as they were just before it ran,
-//! so a file an earlier cell of the same run wrote counts as that cell read it. Needs AnalyzeNotebook.
+//! `cell_files`, by cell index, replaces `files` for that cell and the views it reads (CacheViewClosure): the
+//! versions as they were just before it ran (of CacheReadFiles), so a file an earlier cell of the same run wrote
+//! counts as that cell read it, directly or through a view. Needs AnalyzeNotebook.
 std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables,
                                 const std::map<std::string, std::string> &files = {},
                                 const std::map<size_t, std::map<std::string, std::string>> &cell_files = {});
+
+//! The cells a cell reads lazily: the named query cells (views, not materialize=table) it depends on, and those
+//! they depend on through views, in file order. Their files are read when the cell runs.
+std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index);
+
+//! The files a cell reads when it runs: its own CellSources and those of CacheViewClosure.
+std::vector<std::string> CacheReadFiles(const Notebook &notebook, size_t index);
+
+//! A file version or entry key after the `?` mark: known, but not vouched for (ModifiedTooRecently, CacheEntryKey).
+//! No version or key text starts with `?` otherwise (versions start with a digit, `glob` or `missing`; keys are
+//! hashes), so the mark changes no layout and needs no CACHE_FORMAT: an older reader sees a marked key as stale.
+bool IsUnsure(const std::string &text);
+std::string StripUnsure(const std::string &text);
+std::string MarkUnsure(const std::string &text);
 
 //! What CacheEntry::key holds for a result made under `key`: the result key, after a `?` when the key was not
 //! verified. Such an entry is at best `unverified`, even once its files can be vouched for.

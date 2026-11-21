@@ -158,6 +158,47 @@ RESET GLOBAL file_search_path
 statement ok
 FROM notebook_cache_clear('{TEST_DIR}/nb_src_rel.sql')
 
+# The same when a cell of the notebook sets it (on the connection the cells run on, which opening never sees)
+statement ok
+COPY (SELECT '-- %%' || chr(10) || 'SET file_search_path = ''{TEST_DIR}'';' || chr(10) || chr(10) || '-- %% rel' || chr(10) || 'SELECT count(*) AS n FROM read_csv(''nb_src_rel.csv'');' || chr(10)) TO '{TEST_DIR}/nb_src_rel_set.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+query II
+SELECT name, status FROM notebook_run('{TEST_DIR}/nb_src_rel_set.sql', cache := true) WHERE name = 'rel'
+----
+rel	ok
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_rel_set.sql') WHERE cell = 'rel'
+----
+rel	unverified
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_rel_set.sql')
+
+# A file read through a view is read when the cell selecting from the view runs: what reads the view after a cell
+# rewrote the file is not stale (unverified: the file is too new to vouch for), while the view's own result is
+statement ok
+COPY (SELECT '-- %% v' || chr(10) || 'SELECT * FROM read_csv(''{TEST_DIR}/nb_src_view.csv'');' || chr(10) || chr(10) || '-- %% w' || chr(10) || 'COPY (SELECT range AS i FROM range(7)) TO ''{TEST_DIR}/nb_src_view.csv'' (HEADER);' || chr(10) || chr(10) || '-- %% r' || chr(10) || 'SELECT count(*) AS n FROM v;' || chr(10)) TO '{TEST_DIR}/nb_src_view.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/nb_src_view.csv' (HEADER)
+
+sleep 2100 millisecond
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_view.sql', cache := true)
+
+sleep 2100 millisecond
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_view.sql') WHERE cell IN ('v', 'r') ORDER BY idx
+----
+v	stale
+r	unverified
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_view.sql')
+
 # Clean up: all test files share one database
 query I
 SELECT removed FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')

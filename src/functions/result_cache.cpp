@@ -46,6 +46,37 @@ unique_ptr<QueryResult> Execute(Connection &connection, const string &sql, vecto
 	return result;
 }
 
+//! True if the default database stores a notebook named `name` (in `_sketchbook` or the old `_notebook` schema), so the
+//! cache there under that name is that notebook's own. True when it cannot tell.
+bool StoredInDefault(DatabaseInstance &db, const string &name) {
+	try {
+		Connection connection(db);
+		for (auto schema : {CACHE_SCHEMA, LEGACY_CACHE_SCHEMA}) {
+			auto listed = connection.Query("SELECT 1 FROM duckdb_tables() WHERE lower(database_name) = "
+			                               "lower(current_database()) AND schema_name = " +
+			                               notebook::QuoteString(schema) + " AND table_name = 'versions'");
+			if (listed->HasError()) {
+				return true;
+			}
+			auto chunk = listed->Fetch();
+			bool exists = chunk && chunk->size() > 0;
+			listed.reset();
+			if (!exists) {
+				continue;
+			}
+			auto found = Execute(connection, string("SELECT 1 FROM ") + schema + ".versions WHERE name = ? LIMIT 1",
+			                     {Value(name)});
+			auto rows = found->Fetch();
+			if (rows && rows->size() > 0) {
+				return true;
+			}
+		}
+		return false;
+	} catch (...) { // NOLINT: when in doubt, the default database's cache is not ours
+		return true;
+	}
+}
+
 //! True if `schema.cache` exists in `database` (the default one when empty).
 bool CacheTableExists(Connection &connection, const string &database, const string &schema) {
 	auto result =
@@ -164,7 +195,7 @@ string OneFileVersion(FileSystem &fs, const string &path) {
 	    notebook::ModifiedTooRecently(stats.last_modification_time.value, Timestamp::GetCurrentTimestamp().value)) {
 		// Modified times are whole seconds: a same-size rewrite later in this second would not change them. The
 		// version is kept, so a result made from it is not stale while the file stays as it is, but not vouched for.
-		return "?" + version;
+		return notebook::MarkUnsure(version);
 	}
 	return version;
 }
@@ -203,20 +234,21 @@ string FileVersion(FileSystem &fs, const string &path, bool search_path) {
 			if (one.empty()) {
 				return string();
 			}
-			if (one[0] == '?') {
-				unsure = true;
-				one = one.substr(1);
-			}
-			version += "|" + match.path + "=" + one;
+			unsure = unsure || notebook::IsUnsure(one);
+			version += "|" + match.path + "=" + notebook::StripUnsure(one);
 		}
-		return unsure ? "?" + version : version;
+		return unsure ? notebook::MarkUnsure(version) : version;
 	} catch (...) { // NOLINT: a file that cannot be looked at has no known version
 		return string();
 	}
 }
 
-//! file_search_path is set: a relative path may be read from somewhere else than where it is looked at.
-bool UsesSearchPath(DatabaseInstance &db) {
+//! file_search_path is set, for the database or by a cell of the notebook (on the connection the cells run on, which
+//! opening the notebook never sees): a relative path may be read from somewhere else than where it is looked at.
+bool UsesSearchPath(DatabaseInstance &db, const notebook::Notebook &notebook) {
+	if (notebook::SetsSetting(notebook, "file_search_path")) {
+		return true;
+	}
 	try {
 		return !Settings::Get<FileSearchPathSetting>(db).empty();
 	} catch (...) { // NOLINT: unknown counts as set, which only makes cells unverified
@@ -233,7 +265,7 @@ std::map<string, string> CacheFileVersions(DatabaseInstance &db, const notebook:
 		return versions;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
-	bool search_path = UsesSearchPath(db);
+	bool search_path = UsesSearchPath(db, notebook);
 	for (auto &path : files) {
 		versions[path] = FileVersion(fs, path, search_path);
 	}
@@ -252,12 +284,13 @@ void RunFileVersions::BeforeCell(DatabaseInstance &db, const notebook::Notebook 
 	}
 	auto &versions = cells[NumericCast<size_t>(cell.index)];
 	versions.clear();
-	auto files = notebook::CellSources(cell).files;
+	// Its own files and those of the views it reads, which it reads as it runs.
+	auto files = notebook::CacheReadFiles(notebook, NumericCast<size_t>(cell.index));
 	if (files.empty()) {
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
-	bool search_path = UsesSearchPath(db);
+	bool search_path = UsesSearchPath(db, notebook);
 	for (auto &path : files) {
 		versions[path] = FileVersion(fs, path, search_path);
 	}
@@ -355,7 +388,11 @@ void ResultCacheStore::Load(const std::vector<string> &ids, std::map<string, Cac
 		return;
 	}
 	// Or a stored notebook cached before its cache followed USE: every one was cached in the default database. Read
-	// there (and cleared there), never written.
+	// there (and cleared there), never written; unless the default database stores a notebook of that name, whose
+	// cache it then is.
+	if (StoredInDefault(db, name)) {
+		return;
+	}
 	if (!ResultCacheStore(db, source, false, string()).Read(ids, entries, state)) {
 		ResultCacheStore(db, source, true, string()).Read(ids, entries, state);
 	}
@@ -524,7 +561,7 @@ idx_t ResultCacheStore::Clear() {
 	idx_t removed = ClearHere();
 	if (!legacy && available) {
 		removed = MaxValue<idx_t>(removed, ResultCacheStore(db, source, true, database).ClearHere());
-		if (in_database && !database.empty()) {
+		if (in_database && !database.empty() && !StoredInDefault(db, name)) {
 			// What Load reads from the default database.
 			removed = MaxValue<idx_t>(removed, ResultCacheStore(db, source, false, string()).ClearHere());
 			removed = MaxValue<idx_t>(removed, ResultCacheStore(db, source, true, string()).ClearHere());
@@ -657,8 +694,26 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 		}
 		return;
 	}
+	std::map<string, string> before;
+	if (versions) {
+		// The cells that did not run are keyed with the versions from before the run where there are some (the editor
+		// takes them), else as they are now: notebook_run runs every cell, and looks at no file twice.
+		before = versions->before;
+		auto &fs = FileSystem::GetFileSystem(db);
+		bool search_path = UsesSearchPath(db, notebook);
+		for (auto &cell : notebook.cells) {
+			if (cell.index < 0 || versions->cells.count(NumericCast<size_t>(cell.index))) {
+				continue;
+			}
+			for (auto &path : notebook::CellSources(cell).files) {
+				if (!before.count(path)) {
+					before[path] = FileVersion(fs, path, search_path);
+				}
+			}
+		}
+	}
 	auto keys =
-	    versions ? notebook::CacheKeys(notebook, notebook::CacheVariableKeys(state), versions->before, versions->cells)
+	    versions ? notebook::CacheKeys(notebook, notebook::CacheVariableKeys(state), before, versions->cells)
 	             : notebook::CacheKeys(notebook, notebook::CacheVariableKeys(state), CacheFileVersions(db, notebook));
 	auto ids = notebook::CacheCellIds(notebook);
 	ResultCacheStore store(db, source, false, database);

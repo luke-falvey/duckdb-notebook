@@ -45,6 +45,9 @@ struct SessionState {
 	//! For each of `tables`: the statement that created it as DuckDB writes it (duckdb_tables().sql), and the
 	//! columns that hold data (not generated), quoted: restored as the same table, constraints and defaults too.
 	std::map<string, std::pair<string, string>> table_ddl;
+	//! Temp tables (lower case) that their cell's replay makes again, because a copy into the store failed. No other
+	//! cell copies them into the store, which would clash with that replay.
+	std::set<string> replayed;
 	//! Per cell index: the materialize=table cell's table in the store.
 	std::map<int, string> stored;
 };
@@ -85,9 +88,9 @@ struct RunnerOptions {
 
 class Runner {
 public:
-	//! `caller`: the context of the SQL call a one-off run (notebook_run, an export) belongs to. Its interrupt and
-	//! the time its query has left (max_execution_time) then bound the run: checked before each cell, and set as the
-	//! runner's own max_execution_time, so a cell cannot run past the caller's deadline.
+	//! `caller`: the context of the SQL call a one-off run (notebook_run, an export) belongs to. Its interrupt and its
+	//! query's deadline (max_execution_time) then bound the run: checked before each cell, and every query of the
+	//! runner's connection ends by that deadline at the latest, whatever a cell SETs.
 	Runner(DatabaseInstance &db, SessionState &state, optional_ptr<ClientContext> caller = nullptr);
 	~Runner();
 
@@ -152,10 +155,12 @@ public:
 	//! Records the connection's variables into the state (also done by the destructor).
 	void Save();
 
-private:
-	//! Throws if the caller was interrupted or its deadline has passed; else gives the runner's connection the time
-	//! the caller has left as its max_execution_time. Nothing without a caller.
+	//! Throws if the caller was interrupted or its deadline has passed. Nothing without a caller. Runs before the
+	//! replay, Prepare and each cell; a one-off run calls it once more after its last cell, so a run that took past
+	//! the deadline fails whichever cell ran out of time.
 	void CheckCaller();
+
+private:
 	//! The store's name, attaching it if the session keeps tables and has none yet; empty without one.
 	string Store();
 	//! After a cell that may change tables: copies the temp tables it made or names into the store,
@@ -175,6 +180,9 @@ private:
 	bool restored = false;
 	vector<string> attached;
 };
+
+//! Throws (InterruptException) if `context` was interrupted or its query's deadline (max_execution_time) has passed.
+void CheckCallerDeadline(ClientContext &context);
 
 //! Detaches `names` (Runner::Attached) from a connection of its own; best effort.
 void DetachDatabases(DatabaseInstance &db, const vector<string> &names);

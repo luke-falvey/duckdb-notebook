@@ -6,7 +6,6 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/database_manager.hpp"
-#include "notebook/cache.hpp"
 #include "notebook/source.hpp"
 
 namespace duckdb {
@@ -47,15 +46,17 @@ void RemoveQuietly(FileSystem &fs, const string &path) {
 //! Replaces `path` atomically: the text goes to a uniquely named file beside it, which is then moved over it. A
 //! failed write leaves the old file as it was, and a reader (the editor's file watcher) never sees half a file.
 //! A symbolic link stays a link: the file it points to is the one replaced. The new file has the default mode,
-//! not the old one's, and a hard link to the old file keeps the old text. A remote path is written directly: an
-//! object store publishes a file only once its upload completes, so that is already all-or-nothing, and a
-//! temporary file there would cost a second upload.
+//! not the old one's, and a hard link to the old file keeps the old text. An object store's path (s3://, gs://,
+//! az://, http(s)://: FileSystem::IsRemoteFile) is written directly: it publishes a file only once its upload
+//! completes, so that is already all-or-nothing, and a temporary file there would cost a second upload. Every other
+//! file system (a network share, hdfs://, an extension's) shows a file as it is written, so it gets the move too.
 void WriteFile(FileSystem &fs, const string &path, const string &content) {
-	if (!notebook::IsLocalPath(path) || FileSystem::IsRemoteFile(path)) {
+	if (FileSystem::IsRemoteFile(path)) {
 		WriteWhole(fs, path, content);
 		return;
 	}
-	// Through the file system's opener, so the target a link points to is checked against allowed_directories too.
+	// Resolves a link (a path that is not local is left as it is). The writes after it go through the file system's
+	// opener, which checks the resolved target against allowed_directories.
 	auto target = fs.CanonicalizePath(path);
 	auto temporary = target + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".tmp";
 	try {

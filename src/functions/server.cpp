@@ -267,7 +267,8 @@ string RequestDatabase(ServerState &state, const http::Request &req, const Json 
 //! `a.sql`, `./a.sql` and a link to it are one session.
 string SessionKey(DatabaseInstance &db, const string &source, const string &database) {
 	if (notebook::IsStoredSource(source)) {
-		return "db\n" + database + "\n" + source;
+		// Database names are matched without case, as DuckDB does: `USE MYDB` and `USE mydb` are one database.
+		return "db\n" + StringUtil::Lower(database) + "\n" + source;
 	}
 	try {
 		return "file\n" + FileSystem::GetFileSystem(db).CanonicalizePath(source);

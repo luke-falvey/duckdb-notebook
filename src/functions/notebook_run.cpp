@@ -113,8 +113,8 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 		PrepareOnce(runner, detach, bind_data.notebook, bind_data.path, bind_data.params);
 		RunFileVersions versions;
 		if (bind_data.cache) {
+			// Every cell runs, and is keyed with the files as it read them (BeforeCell): nothing to take beforehand.
 			cache.Load(db, bind_data.path, bind_data.notebook);
-			versions.Start(db, bind_data.notebook);
 		}
 		for (auto index : bind_data.order) {
 			auto &cell = cells[NumericCast<idx_t>(index)];
@@ -139,6 +139,8 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 			}
 			state->outcomes.emplace_back(cell.index, std::move(outcome));
 		}
+		// The last cell may have run out of the call's time: the call fails then, as it does when an earlier one did.
+		runner.CheckCaller();
 		if (bind_data.cache) {
 			runner.Save();
 			cache.Record(db, bind_data.path, bind_data.notebook, session, ran, &versions);

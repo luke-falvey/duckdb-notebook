@@ -776,6 +776,60 @@ def test_session_keys(browser, work):
     finally:
         stop(shell)
 
+    # When a table a cell made cannot be copied into the store (SKETCHBOOK_TEST_FAIL_STORE_COPY makes the copy fail),
+    # that cell's tables are made again by its SQL and none comes from the store, and no later cell copies them in:
+    # either would clash with that replay.
+    with open(os.path.join(folder, "copy.sql"), "w") as f:
+        f.write(
+            "-- %% mk\nCREATE TEMP TABLE b AS SELECT 2 AS y;\nCREATE TEMP TABLE a AS SELECT 1 AS x;\n\n"
+            "-- %% ins\nINSERT INTO b VALUES (3);\n\n"
+            "-- %% look\nSELECT (SELECT count(*) FROM a) AS na, (SELECT count(*) FROM b) AS nb;\n"
+        )
+    os.environ["SKETCHBOOK_TEST_FAIL_STORE_COPY"] = "a"
+    try:
+        shell, url = serve(folder, "copy.sql")
+    finally:
+        del os.environ["SKETCHBOOK_TEST_FAIL_STORE_COPY"]
+    try:
+        page = browser.new_page()
+        page.goto(still(url))
+        page.wait_for_selector(".nb-cell")
+        result = page.evaluate(
+            """async () => {
+          const out = [];
+          for (const cells of [[0], [1], [2]]) {
+            const r = await App.api('POST', '/api/run', {text: App.text(), cells});
+            out.push(r.results[0].status + (r.results[0].error ? ' ' + r.results[0].error : ''));
+          }
+          const look = await App.api('POST', '/api/run', {text: App.text(), cells: [2]});
+          out.push(JSON.stringify(look.results[0].data.rows));
+          return out;
+        }"""
+        )
+        check(
+            result[:3] == ["ok", "ok", "ok"] and result[3] == "[[1,1]]",
+            f"a failed copy into the store replays the cell's tables, in later requests too ({result})",
+        )
+        page.close()
+    finally:
+        stop(shell)
+
+    # Database names are matched without case: USE B and USE b open one session.
+    shell, url_upper = serve(folder, "db:x", setup="ATTACH 'b.duckdb' AS b; USE B;")
+    try:
+        shell.stdin.write("USE b; SELECT url FROM notebook_start('db:x', open := false);\n")
+        shell.stdin.flush()
+        url_lower = shell.stdout.readline().strip()
+        page = browser.new_page()
+        for url in (url_upper, url_lower):
+            page.goto(still(url))
+            page.wait_for_selector(".nb-cell")
+        opened = page.evaluate("async () => (await App.api('GET', '/api/notebooks')).open")
+        check(opened.count("db:x") == 1, f"a stored notebook is one session whatever the case of its database ({opened})")
+        page.close()
+    finally:
+        stop(shell)
+
 
 def test_cache_written_later(browser, work):
     # B24: a session reads the store again until it has run, so results a scheduled

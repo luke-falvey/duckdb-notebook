@@ -814,6 +814,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		RunnerOptions run;
 		run.params = options.params;
 		runner.RunAll(notebook, run);
+		runner.CheckCaller();
 		idx_t files = 0;
 		auto extension = options.data_format == "csv" ? ".csv" : ".parquet";
 		for (auto &cell : notebook.cells) {
@@ -844,6 +845,9 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		ExportOptions html_options = options;
 		html_options.format = "html";
 		auto html = ExportDocument(db, text, bind.source, html_options, note);
+		// A run that took past the call's deadline fails, whichever cell ran out of time, rather than prints its
+		// errors.
+		CheckCallerDeadline(context);
 		// The page is printed as it opens: no handwriting, whatever headless Chrome's clock does, and
 		// the normal width whatever the notebook or the reader chose (paper has its own width).
 		html = notebook::ReplaceAll(html, "<html lang=\"en\">",
@@ -871,10 +875,18 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 			throw InvalidInputException("notebook_export: %s failed to print the PDF (exit status %d)", browser,
 			                            status);
 		}
-		fs.MoveFile(pdf_path, bind.to);
+		try {
+			fs.MoveFile(pdf_path, bind.to);
+		} catch (...) {
+			fs.TryRemoveFile(pdf_path);
+			throw;
+		}
 		note = "printed with " + browser;
 	} else {
 		auto document = ExportDocument(db, text, bind.source, options, note);
+		// A run that took past the call's deadline fails, whichever cell ran out of time, rather than writes its
+		// errors.
+		CheckCallerDeadline(context);
 		WriteTextFile(context, bind.to, document);
 		bytes = static_cast<int64_t>(document.size());
 	}

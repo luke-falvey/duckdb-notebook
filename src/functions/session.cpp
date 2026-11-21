@@ -4,6 +4,7 @@
 #include "duckdb/common/path.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_config.hpp"
+#include "duckdb/main/client_context_state.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/query_result_stream.hpp"
@@ -33,6 +34,22 @@ idx_t CellRows(const notebook::Cell &cell) {
 }
 
 namespace {
+
+//! Ends every query of a runner's connection by the caller's deadline at the latest (Runner): DuckDB sets each query's
+//! deadline from max_execution_time as the query begins, and this lowers it to the caller's.
+class CallerDeadline : public ClientContextState {
+public:
+	explicit CallerDeadline(idx_t deadline) : deadline(deadline) {
+	}
+	void QueryBegin(ClientContext &context) override {
+		if (!context.query_deadline.IsValid() || context.query_deadline.GetIndex() > deadline) {
+			context.query_deadline = deadline;
+		}
+	}
+
+private:
+	idx_t deadline;
+};
 
 //! A float as the double of its shortest decimal, so 0.1f travels as 0.1 and not 0.10000000149011612.
 double FloatAsDouble(float value) {
@@ -243,30 +260,34 @@ Runner::Runner(DatabaseInstance &db, SessionState &state, optional_ptr<ClientCon
 	}
 	// Before anything runs on the connection, the replay and the [notebook] cell's ATTACH included.
 	CheckCaller();
+	if (caller && caller->query_deadline.IsValid()) {
+		// Every query the runner's connection starts ends by the caller's deadline at the latest, whatever a cell
+		// SETs: the deadline itself, not a duration that each query would get afresh.
+		connection->context->registered_state->Insert(
+		    "sketchbook_caller_deadline", make_shared_ptr<CallerDeadline>(caller->query_deadline.GetIndex()));
+	}
 	// The rest of the session is replayed on first use (Restore), so that the caller can register the
 	// connection for interrupts and time limits first.
 }
 
-void Runner::CheckCaller() {
-	if (!caller) {
-		return;
-	}
-	if (caller->IsInterrupted()) {
+void CheckCallerDeadline(ClientContext &context) {
+	if (context.IsInterrupted()) {
 		throw InterruptException();
 	}
-	if (!caller->query_deadline.IsValid()) {
+	if (!context.query_deadline.IsValid()) {
 		return;
 	}
 	auto now = NumericCast<idx_t>(
 	    std::chrono::duration_cast<std::chrono::milliseconds>(steady_clock::now().time_since_epoch()).count());
-	auto deadline = caller->query_deadline.GetIndex();
-	if (now >= deadline) {
+	if (now >= context.query_deadline.GetIndex()) {
 		throw InterruptException(ClientContext::QUERY_DEADLINE_ERROR);
 	}
-	// Written into the connection's settings, not with SET: lock_configuration refuses SET, and the limit must hold
-	// then too. Set again before every cell, so a cell's own SET max_execution_time lasts only until the next.
-	Settings::Set<MaxExecutionTimeSetting>(*connection->context, SetScope::SESSION,
-	                                       Value::BIGINT(NumericCast<int64_t>(deadline - now)));
+}
+
+void Runner::CheckCaller() {
+	if (caller) {
+		CheckCallerDeadline(*caller);
+	}
 }
 
 void Runner::Restore() {
@@ -372,6 +393,7 @@ bool Runner::KeepTempTables(const notebook::Cell &cell) {
 			state.table_ddl.erase(*it);
 			it = state.tables.erase(it);
 		}
+		state.replayed.insert(own.begin(), own.end());
 		return false;
 	};
 	auto listed = connection->Query("SELECT table_name, sql FROM duckdb_tables() WHERE database_name = 'temp'");
@@ -396,13 +418,23 @@ bool Runner::KeepTempTables(const notebook::Cell &cell) {
 	for (auto &name : cell.reads) {
 		mentioned.insert(StringUtil::Lower(name));
 	}
+	// For tests only: the copy of this table fails, as it would if the store ran out of memory.
+	auto fail_copy = StringUtil::Lower(FileSystem::GetEnvVariable("SKETCHBOOK_TEST_FAIL_STORE_COPY"));
 	for (auto &table : present) {
+		auto lower = StringUtil::Lower(table);
 		// A table this cell may have changed, or one that is new: copy it, rows and all.
-		if (state.tables.count(table) && !mentioned.count(StringUtil::Lower(table))) {
+		if (state.tables.count(table) && !mentioned.count(lower)) {
 			continue;
 		}
-		auto copied = connection->Query("CREATE OR REPLACE TABLE " + notebook::StoredTable(store, table) +
-		                                " AS FROM temp.main." + notebook::QuoteIdentifier(table));
+		if (state.replayed.count(lower) && !own.count(lower)) {
+			// Another cell's replay makes it again: a copy here would clash with that replay. It keeps only what that
+			// cell's SQL makes, as every table did before the store.
+			continue;
+		}
+		auto copied =
+		    connection->Query("CREATE OR REPLACE TABLE " + notebook::StoredTable(store, table) + " AS FROM temp.main." +
+		                      notebook::QuoteIdentifier(table) +
+		                      (!fail_copy.empty() && lower == fail_copy ? " WHERE error('copy failed')" : ""));
 		if (copied->HasError()) {
 			copied.reset();
 			if (own.count(StringUtil::Lower(table))) {
@@ -439,7 +471,14 @@ bool Runner::KeepTempTables(const notebook::Cell &cell) {
 		state.table_ddl.erase(*it);
 		it = state.tables.erase(it);
 	}
-	return kept_all ? true : replay_own();
+	if (!kept_all) {
+		return replay_own();
+	}
+	for (auto &name : own) {
+		// Copied this time: the store has them again, and the cell's replay leaves them out.
+		state.replayed.erase(name);
+	}
+	return true;
 }
 
 Runner::~Runner() {

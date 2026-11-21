@@ -185,6 +185,32 @@ bool IsCreateTempTable(const std::string &statement) {
 	return false;
 }
 
+bool SetsSetting(const Notebook &notebook, const std::string &name) {
+	std::string wanted;
+	for (char c : name) {
+		wanted += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+	}
+	for (auto &cell : notebook.cells) {
+		if (cell.kind != CellKind::SQL) {
+			continue;
+		}
+		for (auto &statement : SplitStatements(cell.sql)) {
+			auto words = LeadingWords(statement.text, 3);
+			if (words.empty() || (words[0] != "SET" && words[0] != "RESET")) {
+				continue;
+			}
+			size_t at = 1;
+			if (at < words.size() && (words[at] == "SESSION" || words[at] == "LOCAL" || words[at] == "GLOBAL")) {
+				at++;
+			}
+			if (at < words.size() && words[at] == wanted) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool MayWrite(const Cell &cell) {
 	if (cell.kind != CellKind::SQL) {
 		return false;

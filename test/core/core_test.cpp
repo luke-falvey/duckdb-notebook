@@ -201,6 +201,15 @@ static void TestSessionStore() {
 	CHECK(!IsCreateTempTable("CREATE TEMP MACRO table_of(x) AS x"));
 	CHECK(MayWrite(nb.cells[1]) && !MayWrite(nb.cells[2]) && !MayWrite(nb.cells[3]));
 	CHECK(MayWrite(ParseNotebook("-- %%\nUPDATE t SET x = 1;\n").cells[0]));
+	// Settings a notebook sets itself, in any scope, by SET or RESET; not in comments, strings or other statements.
+	CHECK(SetsSetting(ParseNotebook("-- %%\nSET file_search_path = 'data';\n"), "file_search_path"));
+	CHECK(SetsSetting(ParseNotebook("-- %%\nSELECT 1;\n-- x\nset global FILE_SEARCH_PATH TO 'd';\n"),
+	                  "file_search_path"));
+	CHECK(SetsSetting(ParseNotebook("-- %%\nRESET SESSION file_search_path;\n"), "file_search_path"));
+	CHECK(!SetsSetting(ParseNotebook("-- %%\nSET threads = 2;\n"), "file_search_path"));
+	CHECK(!SetsSetting(ParseNotebook("-- %%\n/* SET file_search_path = 'x'; */ SELECT 'SET file_search_path';\n"),
+	                   "file_search_path"));
+	CHECK(!SetsSetting(ParseNotebook("-- %%\nSET VARIABLE file_search_path = 1;\n"), "file_search_path"));
 	CHECK(!MayWrite(nb.cells[0]));
 }
 
