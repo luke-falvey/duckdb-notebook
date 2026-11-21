@@ -567,16 +567,45 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("/network/x.csv") && !IsLocalPath("/./net/h/x") && !IsLocalPath("/tmp/../NET/h/x"));
 	CHECK(!IsLocalPath("file:///net/h/x") && !IsLocalPath("file:/net/h/x") && !IsLocalPath("C:\\net\\x"));
 	CHECK(IsLocalPath("/data/netflix/x.csv") && IsLocalPath("/data/networks.csv"));
-	// A glob that may go into what it matched at / (/net, /Network): a pattern as the first segment with more after it,
-	// absolute or relative (the working directory may be /), or any `..`. Case, ranges and negation do not matter.
-	for (auto &root : {"/n?t/host/x/*.csv", "/[n]et/host/*.csv", "/*/host/share/*.csv", "/[Nn]etwork/Servers/h/*.csv",
-	                   "/**/x.csv", "/data/../n?t/h/x", "file:///n*/h/x", "/[!x]et/h/x", "/ne[a-z]/h", "/[Z-n]et/h/x",
-	                   "/[^n]et/h/x", "/[!N]et/h/x", "n?t/host/x.csv", "*/host/x.csv", "../../../../n?t/h/*.csv",
-	                   "~/../../n?t/h/*.csv", "data/../*/h/x.csv", "./*/h/x.csv", "/d?ta/x.csv"}) {
+	// A glob may have a pattern only in its last segment, and not `**`: it lists one literal directory and goes into
+	// nothing it matched, wherever links, the working directory or $HOME lead.
+	for (auto &root : {"/n?t/host/x/*.csv",
+	                   "/[n]et/host/*.csv",
+	                   "/*/host/share/*.csv",
+	                   "/[Nn]etwork/Servers/h/*.csv",
+	                   "/**/x.csv",
+	                   "/data/../n?t/h/x",
+	                   "file:///n*/h/x",
+	                   "/[!x]et/h/x",
+	                   "/ne[a-z]/h",
+	                   "/[Z-n]et/h/x",
+	                   "/[^n]et/h/x",
+	                   "/[!N]et/h/x",
+	                   "n?t/host/x.csv",
+	                   "*/host/x.csv",
+	                   "../../../../n?t/h/*.csv",
+	                   "~/../../n?t/h/*.csv",
+	                   "data/../*/h/x.csv",
+	                   "./*/h/x.csv",
+	                   "/d?ta/x.csv",
+	                   "~/n?t/h/x.csv",
+	                   "~/*/h/x.csv",
+	                   "/**",
+	                   "**",
+	                   "./**",
+	                   "file:///**",
+	                   "/data/**",
+	                   "/data/**/x.parquet",
+	                   "/proc/self/root/n?t/h/x.csv",
+	                   "/proc/1/cwd/n?t/h/x",
+	                   "data/*/x.csv",
+	                   "year=*/part.parquet",
+	                   "\\\\?\\*\\x"}) {
 		CHECK(!IsLocalPath(root));
 	}
-	for (auto &root : {"/data/*.csv", "/d?ta.csv", "/data/**/x.parquet", "data/*/x.csv", "*.csv", "data_*.parquet",
-	                   "~/data/*/x.csv", "\\\\?\\C:\\data\\x.csv", "C:\\data\\*\\x.csv", "/data/[ab]*/x"}) {
+	for (auto &root : {"/data/*.csv", "/d?ta.csv", "*.csv", "data_*.parquet", "~/data/x/*.csv", "../data/*.csv",
+	                   "\\\\?\\C:\\data\\x.csv", "\\\\?\\C:\\data\\*.csv", "C:\\data\\*.csv", "/data/[ab]*",
+	                   "/proc/self/root/tmp/*.csv"}) {
 		CHECK(IsLocalPath(root));
 	}
 	CHECK(!IsLocalPath("s3://bucket/*.parquet"));

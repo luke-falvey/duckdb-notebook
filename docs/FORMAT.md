@@ -634,12 +634,13 @@ edited. This is why naming cells you care about matters (§2).
   (any `scheme://` path but `file://`), a UNC path (`\\host\share\x.csv`, `//host/share/x.csv`), a device
   path other than `\\?\` and a drive with no `.` or `..` segment (`\\.\…`, `\\?\UNC\…`, `\\?\C:\..\…`,
   which can climb off the drive), a path with a `net` or `network` segment in any case (the automounter's
-  `/net/host/…`, `/Network/…`), a glob whose first segment is a pattern with more path after it
-  (`/n?t/…`, `*/host/…`, `/**/…`, which can go into what the pattern matches at `/`) or that has a `..`
-  segment, and a `file:` URL other than `file:/…`, `file:///…` or `file://localhost/…` to a local path
-  have no known version, and cost no request. Nor has a relative path while `file_search_path` is set, or
-  a path starting with `~` while `home_directory` is set, for the database or by a cell of the notebook
-  (`SET`, `RESET`), since DuckDB may read it from somewhere else.
+  `/net/host/…`, `/Network/…`), a glob with a pattern in a directory segment or a `**` (`/n?t/host/…`,
+  `data/*/x.csv`, `/data/**`: such a glob can go into whatever a pattern matched, wherever a link, the
+  working directory or `~` leads; only a pattern in the last segment, as in `data/*.csv`, lists just the
+  directory the path names), and a `file:` URL other than `file:/…`, `file:///…` or `file://localhost/…`
+  to a local path have no known version, and cost no request. Nor has a relative path while
+  `file_search_path` is set, or a path starting with `~` while `home_directory` is set, for the database
+  or by a cell of the notebook (`SET`, `RESET`), since DuckDB may read it from somewhere else.
 
 What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width`,
 `height`, `label` and `placeholder`, and the selections only its charts filter on. Editing a query's chart or brushing a chart

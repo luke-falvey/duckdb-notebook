@@ -52,8 +52,8 @@ cell it reads, reads:
   a cell that reads a file the cell before it wrote is usually one;
 - a remote file (`https://`, `s3://` and any other `scheme://` but `file://`), a UNC path
   (`\\server\share\x.csv`), a Windows device path other than `\\?\C:\…` (with no `.` or `..` in it), a
-  path with a `net` or `network` segment in it (`/net/host/…`), a glob whose first folder is a pattern
-  (`/n?t/…`, `*/host/…`) or that climbs with `..`,
+  path with a `net` or `network` segment in it (`/net/host/…`), a glob with a pattern in a folder name or
+  a `**` (`data/*/x.csv`, `/data/**`; `data/*.csv` is fine),
   or a `file:` URL to one of those: the cache never looks at one, so opening or running a notebook costs
   no request;
 - a relative path while `file_search_path` is set, or a `~` path while `home_directory` is set, for the

@@ -608,32 +608,19 @@ bool IsSeparator(char c) {
 	return c == '/' || c == '\\';
 }
 
-//! Whether a glob stays off the automounter's `/net` and `/Network`. Listing `/` is harmless; going into what a
-//! pattern matched there (`/n?t/host`, `/*/host`, `/**`) contacts a host. A glob is refused when its first segment is
-//! a pattern with more path after it, since a relative path may start at `/` (the working directory), and when it has
-//! a `..` segment, which can climb to `/` from anywhere. Nothing is matched here, so no reading of DuckDB's glob
-//! syntax (case, ranges, negation) can be got wrong; a refused glob is only unverified.
+//! Whether a glob stays off other machines. Only its last segment may be a pattern, and not `**`: the glob then lists
+//! one directory the path names literally, and goes into nothing it matched. Each match is judged again before it is
+//! looked at (FileVersion), so a match under `/net` is refused there. A pattern in a directory segment could go
+//! anywhere a link or the working directory leads (`/n?t/host`, `*/host` from `/`, `~/n?t` with $HOME at `/`,
+//! `/proc/self/root/n?t`), and `**` walks everything below it. Nothing is matched here, so no reading of DuckDB's
+//! glob syntax can be got wrong; a refused glob is only unverified.
 bool GlobStaysLocal(const std::string &raw) {
 	// `\\?\C:\` is an extended-length prefix, not a pattern.
 	auto path = raw.compare(0, 4, "\\\\?\\") == 0 ? raw.substr(4) : raw;
-	if (path.find_first_of("*?[") == std::string::npos) {
-		return true;
-	}
-	std::vector<std::string> segments;
-	size_t begin = 0;
-	for (size_t i = 0; i <= path.size(); i++) {
-		if (i == path.size() || IsSeparator(path[i])) {
-			auto segment = path.substr(begin, i - begin);
-			if (segment == "..") {
-				return false;
-			}
-			if (!segment.empty() && segment != ".") {
-				segments.push_back(segment);
-			}
-			begin = i + 1;
-		}
-	}
-	return segments.size() < 2 || segments[0].find_first_of("*?[") == std::string::npos;
+	auto last = path.find_last_of("/\\");
+	auto directory = last == std::string::npos ? std::string() : path.substr(0, last);
+	auto name = last == std::string::npos ? path : path.substr(last + 1);
+	return directory.find_first_of("*?[") == std::string::npos && name.find("**") == std::string::npos;
 }
 
 //! A path as the file system opens it (after a `file:` prefix is stripped) that names no other machine. Two separators
