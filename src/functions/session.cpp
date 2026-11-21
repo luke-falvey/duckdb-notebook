@@ -36,7 +36,9 @@ idx_t CellRows(const notebook::Cell &cell) {
 namespace {
 
 //! Ends every query of a runner's connection by the caller's deadline at the latest (Runner): DuckDB sets each query's
-//! deadline from max_execution_time as the query begins, and this lowers it to the caller's.
+//! deadline from max_execution_time as the query begins (ClientContext::BeginQueryInternal), then calls QueryBegin on
+//! every registered state, so this has the last word whatever a cell SETs. Internal DuckDB API: recheck that order when
+//! DuckDB is updated (notebook_run.test, the same-cell SET max_execution_time = 0 case, fails if it changes).
 class CallerDeadline : public ClientContextState {
 public:
 	explicit CallerDeadline(idx_t deadline) : deadline(deadline) {
@@ -263,6 +265,7 @@ Runner::Runner(DatabaseInstance &db, SessionState &state, optional_ptr<ClientCon
 	if (caller && caller->query_deadline.IsValid()) {
 		// Every query the runner's connection starts ends by the caller's deadline at the latest, whatever a cell
 		// SETs: the deadline itself, not a duration that each query would get afresh.
+		// Once per connection: each Runner has a connection of its own.
 		connection->context->registered_state->Insert(
 		    "sketchbook_caller_deadline", make_shared_ptr<CallerDeadline>(caller->query_deadline.GetIndex()));
 	}
@@ -418,8 +421,9 @@ bool Runner::KeepTempTables(const notebook::Cell &cell) {
 	for (auto &name : cell.reads) {
 		mentioned.insert(StringUtil::Lower(name));
 	}
-	// For tests only: the copy of this table fails, as it would if the store ran out of memory.
-	auto fail_copy = StringUtil::Lower(FileSystem::GetEnvVariable("SKETCHBOOK_TEST_FAIL_STORE_COPY"));
+	// For tests only (test_browser.py): the copy of the table this names fails, as it would if the store ran out of
+	// memory. Read once per process; DESIGN §11 names it. It changes nothing unless set.
+	static const string fail_copy = StringUtil::Lower(FileSystem::GetEnvVariable("SKETCHBOOK_TEST_FAIL_STORE_COPY"));
 	for (auto &table : present) {
 		auto lower = StringUtil::Lower(table);
 		// A table this cell may have changed, or one that is new: copy it, rows and all.

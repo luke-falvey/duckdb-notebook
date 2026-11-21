@@ -210,6 +210,9 @@ static void TestSessionStore() {
 	CHECK(!SetsSetting(ParseNotebook("-- %%\n/* SET file_search_path = 'x'; */ SELECT 'SET file_search_path';\n"),
 	                   "file_search_path"));
 	CHECK(!SetsSetting(ParseNotebook("-- %%\nSET VARIABLE file_search_path = 1;\n"), "file_search_path"));
+	CHECK(SetsSetting(ParseNotebook("-- %%\nSET \"file_search_path\" = 'd';\n"), "file_search_path"));
+	CHECK(SetsSetting(ParseNotebook("-- %%\nPRAGMA file_search_path = 'd';\n"), "file_search_path"));
+	CHECK(!SetsSetting(ParseNotebook("-- %%\nPRAGMA table_info('file_search_path');\n"), "file_search_path"));
 	CHECK(!MayWrite(nb.cells[0]));
 }
 

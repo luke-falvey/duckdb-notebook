@@ -185,6 +185,47 @@ bool IsCreateTempTable(const std::string &statement) {
 	return false;
 }
 
+namespace {
+
+//! The first `count` words of a statement after its leading comments, upper-cased, a double-quoted identifier
+//! unquoted: `SET "file_search_path" = 'x'` gives SET, FILE_SEARCH_PATH.
+std::vector<std::string> LeadingNames(const std::string &statement, size_t count) {
+	std::vector<std::string> words;
+	auto text = StripLeadingComments(statement);
+	size_t i = 0;
+	while (words.size() < count && i < text.size()) {
+		while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
+			i++;
+		}
+		std::string word;
+		if (i < text.size() && text[i] == '"') {
+			for (i++; i < text.size(); i++) {
+				if (text[i] == '"' && i + 1 < text.size() && text[i + 1] == '"') {
+					word += '"';
+					i++;
+				} else if (text[i] == '"') {
+					i++;
+					break;
+				} else {
+					word += static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
+				}
+			}
+		} else {
+			while (i < text.size() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) {
+				word += static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
+				i++;
+			}
+		}
+		if (word.empty()) {
+			break;
+		}
+		words.push_back(word);
+	}
+	return words;
+}
+
+} // namespace
+
 bool SetsSetting(const Notebook &notebook, const std::string &name) {
 	std::string wanted;
 	for (char c : name) {
@@ -195,12 +236,14 @@ bool SetsSetting(const Notebook &notebook, const std::string &name) {
 			continue;
 		}
 		for (auto &statement : SplitStatements(cell.sql)) {
-			auto words = LeadingWords(statement.text, 3);
-			if (words.empty() || (words[0] != "SET" && words[0] != "RESET")) {
+			// SET and RESET in any scope, and PRAGMA name = value, which DuckDB still takes for a SET.
+			auto words = LeadingNames(statement.text, 3);
+			if (words.empty() || (words[0] != "SET" && words[0] != "RESET" && words[0] != "PRAGMA")) {
 				continue;
 			}
 			size_t at = 1;
-			if (at < words.size() && (words[at] == "SESSION" || words[at] == "LOCAL" || words[at] == "GLOBAL")) {
+			if (words[0] != "PRAGMA" && at < words.size() &&
+			    (words[at] == "SESSION" || words[at] == "LOCAL" || words[at] == "GLOBAL")) {
 				at++;
 			}
 			if (at < words.size() && words[at] == wanted) {

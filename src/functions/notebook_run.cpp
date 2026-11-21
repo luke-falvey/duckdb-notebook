@@ -108,7 +108,7 @@ unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionI
 	{
 		// A separate connection gives the notebook its own temp views and variables, while sharing
 		// the caller's attached databases. The caller's interrupt and max_execution_time bound the whole run: the
-		// runner stops before the next cell, and gives each cell only the time the call has left.
+		// runner stops before the next cell, and no query of its connection outlives the call's deadline.
 		Runner runner(db, session, &context);
 		PrepareOnce(runner, detach, bind_data.notebook, bind_data.path, bind_data.params);
 		RunFileVersions versions;

@@ -219,6 +219,8 @@ struct KeyBuilder {
 	std::vector<int> state;
 	//! Every name a cell defines.
 	std::set<std::string> defined;
+	//! ViewKey's results, by view and by the version map it was keyed with.
+	std::map<std::pair<size_t, const std::map<std::string, std::string> *>, CacheKey> view_keys;
 
 	KeyBuilder(const Notebook &notebook, const std::map<std::string, std::string> &variables,
 	           const std::map<std::string, std::string> &files,
@@ -261,8 +263,42 @@ struct KeyBuilder {
 		return keys[index].data;
 	}
 
-	void Compute(size_t index) {
-		state[index] = 1;
+	//! The versions a cell is keyed with: those taken just before it ran (cell_files), else `files`.
+	const std::map<std::string, std::string> &VersionsOf(size_t index) const {
+		auto own = cell_files.find(index);
+		return own == cell_files.end() ? files : own->second;
+	}
+
+	//! A view (a named query that is not materialize=table) is read when a cell selects from it: as a dependency,
+	//! it is keyed with the reading cell's versions.
+	bool IsView(size_t index) const {
+		auto &cell = notebook.cells[index];
+		return cell.kind == CellKind::SQL && cell.is_query && !cell.name.empty() &&
+		       cell.Option("materialize", "view") != "table";
+	}
+
+	//! The data key of view `index` as a cell keyed with `versions` reads it.
+	const CacheKey &ViewKey(size_t index, const std::map<std::string, std::string> &versions) {
+		if (&versions == &VersionsOf(index)) {
+			DataKey(index);
+			return keys[index];
+		}
+		auto key = std::make_pair(index, &versions);
+		auto found = view_keys.find(key);
+		if (found != view_keys.end()) {
+			return found->second;
+		}
+		// A cycle among views is an error on its cells already; the key only has to be stable.
+		auto &slot = view_keys[key];
+		slot.data = "cycle";
+		CacheKey built;
+		Build(index, versions, built);
+		slot = built;
+		return slot;
+	}
+
+	//! The data key of `index` (and its result key) with `versions` for its files and for the views it reads.
+	void Build(size_t index, const std::map<std::string, std::string> &versions, CacheKey &out) {
 		auto &cell = notebook.cells[index];
 		auto chart_only = ChartOnlyVariables(cell);
 
@@ -277,8 +313,6 @@ struct KeyBuilder {
 		data.Add(cell.kind == CellKind::SQL ? cell.sql : cell.body);
 		auto sources = CellSources(cell);
 		bool verified = !sources.unchecked && ReadsOnlyCells(cell, sources);
-		auto own = cell_files.find(index);
-		auto &versions = own == cell_files.end() ? files : own->second;
 		for (auto &path : sources.files) {
 			auto found = versions.find(path);
 			auto version = found == versions.end() ? std::string() : found->second;
@@ -288,13 +322,21 @@ struct KeyBuilder {
 			data.Add("file").Add(path).Add(StripUnsure(version));
 		}
 		for (int dependency : cell.depends_on) {
-			if (dependency >= 0 && static_cast<size_t>(dependency) < notebook.cells.size()) {
-				data.Add(DataKey(static_cast<size_t>(dependency)));
+			if (dependency < 0 || static_cast<size_t>(dependency) >= notebook.cells.size()) {
+				continue;
+			}
+			auto at = static_cast<size_t>(dependency);
+			if (IsView(at)) {
+				auto &view = ViewKey(at, versions);
+				data.Add(view.data);
+				verified = verified && view.verified;
+			} else {
+				data.Add(DataKey(at));
 				// A cell in a cycle (state 1) is already an error; it does not make the key unverified.
-				verified = verified && keys[static_cast<size_t>(dependency)].verified;
+				verified = verified && keys[at].verified;
 			}
 		}
-		keys[index].verified = verified;
+		out.verified = verified;
 		std::vector<std::string> read;
 		for (auto &name : cell.reads) {
 			if (name.size() > 1 && name[0] == '$' && !Contains(chart_only, name.substr(1))) {
@@ -305,10 +347,10 @@ struct KeyBuilder {
 		for (auto &name : read) {
 			AddVariable(data, name, variables);
 		}
-		keys[index].data = CacheHash(data.text);
+		out.data = CacheHash(data.text);
 
 		KeyText result;
-		result.Add("result").Add(keys[index].data).Add(cell.body);
+		result.Add("result").Add(out.data).Add(cell.body);
 		for (auto &option : cell.options) {
 			if (IsDisplayOption(option.first)) {
 				result.Add(option.first).Add(option.second);
@@ -318,7 +360,14 @@ struct KeyBuilder {
 		for (auto &name : chart_only) {
 			AddVariable(result, name, variables);
 		}
-		keys[index].result = CacheHash(result.text);
+		out.result = CacheHash(result.text);
+	}
+
+	void Compute(size_t index) {
+		state[index] = 1;
+		CacheKey built;
+		Build(index, VersionsOf(index), built);
+		keys[index] = built;
 		state[index] = 2;
 	}
 };
@@ -482,13 +531,18 @@ bool IsLocalPath(const std::string &path) {
 		return false;
 	}
 	// `\\host\share\x` and `//host/share/x` name a file on another machine (Windows UNC paths): opening one
-	// connects to the host. `\\?\C:\x` (an extended-length local path) and `\\.\x` (a device) do not. POSIX
-	// reads `//x` as `/x`, but it is refused too: a path cannot say which system it was written for.
+	// connects to the host. So do the device forms `\\?\UNC\host\…`, `\\.\UNC\host\…` and
+	// `\\.\GLOBALROOT\…`. Only `\\?\` or `\\.\` followed by a drive (`\\?\C:\x`, an extended-length local
+	// path) is local. POSIX reads `//x` as `/x`, but it is refused too: a path cannot say which system it was written
+	// for.
+	if (path.compare(0, 4, "\\??\\") == 0) {
+		// The NT namespace (`\\??\\UNC\\host\\…`): reached only through the Windows API, and may name a share.
+		return false;
+	}
 	if (path.size() >= 2 && (path[0] == '\\' || path[0] == '/') && (path[1] == '\\' || path[1] == '/')) {
-		bool extended_local = path.size() >= 6 && path[2] == '?' && (path[3] == '\\' || path[3] == '/') &&
-		                      std::isalpha(static_cast<unsigned char>(path[4])) && path[5] == ':';
-		bool device = path.size() >= 4 && path[2] == '.' && (path[3] == '\\' || path[3] == '/');
-		if (!extended_local && !device) {
+		bool drive = path.size() >= 6 && (path[2] == '?' || path[2] == '.') && (path[3] == '\\' || path[3] == '/') &&
+		             std::isalpha(static_cast<unsigned char>(path[4])) && path[5] == ':';
+		if (!drive) {
 			return false;
 		}
 	}
@@ -563,22 +617,7 @@ std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::st
 	for (size_t i = 0; i < notebook.cells.size(); i++) {
 		builder.DataKey(i);
 	}
-	auto keys = builder.keys;
-	// A cell that reads views reads their files as it runs: its key takes those views with its own versions.
-	for (auto &own : cell_files) {
-		auto views = CacheViewClosure(notebook, own.first);
-		if (views.empty()) {
-			continue;
-		}
-		auto overlay = cell_files;
-		for (auto view : views) {
-			overlay[view] = own.second;
-		}
-		KeyBuilder reader(notebook, variables, files, overlay);
-		reader.DataKey(own.first);
-		keys[own.first] = reader.keys[own.first];
-	}
-	return keys;
+	return builder.keys;
 }
 
 std::vector<std::string> CacheCellIds(const Notebook &notebook) {

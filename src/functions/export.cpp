@@ -802,9 +802,6 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 
 	if (format == "data") {
 		// One file per named query cell, written from the run's own session.
-		if (!fs.DirectoryExists(bind.to)) {
-			fs.CreateDirectory(bind.to);
-		}
 		SessionState session;
 		DetachOnExit detach {db, {}};
 		Runner runner(db, session, &context);
@@ -815,6 +812,11 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		run.params = options.params;
 		runner.RunAll(notebook, run);
 		runner.CheckCaller();
+		// Only once the run is done: a run past the call's deadline leaves no directory. The files are written one by
+		// one, so a deadline that passes while they are written leaves those written so far.
+		if (!fs.DirectoryExists(bind.to)) {
+			fs.CreateDirectory(bind.to);
+		}
 		idx_t files = 0;
 		auto extension = options.data_format == "csv" ? ".csv" : ".parquet";
 		for (auto &cell : notebook.cells) {
@@ -826,7 +828,11 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 			                                  notebook::QuoteString(path) + " (FORMAT " +
 			                                  (options.data_format == "csv" ? "csv" : "parquet") + ")");
 			if (result->HasError()) {
-				throw InvalidInputException("notebook_export: cell '%s': %s", cell.name, result->GetError());
+				auto error = result->GetError();
+				result.reset();
+				// Out of the call's time: the same INTERRUPT error as every other export and notebook_run.
+				runner.CheckCaller();
+				throw InvalidInputException("notebook_export: cell '%s': %s", cell.name, error);
 			}
 			files++;
 		}
@@ -869,16 +875,20 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		command += " >/dev/null 2>&1";
 #endif
 		auto status = std::system(command.c_str());
-		fs.RemoveFile(html_path);
+		fs.TryRemoveFile(html_path);
 		if (status != 0 || !fs.FileExists(pdf_path)) {
 			fs.TryRemoveFile(pdf_path);
 			throw InvalidInputException("notebook_export: %s failed to print the PDF (exit status %d)", browser,
 			                            status);
 		}
 		try {
-			fs.MoveFile(pdf_path, bind.to);
+			// Over the file a link points to, as WriteFile does: the link stays a link.
+			fs.MoveFile(pdf_path, fs.CanonicalizePath(bind.to));
 		} catch (...) {
-			fs.TryRemoveFile(pdf_path);
+			try {
+				fs.TryRemoveFile(pdf_path);
+			} catch (...) { // NOLINT: the move's error is the one to report
+			}
 			throw;
 		}
 		note = "printed with " + browser;

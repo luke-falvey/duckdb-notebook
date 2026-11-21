@@ -407,6 +407,20 @@ static void TestCacheSources() {
 	// v read the old file, and keeps the key it ran with.
 	CHECK(ran[0].result == CacheKeys(views, {}, old_x)[0].result);
 
+	// One step further: a table that reads the view, and a cell that reads the table. Both read what the rewritten
+	// file holds, and are keyed as opening the notebook will key them.
+	auto chain = Analyzed("-- %% v\nSELECT * FROM 'x.csv';\n"
+	                      "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+	                      "-- %% t materialize=table\nSELECT count(*) AS n FROM v;\n"
+	                      "-- %% s\nSELECT n + 1 AS m FROM t;\n");
+	CHECK(!chain.HasErrors());
+	std::map<size_t, std::map<std::string, std::string>> chain_run {{0, old_x}, {2, new_x}, {3, new_x}};
+	auto chain_keys = CacheKeys(chain, {}, old_x, chain_run);
+	auto opened = CacheKeys(chain, {}, new_x);
+	CHECK(chain_keys[2].result == opened[2].result);
+	CHECK(chain_keys[3].result == opened[3].result);
+	CHECK(chain_keys[0].result != opened[0].result);
+
 	// The mark's helpers.
 	CHECK(IsUnsure("?1:1") && !IsUnsure("1:1") && !IsUnsure(""));
 	CHECK(StripUnsure("?glob|a=1") == "glob|a=1" && StripUnsure("1:1") == "1:1" && StripUnsure("?") == "");
@@ -426,7 +440,13 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("//host/share/x.csv"));
 	CHECK(IsLocalPath("/x.csv"));
 	CHECK(IsLocalPath("\\\\?\\C:\\data\\x.csv"));
-	CHECK(IsLocalPath("\\\\.\\pipe\\x"));
+	CHECK(IsLocalPath("\\\\.\\C:\\data\\x.csv"));
+	CHECK(!IsLocalPath("\\\\.\\pipe\\x"));
+	CHECK(!IsLocalPath("\\\\.\\UNC\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("\\\\.\\unc\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("//./UNC/host/share/x.csv"));
+	CHECK(!IsLocalPath("\\??\\UNC\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("\\\\.\\GLOBALROOT\\Device\\Mup\\host\\share\\x.csv"));
 	CHECK(!IsLocalPath("\\\\?\\UNC\\host\\share\\x.csv"));
 	// A file modified within the last two seconds may still change without its modified time changing.
 	CHECK(ModifiedTooRecently(10000000, 10500000));

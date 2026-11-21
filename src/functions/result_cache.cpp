@@ -705,7 +705,7 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 			if (cell.index < 0 || versions->cells.count(NumericCast<size_t>(cell.index))) {
 				continue;
 			}
-			for (auto &path : notebook::CellSources(cell).files) {
+			for (auto &path : notebook::CacheReadFiles(notebook, NumericCast<size_t>(cell.index))) {
 				if (!before.count(path)) {
 					before[path] = FileVersion(fs, path, search_path);
 				}
