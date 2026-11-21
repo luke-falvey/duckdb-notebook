@@ -510,7 +510,9 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("\\\\?\\C:\\a\\.. \\x") && !IsLocalPath("\\\\?\\C:\\a\\...\\x"));
 	CHECK(IsLocalPath("\\\\?\\C:\\a.b\\x"));
 	CHECK(!IsLocalPath("/net/host/export/x.csv") && !IsLocalPath("/Network/Servers/host/x.csv"));
-	CHECK(IsLocalPath("/network/x.csv"));
+	CHECK(!IsLocalPath("/network/x.csv") && !IsLocalPath("/./net/h/x") && !IsLocalPath("/tmp/../NET/h/x"));
+	CHECK(!IsLocalPath("file:///net/h/x") && !IsLocalPath("file:/net/h/x") && !IsLocalPath("C:\\net\\x"));
+	CHECK(IsLocalPath("/data/netflix/x.csv") && IsLocalPath("/data/networks.csv"));
 	CHECK(!IsLocalPath("s3://bucket/*.parquet"));
 	CHECK(!IsLocalPath("hf://datasets/x"));
 	CHECK(!IsLocalPath(""));

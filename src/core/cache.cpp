@@ -452,7 +452,7 @@ struct KeyBuilder {
 				auto now = version_in(versions, path);
 				data.Add(then);
 				if (now != then) {
-					data.Add("then").Add(now);
+					data.Add("now").Add(now);
 				}
 			}
 		}
@@ -675,6 +675,20 @@ bool IsSeparator(char c) {
 //! is refused too: a path cannot say which system it was written for. A
 //! drive letter mapped to a network share (`Z:\x`) cannot be told from a local one, and counts as local.
 bool NamesThisMachine(const std::string &path) {
+	// The automounter's view of other machines' exports (autofs's and macOS's -hosts map, `/net/host/...`,
+	// `/Network/...`): looking is contacting them. Matched as any `net` or `network` segment, in any case, so that
+	// `/./net`, `/tmp/../net` and macOS's case-insensitive `/NETWORK` are caught; a local directory of that name only
+	// makes its files unverified.
+	size_t begin = 0;
+	for (size_t i = 0; i <= path.size(); i++) {
+		if (i == path.size() || IsSeparator(path[i])) {
+			auto segment = Lower(path.substr(begin, i - begin));
+			if (segment == "net" || segment == "network") {
+				return false;
+			}
+			begin = i + 1;
+		}
+	}
 	if (path.compare(0, 4, "\\??\\") == 0) {
 		return false;
 	}
@@ -738,10 +752,6 @@ bool IsLocalPath(const std::string &path) {
 		       (offset + 1 > path.size() || NamesThisMachine(path.substr(offset + 1)));
 	}
 	if (path.find("://") != std::string::npos) {
-		return false;
-	}
-	// The automounter's view of other machines' exports (autofs and macOS's -hosts map): looking is contacting them.
-	if (path.compare(0, 5, "/net/") == 0 || path.compare(0, 9, "/Network/") == 0) {
 		return false;
 	}
 	return NamesThisMachine(path);

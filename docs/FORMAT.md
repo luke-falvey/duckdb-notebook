@@ -632,7 +632,7 @@ edited. This is why naming cells you care about matters (§2).
   a file opens it and reads none of it. Only files on this machine are looked at: a remote one (any
   `scheme://` path but `file://`), a UNC path (`\\host\share\x.csv`, `//host/share/x.csv`), a device path
   other than `\\?\` and a drive with no `.` or `..` segment (`\\.\…`, `\\?\UNC\…`, `\\?\C:\..\…`,
-  which can climb off the drive), a path under the automounter's `/net/` or `/Network/`, and a `file:`
+  which can climb off the drive), a path with a `net` or `network` segment in any case (the automounter's `/net/host/…`, `/Network/…`), and a `file:`
   URL other than `file:/…`, `file:///…` or `file://localhost/…` to a local path have no known version,
   and cost no request. Nor has a relative path while `file_search_path` is set, or a path starting
   with `~` while `home_directory` is set, for the database or by a cell of the notebook (`SET`,
