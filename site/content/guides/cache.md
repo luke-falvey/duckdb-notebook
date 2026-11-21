@@ -51,7 +51,7 @@ cell it reads, reads:
   whole seconds, so it could still change unseen). A result made from such a file stays unverified;
   a cell that reads a file the cell before it wrote is usually one;
 - a remote file (`https://`, `s3://` and any other `scheme://` but `file://`), a UNC path
-  (`\\server\share\x.csv`), a Windows device path other than `\\?\C:\…` (with no `.` or `..` in it), a
+  (`\\server\share\x.csv`), a Windows device path (`\\.\…`, `\\?\…`), a
   path with a `net` or `network` segment in it (`/net/host/…`), a glob with a pattern in a folder name or
   a `**` (`data/*/x.csv`, `/data/**`; `data/*.csv` is fine),
   or a `file:` URL to one of those: the cache never looks at one, so opening or running a notebook costs

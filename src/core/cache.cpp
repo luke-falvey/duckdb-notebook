@@ -613,10 +613,12 @@ bool IsSeparator(char c) {
 //! looked at (FileVersion), so a match under `/net` is refused there. A pattern in a directory segment could go
 //! anywhere a link or the working directory leads (`/n?t/host`, `*/host` from `/`, `~/n?t` with $HOME at `/`,
 //! `/proc/self/root/n?t`), and `**` walks everything below it. Nothing is matched here, so no reading of DuckDB's
-//! glob syntax can be got wrong; a refused glob is only unverified.
+//! glob syntax can be got wrong; a refused glob is only unverified. A link in the listed directory is still followed
+//! when the directory is listed (DuckDB stats every entry), as a linked literal path always was.
 bool GlobStaysLocal(const std::string &raw) {
-	// `\\?\C:\` is an extended-length prefix, not a pattern.
-	auto path = raw.compare(0, 4, "\\\\?\\") == 0 ? raw.substr(4) : raw;
+	// `\\?\` is a prefix on Windows, but POSIX reads `\\?\C:\x` as `/?/C:/x`, a pattern in a directory: such a
+	// path is unverified on both, since this code cannot tell which reads it.
+	auto &path = raw;
 	auto last = path.find_last_of("/\\");
 	auto directory = last == std::string::npos ? std::string() : path.substr(0, last);
 	auto name = last == std::string::npos ? path : path.substr(last + 1);
@@ -697,6 +699,11 @@ size_t FileUrlOffset(const std::string &lower) {
 
 bool IsLocalPath(const std::string &path) {
 	if (path.empty()) {
+		return false;
+	}
+	// DuckDB expands `~` as $HOME followed by the rest, separator or not: with $HOME at `/`, `~net/host` is
+	// `/net/host`. A `~` must be followed by a separator for the rest to be judged as written.
+	if (path[0] == '~' && path.size() > 1 && !IsSeparator(path[1])) {
 		return false;
 	}
 	auto lower = Lower(path);

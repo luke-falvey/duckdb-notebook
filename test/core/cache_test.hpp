@@ -562,7 +562,8 @@ static void TestCacheSources() {
 	CHECK(IsLocalPath("FILE:///tmp/x.csv"));
 	CHECK(!IsLocalPath("https://example.com/x.csv"));
 	CHECK(!IsLocalPath("\\\\?\\C:\\a\\.. \\x") && !IsLocalPath("\\\\?\\C:\\a\\...\\x"));
-	CHECK(IsLocalPath("\\\\?\\C:\\a.b\\x"));
+	// POSIX reads `\\\\?\\` as a pattern in a directory (`/?/C:/…`): unverified on every platform.
+	CHECK(!IsLocalPath("\\\\?\\C:\\a.b\\x"));
 	CHECK(!IsLocalPath("/net/host/export/x.csv") && !IsLocalPath("/Network/Servers/host/x.csv"));
 	CHECK(!IsLocalPath("/network/x.csv") && !IsLocalPath("/./net/h/x") && !IsLocalPath("/tmp/../NET/h/x"));
 	CHECK(!IsLocalPath("file:///net/h/x") && !IsLocalPath("file:/net/h/x") && !IsLocalPath("C:\\net\\x"));
@@ -604,10 +605,13 @@ static void TestCacheSources() {
 		CHECK(!IsLocalPath(root));
 	}
 	for (auto &root : {"/data/*.csv", "/d?ta.csv", "*.csv", "data_*.parquet", "~/data/x/*.csv", "../data/*.csv",
-	                   "\\\\?\\C:\\data\\x.csv", "\\\\?\\C:\\data\\*.csv", "C:\\data\\*.csv", "/data/[ab]*",
-	                   "/proc/self/root/tmp/*.csv"}) {
+	                   "C:\\data\\*.csv", "/data/[ab]*", "/proc/self/root/tmp/*.csv"}) {
 		CHECK(IsLocalPath(root));
 	}
+	// `~name` is $HOME followed by `name`: with $HOME at `/`, `~net/host` is `/net/host`.
+	CHECK(!IsLocalPath("~net/host/x.csv") && !IsLocalPath("~net/host/*.csv") && !IsLocalPath("~Network/h/x") &&
+	      !IsLocalPath("~*"));
+	CHECK(IsLocalPath("~") && IsLocalPath("~/x.csv") && IsLocalPath("~\\x.csv"));
 	CHECK(!IsLocalPath("s3://bucket/*.parquet"));
 	CHECK(!IsLocalPath("hf://datasets/x"));
 	CHECK(!IsLocalPath(""));
@@ -615,7 +619,7 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("\\\\host\\share\\x.csv"));
 	CHECK(!IsLocalPath("//host/share/x.csv"));
 	CHECK(IsLocalPath("/x.csv"));
-	CHECK(IsLocalPath("\\\\?\\C:\\data\\x.csv"));
+	CHECK(!IsLocalPath("\\\\?\\C:\\data\\x.csv"));
 	CHECK(!IsLocalPath("\\\\.\\C:\\data\\x.csv"));
 	CHECK(!IsLocalPath("\\\\.\\pipe\\x"));
 	CHECK(!IsLocalPath("\\\\.\\UNC\\host\\share\\x.csv"));
@@ -629,7 +633,7 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("\\\\?\\C:\\..\\UNC\\host\\share\\x.csv"));
 	CHECK(!IsLocalPath("\\\\?\\C:\\data\\.\\..\\..\\x.csv"));
 	CHECK(!IsLocalPath("\\\\?\\C:"));
-	CHECK(IsLocalPath("\\\\?\\C:\\data\\..x\\x.csv"));
+	CHECK(!IsLocalPath("\\\\?\\C:\\data\\..x\\x.csv"));
 	// A file: URL is looked at as the file system reads it, on either platform.
 	CHECK(IsLocalPath("file:///tmp/x.csv"));
 	CHECK(IsLocalPath("file:/tmp/x.csv"));
