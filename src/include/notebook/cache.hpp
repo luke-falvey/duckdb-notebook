@@ -86,11 +86,15 @@ std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::st
                                 const std::map<std::string, std::string> &files = {},
                                 const std::map<size_t, std::map<std::string, std::string>> &cell_files = {});
 
-//! The cells a cell reads lazily: the named query cells (views, not materialize=table) it depends on, and those
-//! they depend on through views, in file order. Their files are read when the cell runs.
+//! A cell another cell reads lazily, when it runs: a named query (a view unless materialize=table) or a cell that
+//! CREATEs a VIEW. Its final query's and CREATE VIEW's files are read then; its other statements read when it ran.
+bool IsLazyView(const Cell &cell);
+
+//! The cells a cell reads lazily (IsLazyView) that it depends on, and those they depend on through views, in file
+//! order. Their lazily read files are read when the cell runs.
 std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index);
 
-//! The files a cell reads when it runs: its own CellSources and those of CacheViewClosure.
+//! The files a cell reads when it runs: its own CellSources and the lazily read files of CacheViewClosure.
 std::vector<std::string> CacheReadFiles(const Notebook &notebook, size_t index);
 
 //! A file version or entry key after the `?` mark: known, but not vouched for (ModifiedTooRecently, CacheEntryKey).

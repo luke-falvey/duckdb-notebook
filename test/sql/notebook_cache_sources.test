@@ -222,6 +222,28 @@ s	unverified
 statement ok
 FROM notebook_cache_clear('{TEST_DIR}/nb_src_chain.sql')
 
+# The same for a view a cell CREATEs
+statement ok
+COPY (SELECT '-- %% mk' || chr(10) || 'CREATE OR REPLACE TEMP VIEW cv AS SELECT * FROM read_csv(''{TEST_DIR}/nb_src_cv.csv'');' || chr(10) || chr(10) || '-- %% w' || chr(10) || 'COPY (SELECT range AS i FROM range(7)) TO ''{TEST_DIR}/nb_src_cv.csv'' (HEADER);' || chr(10) || chr(10) || '-- %% r' || chr(10) || 'SELECT count(*) AS n FROM cv;' || chr(10)) TO '{TEST_DIR}/nb_src_cv.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/nb_src_cv.csv' (HEADER)
+
+sleep 2100 millisecond
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_cv.sql', cache := true)
+
+sleep 2100 millisecond
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_cv.sql') WHERE cell = 'r'
+----
+r	unverified
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_cv.sql')
+
 # Clean up: all test files share one database
 query I
 SELECT removed FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')

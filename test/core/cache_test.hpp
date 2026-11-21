@@ -421,6 +421,47 @@ static void TestCacheSources() {
 	CHECK(chain_keys[3].result == opened[3].result);
 	CHECK(chain_keys[0].result != opened[0].result);
 
+	// A cell that CREATEs a VIEW is read lazily too.
+	auto created = Analyzed("-- %% mk\nCREATE TEMP VIEW v AS SELECT * FROM 'x.csv';\n"
+	                        "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+	                        "-- %% r\nSELECT count(*) AS n FROM v;\n");
+	CHECK(!created.HasErrors());
+	CHECK(IsLazyView(created.cells[0]) && !IsLazyView(created.cells[1]));
+	CHECK(CacheReadFiles(created, 2) == std::vector<std::string> {"x.csv"});
+	std::map<size_t, std::map<std::string, std::string>> created_run {{0, old_x}, {2, new_x}};
+	CHECK(CacheKeys(created, {}, old_x, created_run)[2].result == CacheKeys(created, {}, new_x)[2].result);
+
+	// A named query whose earlier statement reads a file reads it when it runs, not when it is read: for a reader, that
+	// file keeps the view's own version, so a later change to it is not taken for what the reader saw.
+	auto eager = Analyzed("-- %% v\nCREATE TEMP TABLE e AS FROM 'e.csv';\nSELECT * FROM e, 'x.csv';\n"
+	                      "-- %% w\nCOPY (SELECT 1) TO 'e.csv';\n"
+	                      "-- %% r\nSELECT count(*) AS n FROM v;\n");
+	CHECK(!eager.HasErrors());
+	std::map<std::string, std::string> e_old {{"e.csv", "1:1"}, {"x.csv", "5:5"}},
+	    e_new {{"e.csv", "2:2"}, {"x.csv", "5:5"}};
+	std::map<size_t, std::map<std::string, std::string>> eager_run {{0, e_old}, {2, e_new}};
+	// Opened after the rewrite, r is stale: the table v made holds the old e.csv.
+	CHECK(CacheKeys(eager, {}, e_old, eager_run)[2].result != CacheKeys(eager, {}, e_new)[2].result);
+	CHECK(CacheKeys(eager, {}, e_old, eager_run)[2].result == CacheKeys(eager, {}, e_old)[2].result);
+
+	// A view of a view, a diamond (s reads the table t and the view b, t reads b) and a cycle among views.
+	auto deep = Analyzed("-- %% a\nSELECT * FROM 'x.csv';\n"
+	                     "-- %% b\nSELECT * FROM a;\n"
+	                     "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+	                     "-- %% t materialize=table\nSELECT count(*) AS n FROM b;\n"
+	                     "-- %% s\nSELECT * FROM t, b;\n");
+	CHECK(!deep.HasErrors());
+	std::map<size_t, std::map<std::string, std::string>> deep_run {{0, old_x}, {1, old_x}, {3, new_x}, {4, new_x}};
+	auto deep_keys = CacheKeys(deep, {}, old_x, deep_run);
+	auto deep_open = CacheKeys(deep, {}, new_x);
+	CHECK(deep_keys[3].result == deep_open[3].result && deep_keys[4].result == deep_open[4].result);
+	CHECK(deep_keys[1].result != deep_open[1].result);
+	auto cycle_views = Analyzed("-- %% p\nSELECT * FROM q;\n-- %% q\nSELECT * FROM p;\n-- %% r\nSELECT * FROM p;\n");
+	std::map<size_t, std::map<std::string, std::string>> cycle_run {{2, new_x}};
+	CHECK(CacheKeys(cycle_views, {}, old_x, cycle_run).size() == 3);
+	CHECK(CacheKeys(cycle_views, {}, old_x, cycle_run)[2].result ==
+	      CacheKeys(cycle_views, {}, old_x, cycle_run)[2].result);
+
 	// The mark's helpers.
 	CHECK(IsUnsure("?1:1") && !IsUnsure("1:1") && !IsUnsure(""));
 	CHECK(StripUnsure("?glob|a=1") == "glob|a=1" && StripUnsure("1:1") == "1:1" && StripUnsure("?") == "");
@@ -440,12 +481,32 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("//host/share/x.csv"));
 	CHECK(IsLocalPath("/x.csv"));
 	CHECK(IsLocalPath("\\\\?\\C:\\data\\x.csv"));
-	CHECK(IsLocalPath("\\\\.\\C:\\data\\x.csv"));
+	CHECK(!IsLocalPath("\\\\.\\C:\\data\\x.csv"));
 	CHECK(!IsLocalPath("\\\\.\\pipe\\x"));
 	CHECK(!IsLocalPath("\\\\.\\UNC\\host\\share\\x.csv"));
 	CHECK(!IsLocalPath("\\\\.\\unc\\host\\share\\x.csv"));
 	CHECK(!IsLocalPath("//./UNC/host/share/x.csv"));
 	CHECK(!IsLocalPath("\\??\\UNC\\host\\share\\x.csv"));
+	// `\\.\` is normalised by Windows, so `..` can climb from a drive onto a share; only `\\?\C:` is local.
+	CHECK(!IsLocalPath("\\\\.\\C:\\..\\UNC\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("//./C:/../UNC/host/share/x.csv"));
+	CHECK(!IsLocalPath("//?/C:/x.csv"));
+	CHECK(!IsLocalPath("\\\\?\\C:\\..\\UNC\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("\\\\?\\C:\\data\\.\\..\\..\\x.csv"));
+	CHECK(!IsLocalPath("\\\\?\\C:"));
+	CHECK(IsLocalPath("\\\\?\\C:\\data\\..x\\x.csv"));
+	// A file: URL is looked at as the file system reads it, on either platform.
+	CHECK(IsLocalPath("file:///tmp/x.csv"));
+	CHECK(IsLocalPath("file:/tmp/x.csv"));
+	CHECK(IsLocalPath("file://localhost/tmp/x.csv"));
+	CHECK(IsLocalPath("file:///C:/data/x.csv"));
+	CHECK(!IsLocalPath("file:////host/share/x.csv"));
+	CHECK(!IsLocalPath("file:///\\\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("file:/\\\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("file://localhost/\\\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("FILE:///\\\\h\\s\\x"));
+	CHECK(!IsLocalPath("file:////?/UNC/host/share/x.csv"));
+	CHECK(!IsLocalPath("file://host/share/x.csv"));
 	CHECK(!IsLocalPath("\\\\.\\GLOBALROOT\\Device\\Mup\\host\\share\\x.csv"));
 	CHECK(!IsLocalPath("\\\\?\\UNC\\host\\share\\x.csv"));
 	// A file modified within the last two seconds may still change without its modified time changing.

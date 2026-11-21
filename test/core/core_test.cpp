@@ -213,6 +213,10 @@ static void TestSessionStore() {
 	CHECK(SetsSetting(ParseNotebook("-- %%\nSET \"file_search_path\" = 'd';\n"), "file_search_path"));
 	CHECK(SetsSetting(ParseNotebook("-- %%\nPRAGMA file_search_path = 'd';\n"), "file_search_path"));
 	CHECK(!SetsSetting(ParseNotebook("-- %%\nPRAGMA table_info('file_search_path');\n"), "file_search_path"));
+	CHECK(SetsSetting(ParseNotebook("-- %%\nSET/* x */file_search_path = 'd';\n"), "file_search_path"));
+	CHECK(SetsSetting(ParseNotebook("-- %%\nSET -- x\n  GLOBAL file_search_path = 'd';\n"), "file_search_path"));
+	CHECK(IsCreateView("create or replace temporary view v as select 1"));
+	CHECK(!IsCreateView("CREATE TEMP TABLE v AS SELECT 1") && !IsCreateView("CREATE MACRO view_of(x) AS x"));
 	CHECK(!MayWrite(nb.cells[0]));
 }
 

@@ -859,11 +859,13 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		html = notebook::ReplaceAll(html, "<html lang=\"en\">",
 		                            "<html lang=\"en\" data-ink=\"off\" data-width-fixed=\"normal\">");
 		// A name of its own, so that no file of the reader's (report.html beside report.pdf) is overwritten.
-		auto html_path = bind.to + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".html";
+		// Beside the file a link points to, so that the printed PDF moves over it without crossing file systems.
+		auto target = fs.CanonicalizePath(bind.to);
+		auto html_path = target + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".html";
 		WriteTextFile(context, html_path, html);
 		// Printed to a file of its own, moved over the target once printed: an older PDF neither passes for this one
 		// if the browser writes nothing, nor is lost if it fails.
-		auto pdf_path = bind.to + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".pdf";
+		auto pdf_path = target + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".pdf";
 		auto command = ShellQuote(browser) +
 		               " --headless --disable-gpu --no-sandbox --no-pdf-header-footer --virtual-time-budget=10000 "
 		               "--print-to-pdf=" +
@@ -883,7 +885,7 @@ void Scan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 		}
 		try {
 			// Over the file a link points to, as WriteFile does: the link stays a link.
-			fs.MoveFile(pdf_path, fs.CanonicalizePath(bind.to));
+			fs.MoveFile(pdf_path, target);
 		} catch (...) {
 			try {
 				fs.TryRemoveFile(pdf_path);

@@ -2,6 +2,7 @@
 
 #include "notebook/chart.hpp"
 #include "notebook/graph.hpp"
+#include "notebook/script.hpp"
 #include "notebook/sql_lexer.hpp"
 #include "notebook/yaml.hpp"
 #include "notebook/text.hpp"
@@ -209,6 +210,25 @@ void AddVariable(KeyText &text, const std::string &name, const std::map<std::str
 	text.Add(name).Add(found == variables.end() ? "unset" : "set").Add(found == variables.end() ? "" : found->second);
 }
 
+//! The files of a view cell that are read when a later cell selects from what it defines: those of its final query
+//! (a named query) and of its CREATE VIEW statements. Its other statements read theirs when the cell runs.
+std::vector<std::string> LazyFiles(const Cell &cell) {
+	std::vector<std::string> files;
+	auto statements = SplitStatements(cell.sql);
+	for (size_t i = 0; i < statements.size(); i++) {
+		bool last_query = i + 1 == statements.size() && cell.is_query && !cell.name.empty();
+		if (!last_query && !IsCreateView(statements[i].text)) {
+			continue;
+		}
+		CacheSources sources;
+		AddSources(statements[i].text, sources);
+		for (auto &path : sources.files) {
+			AddUnique(files, path);
+		}
+	}
+	return files;
+}
+
 struct KeyBuilder {
 	const Notebook &notebook;
 	const std::map<std::string, std::string> &variables;
@@ -219,8 +239,11 @@ struct KeyBuilder {
 	std::vector<int> state;
 	//! Every name a cell defines.
 	std::set<std::string> defined;
-	//! ViewKey's results, by view and by the version map it was keyed with.
-	std::map<std::pair<size_t, const std::map<std::string, std::string> *>, CacheKey> view_keys;
+	//! ViewKey's results, by view and by the versions it was keyed with (ViewSignature).
+	std::map<std::pair<size_t, std::string>, CacheKey> view_keys;
+	//! ViewFiles and IsView, by cell.
+	std::map<size_t, std::vector<std::string>> view_files;
+	std::map<size_t, bool> is_view;
 
 	KeyBuilder(const Notebook &notebook, const std::map<std::string, std::string> &variables,
 	           const std::map<std::string, std::string> &files,
@@ -271,19 +294,56 @@ struct KeyBuilder {
 
 	//! A view (a named query that is not materialize=table) is read when a cell selects from it: as a dependency,
 	//! it is keyed with the reading cell's versions.
-	bool IsView(size_t index) const {
-		auto &cell = notebook.cells[index];
-		return cell.kind == CellKind::SQL && cell.is_query && !cell.name.empty() &&
-		       cell.Option("materialize", "view") != "table";
+	bool IsView(size_t index) {
+		auto found = is_view.find(index);
+		if (found == is_view.end()) {
+			found = is_view.emplace(index, IsLazyView(notebook.cells[index])).first;
+		}
+		return found->second;
+	}
+
+	//! The files whose versions decide a view's key for a reader: the lazily read files of it and of the views it
+	//! reads.
+	const std::vector<std::string> &ViewFiles(size_t index) {
+		auto found = view_files.find(index);
+		if (found != view_files.end()) {
+			return found->second;
+		}
+		// Built from the views it reads, each once: a chain of views costs its length, not its square.
+		auto &files = view_files[index];
+		files = LazyFiles(notebook.cells[index]);
+		for (int dependency : notebook.cells[index].depends_on) {
+			if (dependency < 0 || static_cast<size_t>(dependency) >= notebook.cells.size() ||
+			    static_cast<size_t>(dependency) == index || !IsView(static_cast<size_t>(dependency))) {
+				continue;
+			}
+			// A cycle among views finds the entry being built (empty so far): it is an error on its cells anyway.
+			auto inner = ViewFiles(static_cast<size_t>(dependency));
+			for (auto &path : inner) {
+				AddUnique(files, path);
+			}
+		}
+		return files;
+	}
+
+	//! Those versions as text: readers that saw the same versions share one key.
+	std::string ViewSignature(size_t index, const std::map<std::string, std::string> &versions) {
+		KeyText text;
+		for (auto &path : ViewFiles(index)) {
+			auto found = versions.find(path);
+			text.Add(path).Add(found == versions.end() ? std::string() : found->second);
+		}
+		return text.text;
 	}
 
 	//! The data key of view `index` as a cell keyed with `versions` reads it.
 	const CacheKey &ViewKey(size_t index, const std::map<std::string, std::string> &versions) {
-		if (&versions == &VersionsOf(index)) {
+		auto signature = ViewSignature(index, versions);
+		if (&versions == &VersionsOf(index) || signature == ViewSignature(index, VersionsOf(index))) {
 			DataKey(index);
 			return keys[index];
 		}
-		auto key = std::make_pair(index, &versions);
+		auto key = std::make_pair(index, signature);
 		auto found = view_keys.find(key);
 		if (found != view_keys.end()) {
 			return found->second;
@@ -313,9 +373,17 @@ struct KeyBuilder {
 		data.Add(cell.kind == CellKind::SQL ? cell.sql : cell.body);
 		auto sources = CellSources(cell);
 		bool verified = !sources.unchecked && ReadsOnlyCells(cell, sources);
+		// A view keyed for a reader (ViewKey): what it reads lazily is read as the reader runs, what its other
+		// statements read was read when it ran.
+		auto &own = VersionsOf(index);
+		std::vector<std::string> lazy;
+		if (&versions != &own) {
+			lazy = LazyFiles(cell);
+		}
 		for (auto &path : sources.files) {
-			auto found = versions.find(path);
-			auto version = found == versions.end() ? std::string() : found->second;
+			auto &from = &versions == &own || Contains(lazy, path) ? versions : own;
+			auto found = from.find(path);
+			auto version = found == from.end() ? std::string() : found->second;
 			// `?` marks a version that may still change (ModifiedTooRecently): the key covers it, but cannot vouch
 			// for it.
 			verified = verified && !version.empty() && !IsUnsure(version);
@@ -526,31 +594,85 @@ CacheSources CellSources(const Cell &cell) {
 	return sources;
 }
 
+namespace {
+
+bool IsSeparator(char c) {
+	return c == '/' || c == '\\';
+}
+
+//! A path as the file system opens it (after a `file:` prefix is stripped) that names no other machine. Two separators
+//! begin a UNC path (`\\host\share`, `//host/share`) or a device path (`\\.\UNC\host`, `\\?\UNC\host`,
+//! `\\.\GLOBALROOT\…`, `\\.\C:\..\UNC\…`, which Windows normalises onto a share); of those only `\\?\` and a
+//! drive (`\\?\C:\x`, an extended-length local path) is local. `\??\` is the NT
+//! namespace; `\\?\C:\..\` is refused, since normalising it climbs off the drive. POSIX reads `//x` as `/x`, but it
+//! is refused too: a path cannot say which system it was written for. A
+//! drive letter mapped to a network share (`Z:\x`) cannot be told from a local one, and counts as local.
+bool NamesThisMachine(const std::string &path) {
+	if (path.compare(0, 4, "\\??\\") == 0) {
+		return false;
+	}
+	if (path.size() >= 2 && IsSeparator(path[0]) && IsSeparator(path[1])) {
+		if (path.size() < 7 || path.compare(0, 4, "\\\\?\\") != 0 ||
+		    !std::isalpha(static_cast<unsigned char>(path[4])) || path[5] != ':' || !IsSeparator(path[6])) {
+			return false;
+		}
+		// DuckDB normalises even these paths on Windows (GetFullPathNameW), so a `.` or `..` segment could climb from
+		// the drive onto `\\?\UNC\…`.
+		size_t start = 7;
+		for (size_t i = 7; i <= path.size(); i++) {
+			if (i == path.size() || IsSeparator(path[i])) {
+				auto segment = path.substr(start, i - start);
+				if (segment == "." || segment == "..") {
+					return false;
+				}
+				start = i + 1;
+			}
+		}
+		return true;
+	}
+	return true;
+}
+
+//! Where DuckDB's file system starts reading a `file:` URL (FileSystem::ExpandPath) on POSIX: `file:/x` at 5,
+//! `file:///x` at 7, `file://localhost/x` at 16; Windows starts one later. 0 for any other form, which it opens as it
+//! is.
+size_t FileUrlOffset(const std::string &lower) {
+	if (lower.compare(0, 6, "file:/") != 0) {
+		return 0;
+	}
+	if (lower.size() < 7 || lower[6] != '/') {
+		return 5;
+	}
+	if (lower.size() >= 8 && lower[7] == '/') {
+		return 7;
+	}
+	if (lower.compare(7, 10, "localhost/") == 0) {
+		return 16;
+	}
+	return 0;
+}
+
+} // namespace
+
 bool IsLocalPath(const std::string &path) {
 	if (path.empty()) {
 		return false;
 	}
-	// `\\host\share\x` and `//host/share/x` name a file on another machine (Windows UNC paths): opening one
-	// connects to the host. So do the device forms `\\?\UNC\host\…`, `\\.\UNC\host\…` and
-	// `\\.\GLOBALROOT\…`. Only `\\?\` or `\\.\` followed by a drive (`\\?\C:\x`, an extended-length local
-	// path) is local. POSIX reads `//x` as `/x`, but it is refused too: a path cannot say which system it was written
-	// for.
-	if (path.compare(0, 4, "\\??\\") == 0) {
-		// The NT namespace (`\\??\\UNC\\host\\…`): reached only through the Windows API, and may name a share.
-		return false;
-	}
-	if (path.size() >= 2 && (path[0] == '\\' || path[0] == '/') && (path[1] == '\\' || path[1] == '/')) {
-		bool drive = path.size() >= 6 && (path[2] == '?' || path[2] == '.') && (path[3] == '\\' || path[3] == '/') &&
-		             std::isalpha(static_cast<unsigned char>(path[4])) && path[5] == ':';
-		if (!drive) {
+	auto lower = Lower(path);
+	if (lower.compare(0, 5, "file:") == 0) {
+		// Whichever platform reads it: what is left after the prefix must name this machine, both ways.
+		auto offset = FileUrlOffset(lower);
+		if (offset == 0) {
+			// `file://host/x`, or a form DuckDB does not strip.
 			return false;
 		}
+		return NamesThisMachine(path.substr(offset)) &&
+		       (offset + 1 > path.size() || NamesThisMachine(path.substr(offset + 1)));
 	}
-	auto scheme = path.find("://");
-	if (scheme == std::string::npos) {
-		return true;
+	if (path.find("://") != std::string::npos) {
+		return false;
 	}
-	return Lower(path.substr(0, scheme)) == "file";
+	return NamesThisMachine(path);
 }
 
 bool ModifiedTooRecently(int64_t modified, int64_t now) {
@@ -569,6 +691,21 @@ std::vector<std::string> CacheSourceFiles(const Notebook &notebook) {
 	return files;
 }
 
+bool IsLazyView(const Cell &cell) {
+	if (cell.kind != CellKind::SQL || cell.Option("materialize", "view") == "table") {
+		return false;
+	}
+	if (cell.is_query && !cell.name.empty()) {
+		return true;
+	}
+	for (auto &statement : SplitStatements(cell.sql)) {
+		if (IsCreateView(statement.text)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index) {
 	std::vector<size_t> views;
 	if (index >= notebook.cells.size()) {
@@ -584,9 +721,7 @@ std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index) {
 			continue;
 		}
 		auto &cell = notebook.cells[static_cast<size_t>(dependency)];
-		// A named query is a view, read when a later cell selects from it; materialize=table reads as it runs.
-		if (cell.kind != CellKind::SQL || !cell.is_query || cell.name.empty() ||
-		    cell.Option("materialize", "view") == "table") {
+		if (!IsLazyView(cell)) {
 			continue;
 		}
 		views.push_back(static_cast<size_t>(dependency));
@@ -603,7 +738,7 @@ std::vector<std::string> CacheReadFiles(const Notebook &notebook, size_t index) 
 	}
 	files = CellSources(notebook.cells[index]).files;
 	for (auto view : CacheViewClosure(notebook, index)) {
-		for (auto &path : CellSources(notebook.cells[view]).files) {
+		for (auto &path : LazyFiles(notebook.cells[view])) {
 			AddUnique(files, path);
 		}
 	}

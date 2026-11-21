@@ -194,9 +194,9 @@ std::vector<std::string> LeadingNames(const std::string &statement, size_t count
 	auto text = StripLeadingComments(statement);
 	size_t i = 0;
 	while (words.size() < count && i < text.size()) {
-		while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
-			i++;
-		}
+		// Comments may come between words too: `SET /* x */ file_search_path`.
+		text = StripLeadingComments(text.substr(i));
+		i = 0;
 		std::string word;
 		if (i < text.size() && text[i] == '"') {
 			for (i++; i < text.size(); i++) {
@@ -249,6 +249,22 @@ bool SetsSetting(const Notebook &notebook, const std::string &name) {
 			if (at < words.size() && words[at] == wanted) {
 				return true;
 			}
+		}
+	}
+	return false;
+}
+
+bool IsCreateView(const std::string &statement) {
+	auto words = LeadingWords(statement, 5);
+	if (words.empty() || words[0] != "CREATE") {
+		return false;
+	}
+	for (size_t i = 1; i < words.size(); i++) {
+		if (words[i] == "VIEW") {
+			return true;
+		}
+		if (words[i] != "OR" && words[i] != "REPLACE" && words[i] != "TEMP" && words[i] != "TEMPORARY") {
+			return false;
 		}
 	}
 	return false;
