@@ -77,9 +77,17 @@ std::vector<std::string> CacheSourceFiles(const Notebook &notebook);
 //! One key per cell, in file order. `variables` maps a variable name (no `$`) to a text that
 //! identifies its value and type (CacheVariableKey); a variable that is missing counts as unset.
 //! `files` maps each path of CacheSourceFiles to a text that identifies its version (size, modified
-//! time, ETag); a path that is missing or maps to "" has no known version. Needs AnalyzeNotebook.
+//! time, ETag); a path that is missing or maps to "" has no known version, and one that starts with `?`
+//! is a version that may still change (ModifiedTooRecently): the key covers it but is not verified.
+//! `cell_files`, by cell index, replaces `files` for that cell: the versions as they were just before it ran,
+//! so a file an earlier cell of the same run wrote counts as that cell read it. Needs AnalyzeNotebook.
 std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables,
-                                const std::map<std::string, std::string> &files = {});
+                                const std::map<std::string, std::string> &files = {},
+                                const std::map<size_t, std::map<std::string, std::string>> &cell_files = {});
+
+//! What CacheEntry::key holds for a result made under `key`: the result key, after a `?` when the key was not
+//! verified. Such an entry is at best `unverified`, even once its files can be vouched for.
+std::string CacheEntryKey(const CacheKey &key);
 
 //! Identifies a variable's value in a key: its SQL type and its text.
 std::string CacheVariableKey(const std::string &type, const std::string &text, bool is_null);
@@ -99,7 +107,8 @@ bool CacheEnabled(const Notebook &notebook);
 std::set<std::string> SettableVariables(const Notebook &notebook);
 
 struct CacheEntry {
-	//! CacheKey::result of the cell when the result was made.
+	//! CacheKey::result of the cell when the result was made, after a `?` if that key was not verified
+	//! (CacheEntryKey).
 	std::string key;
 	//! CacheKey::data then: a redraw (charts only) may refresh the entry only while the data is unchanged.
 	std::string data;

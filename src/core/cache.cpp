@@ -213,6 +213,7 @@ struct KeyBuilder {
 	const Notebook &notebook;
 	const std::map<std::string, std::string> &variables;
 	const std::map<std::string, std::string> &files;
+	const std::map<size_t, std::map<std::string, std::string>> &cell_files;
 	std::vector<CacheKey> keys;
 	//! 0: not started, 1: being computed, 2: done.
 	std::vector<int> state;
@@ -220,8 +221,9 @@ struct KeyBuilder {
 	std::set<std::string> defined;
 
 	KeyBuilder(const Notebook &notebook, const std::map<std::string, std::string> &variables,
-	           const std::map<std::string, std::string> &files)
-	    : notebook(notebook), variables(variables), files(files), keys(notebook.cells.size()),
+	           const std::map<std::string, std::string> &files,
+	           const std::map<size_t, std::map<std::string, std::string>> &cell_files)
+	    : notebook(notebook), variables(variables), files(files), cell_files(cell_files), keys(notebook.cells.size()),
 	      state(notebook.cells.size(), 0) {
 		for (auto &cell : notebook.cells) {
 			defined.insert(cell.defines.begin(), cell.defines.end());
@@ -275,11 +277,16 @@ struct KeyBuilder {
 		data.Add(cell.kind == CellKind::SQL ? cell.sql : cell.body);
 		auto sources = CellSources(cell);
 		bool verified = !sources.unchecked && ReadsOnlyCells(cell, sources);
+		auto own = cell_files.find(index);
+		auto &versions = own == cell_files.end() ? files : own->second;
 		for (auto &path : sources.files) {
-			auto found = files.find(path);
-			auto version = found == files.end() ? std::string() : found->second;
-			verified = verified && !version.empty();
-			data.Add("file").Add(path).Add(version);
+			auto found = versions.find(path);
+			auto version = found == versions.end() ? std::string() : found->second;
+			// `?` marks a version that may still change (ModifiedTooRecently): the key covers it, but cannot vouch
+			// for it.
+			bool unsure = version.empty() || version[0] == '?';
+			verified = verified && !unsure;
+			data.Add("file").Add(path).Add(!version.empty() && version[0] == '?' ? version.substr(1) : version);
 		}
 		for (int dependency : cell.depends_on) {
 			if (dependency >= 0 && static_cast<size_t>(dependency) < notebook.cells.size()) {
@@ -475,6 +482,11 @@ bool IsLocalPath(const std::string &path) {
 	if (path.empty()) {
 		return false;
 	}
+	// `\\host\share\x` and `//host/share/x` name a file on another machine (Windows UNC paths): opening one
+	// connects to the host.
+	if (path.size() >= 2 && (path[0] == '\\' || path[0] == '/') && (path[1] == '\\' || path[1] == '/')) {
+		return false;
+	}
 	auto scheme = path.find("://");
 	if (scheme == std::string::npos) {
 		return true;
@@ -499,8 +511,9 @@ std::vector<std::string> CacheSourceFiles(const Notebook &notebook) {
 }
 
 std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::string, std::string> &variables,
-                                const std::map<std::string, std::string> &files) {
-	KeyBuilder builder(notebook, variables, files);
+                                const std::map<std::string, std::string> &files,
+                                const std::map<size_t, std::map<std::string, std::string>> &cell_files) {
+	KeyBuilder builder(notebook, variables, files, cell_files);
 	for (size_t i = 0; i < notebook.cells.size(); i++) {
 		builder.DataKey(i);
 	}
@@ -672,6 +685,10 @@ std::map<std::string, std::string> CacheVariableKeys(const CacheState &state) {
 	return keys;
 }
 
+std::string CacheEntryKey(const CacheKey &key) {
+	return key.verified ? key.result : "?" + key.result;
+}
+
 std::vector<CachedCell> MatchCache(const Notebook &notebook, const std::map<std::string, std::string> &variables,
                                    const std::map<std::string, CacheEntry> &entries,
                                    const std::map<std::string, std::string> &files) {
@@ -689,8 +706,11 @@ std::vector<CachedCell> MatchCache(const Notebook &notebook, const std::map<std:
 		}
 		CachedCell match;
 		match.index = cell.index;
-		match.stale = found->second.key != keys[i].result;
-		match.verified = keys[i].verified;
+		// `?` before the key: the result was made from data the key could not vouch for then (CacheEntryKey).
+		auto &key = found->second.key;
+		bool unsure = !key.empty() && key[0] == '?';
+		match.stale = (unsure ? key.substr(1) : key) != keys[i].result;
+		match.verified = keys[i].verified && !unsure;
 		match.entry = &found->second;
 		cached.push_back(match);
 	}

@@ -6,6 +6,7 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/database_manager.hpp"
+#include "notebook/cache.hpp"
 #include "notebook/source.hpp"
 
 namespace duckdb {
@@ -45,8 +46,18 @@ void RemoveQuietly(FileSystem &fs, const string &path) {
 
 //! Replaces `path` atomically: the text goes to a uniquely named file beside it, which is then moved over it. A
 //! failed write leaves the old file as it was, and a reader (the editor's file watcher) never sees half a file.
+//! A symbolic link stays a link: the file it points to is the one replaced. The new file has the default mode,
+//! not the old one's, and a hard link to the old file keeps the old text. A remote path is written directly: an
+//! object store publishes a file only once its upload completes, so that is already all-or-nothing, and a
+//! temporary file there would cost a second upload.
 void WriteFile(FileSystem &fs, const string &path, const string &content) {
-	auto temporary = path + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".tmp";
+	if (!notebook::IsLocalPath(path) || FileSystem::IsRemoteFile(path)) {
+		WriteWhole(fs, path, content);
+		return;
+	}
+	// Through the file system's opener, so the target a link points to is checked against allowed_directories too.
+	auto target = fs.CanonicalizePath(path);
+	auto temporary = target + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".tmp";
 	try {
 		WriteWhole(fs, temporary, content);
 	} catch (...) {
@@ -54,17 +65,15 @@ void WriteFile(FileSystem &fs, const string &path, const string &content) {
 		throw;
 	}
 	try {
-		fs.MoveFile(temporary, path);
+		fs.MoveFile(temporary, target);
 		return;
-	} catch (NotImplementedException &) { // NOLINT: handled below
-		// This file system cannot move files (some remote stores). Object stores publish a file only once its
-		// upload completes, so writing the target directly is still all-or-nothing there.
+	} catch (NotImplementedException &) { // NOLINT: this file system cannot move files, so the target is written below
 	} catch (...) {
 		RemoveQuietly(fs, temporary);
 		throw;
 	}
 	RemoveQuietly(fs, temporary);
-	WriteWhole(fs, path, content);
+	WriteWhole(fs, target, content);
 }
 
 //! A stored notebook from `database` (the default database when empty), named by a `db:` source.

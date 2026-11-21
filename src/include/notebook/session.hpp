@@ -85,7 +85,10 @@ struct RunnerOptions {
 
 class Runner {
 public:
-	Runner(DatabaseInstance &db, SessionState &state);
+	//! `caller`: the context of the SQL call a one-off run (notebook_run, an export) belongs to. Its interrupt and
+	//! the time its query has left (max_execution_time) then bound the run: checked before each cell, and set as the
+	//! runner's own max_execution_time, so a cell cannot run past the caller's deadline.
+	Runner(DatabaseInstance &db, SessionState &state, optional_ptr<ClientContext> caller = nullptr);
 	~Runner();
 
 	//! The connection, with the session restored (Restore).
@@ -150,11 +153,16 @@ public:
 	void Save();
 
 private:
+	//! Throws if the caller was interrupted or its deadline has passed; else gives the runner's connection the time
+	//! the caller has left as its max_execution_time. Nothing without a caller.
+	void CheckCaller();
 	//! The store's name, attaching it if the session keeps tables and has none yet; empty without one.
 	string Store();
 	//! After a cell that may change tables: copies the temp tables it made or names into the store,
 	//! and forgets those that are gone.
-	//! False if a table could not be copied: the cell's CREATE TEMP TABLE is then replayed instead.
+	//! False if a table the cell made could not be copied: the cell's CREATE TEMP TABLE statements are then replayed
+	//! instead, and none of its tables comes from the store. A table an earlier cell made that cannot be copied
+	//! again keeps its older copy.
 	bool KeepTempTables(const notebook::Cell &cell);
 	//! Describes (and, unless `row_count` is known, counts) the relation a cell's charts read.
 	bool ChartSource(const notebook::Cell &cell, int64_t row_count, ChartInput &input);
@@ -162,6 +170,7 @@ private:
 	                     const ChartInput &input);
 
 	SessionState &state;
+	optional_ptr<ClientContext> caller;
 	unique_ptr<Connection> connection;
 	bool restored = false;
 	vector<string> attached;
@@ -198,6 +207,8 @@ struct ExportOptions {
 	string chrome;
 	//! data: parquet or csv.
 	string data_format = "parquet";
+	//! The SQL call the export runs for: its interrupt and max_execution_time bound every run (Runner).
+	optional_ptr<ClientContext> caller;
 	//! What to hide in every cell, on top of each cell's own hide= option: code, output, all, or
 	//! empty for nothing.
 	string hide;

@@ -354,6 +354,40 @@ static void TestCacheSources() {
 	// Without versions, a cell that names a file is never fresh.
 	CHECK(status({}) == "ssfuufus");
 
+	// A version after `?` may still change (modified in the last two seconds): the key covers it, but is not verified.
+	changed = files;
+	changed["events.csv"] = "?100:1";
+	CHECK(Changed(keys, CacheKeys(nb, {}, changed)).empty());
+	CHECK(verified(CacheKeys(nb, {}, changed)) == "--v--v-v");
+	// A result made then is stored as such, and is at best unverified, even once the version is known; a changed file
+	// still makes it stale.
+	auto unsure = CacheKeys(nb, {}, changed);
+	CHECK(CacheEntryKey(unsure[0]) == "?" + unsure[0].result);
+	CHECK(CacheEntryKey(keys[0]) == keys[0].result);
+	auto recorded = entries;
+	recorded[ids[0]].key = CacheEntryKey(unsure[0]);
+	recorded[ids[1]].key = CacheEntryKey(unsure[1]);
+	auto status_of = [&](const std::map<std::string, CacheEntry> &list, const std::map<std::string, std::string> &v) {
+		std::string text;
+		for (auto &match : MatchCache(nb, {}, list, v)) {
+			text += std::string(match.Status()).substr(0, 1);
+		}
+		return text;
+	};
+	CHECK(status_of(recorded, files) == "uufuufuf");
+	changed = files;
+	changed["events.csv"] = "120:2";
+	CHECK(status_of(recorded, changed) == "ssfuufuf");
+
+	// Each cell can be keyed with the files as they were just before it ran: a file an earlier cell of the run wrote
+	// counts as that cell read it. `files` stays for the cells without versions of their own.
+	std::map<size_t, std::map<std::string, std::string>> before {{7, {{"a.csv", "1:1"}, {"b.csv", "2:3"}}}};
+	auto per_cell = CacheKeys(nb, {}, files, before);
+	changed = files;
+	changed["b.csv"] = "2:3";
+	CHECK(per_cell[7].result == CacheKeys(nb, {}, changed)[7].result);
+	CHECK(Changed(keys, per_cell) == "7d 7r ");
+
 	// Only files on this machine are looked at.
 	CHECK(IsLocalPath("data/x.csv"));
 	CHECK(IsLocalPath("/abs/x.csv"));
@@ -363,6 +397,10 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("s3://bucket/*.parquet"));
 	CHECK(!IsLocalPath("hf://datasets/x"));
 	CHECK(!IsLocalPath(""));
+	// A UNC path is a file on another machine: opening it connects there (SMB).
+	CHECK(!IsLocalPath("\\\\host\\share\\x.csv"));
+	CHECK(!IsLocalPath("//host/share/x.csv"));
+	CHECK(IsLocalPath("/x.csv"));
 	// A file modified within the last two seconds may still change without its modified time changing.
 	CHECK(ModifiedTooRecently(10000000, 10500000));
 	CHECK(ModifiedTooRecently(10000000, 11999999));

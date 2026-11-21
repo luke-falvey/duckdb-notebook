@@ -92,6 +92,72 @@ before	stale
 statement ok
 FROM notebook_cache_clear('{TEST_DIR}/nb_src_write.sql')
 
+# A cell is keyed with the files as it read them: one that reads what an earlier cell of the run wrote is not stale
+# after the run (it is unverified, the file being too new to vouch for when it was read), and never becomes fresh
+# by mistake: a later change to the file makes it stale
+statement ok
+COPY (SELECT '-- %% make' || chr(10) || 'COPY (SELECT range AS i FROM range(4)) TO ''{TEST_DIR}/nb_src_made.csv'' (HEADER);' || chr(10) || chr(10) || '-- %% made' || chr(10) || 'SELECT count(*) AS n FROM read_csv(''{TEST_DIR}/nb_src_made.csv'');' || chr(10)) TO '{TEST_DIR}/nb_src_made.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_made.sql', cache := true)
+
+sleep 2100 millisecond
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_made.sql') WHERE cell = 'made'
+----
+made	unverified
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_made.sql', cache := true)
+
+sleep 2100 millisecond
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_made.sql') WHERE cell = 'made'
+----
+made	unverified
+
+statement ok
+COPY (SELECT range AS i FROM range(9)) TO '{TEST_DIR}/nb_src_made.csv' (HEADER)
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_made.sql') WHERE cell = 'made'
+----
+made	stale
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_made.sql')
+
+# With file_search_path set, DuckDB may read a relative path from another directory than the one looked at: what
+# reads one is unverified
+statement ok
+COPY (SELECT '-- %% rel' || chr(10) || 'SELECT count(*) AS n FROM read_csv(''nb_src_rel.csv'');' || chr(10)) TO '{TEST_DIR}/nb_src_rel.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/nb_src_rel.csv' (HEADER)
+
+statement ok
+SET GLOBAL file_search_path = '{TEST_DIR}'
+
+sleep 2100 millisecond
+
+query II
+SELECT name, status FROM notebook_run('{TEST_DIR}/nb_src_rel.sql', cache := true)
+----
+rel	ok
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_rel.sql')
+----
+rel	unverified
+
+statement ok
+RESET GLOBAL file_search_path
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_rel.sql')
+
 # Clean up: all test files share one database
 query I
 SELECT removed FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')
