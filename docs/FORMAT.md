@@ -627,16 +627,18 @@ edited. This is why naming cells you care about matters (§2).
   plain queries and a final named query that is not `materialize=table`) is read when a cell selects from
   it, so that cell is keyed with the files the views it reads select from as they were when it ran. A
   cell with any other statement (a table, a variable, an `INSERT`) keeps what it read when it ran, and is
-  keyed with its own versions throughout, the views it reads included, even if it also makes a view.
-  Looking at a file opens it and reads none of it. Only files on this machine are looked at: a remote one
-  (any `scheme://` path but `file://`), a UNC path (`\\host\share\x.csv`, `//host/share/x.csv`), a device
-  path other than `\\?\` and a drive with no `.` or `..` segment (`\\.\…`, `\\?\UNC\…`, `\\?\C:\..\…`,
-  which can climb off the drive), a path with a `net` or `network` segment in any case (the automounter's
-  `/net/host/…`, `/Network/…`), and a `file:` URL other than `file:/…`, `file:///…` or
-  `file://localhost/…` to a local path have no known version, and cost no request. Nor has a relative
-  path while `file_search_path` is set, or a path starting with `~` while `home_directory` is set, for
-  the database or by a cell of the notebook (`SET`, `RESET`), since DuckDB may read it from somewhere
-  else.
+  keyed with its own versions throughout, the views it reads included. If such a cell also makes a view
+  (a `CREATE VIEW`, or its final named query), that view is still read as its reader runs, so the reader
+  is *unverified* at best. Looking at a file opens it and reads none of it. Only files on this machine
+  are looked at: a remote one (any `scheme://` path but `file://`), a UNC path (`\\host\share\x.csv`,
+  `//host/share/x.csv`), a device path other than `\\?\` and a drive with no `.` or `..` segment
+  (`\\.\…`, `\\?\UNC\…`, `\\?\C:\..\…`, which can climb off the drive), a path with a `net` or `network`
+  segment in any case (the automounter's `/net/host/…`, `/Network/…`), an absolute path whose first
+  segment is a glob that could match one of those (`/n?t/…`, `/*/…`) or is `**`, and a `file:` URL other
+  than `file:/…`, `file:///…` or `file://localhost/…` to a local path have no known version, and cost no
+  request. Nor has a relative path while `file_search_path` is set, or a path starting with `~` while
+  `home_directory` is set, for the database or by a cell of the notebook (`SET`, `RESET`), since DuckDB
+  may read it from somewhere else.
 
 What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width`,
 `height`, `label` and `placeholder`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
@@ -652,6 +654,7 @@ fainter ink with the note *from an earlier run* until it runs. A cell whose key 
 
 - a relation that no cell defines under exactly that name: a table already in the database, a table
   of a database or schema a cell attached or created (`wh.orders`), a catalog view;
+- a view made by a cell that keeps state (see the key above);
 - a remote file, a UNC path, a relative path while `file_search_path` is set or a `~` path while
   `home_directory` is set (by the database or the notebook); a file whose version
   the file system cannot report (neither a modified time nor a version tag); a file modified in the last

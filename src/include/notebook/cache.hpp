@@ -94,6 +94,11 @@ std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::st
 //! versions throughout.
 bool IsLazyView(const Cell &cell);
 
+//! True for a cell that defines a view, which is read when it is used: a named query that is not materialize=table,
+//! or a CREATE VIEW. When such a cell is not a view (IsLazyView), its readers are unverified: the cell's
+//! key has the versions of when it ran, but what it defines is read as the reader runs.
+bool DefinesLazily(const Cell &cell);
+
 //! The cells a cell reads lazily (IsLazyView) that it depends on, and those they depend on through views, in file
 //! order. Their lazily read files are read when the cell runs.
 std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index);

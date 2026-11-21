@@ -232,6 +232,7 @@ struct KeyBuilder {
 	//! ViewFiles and IsView, by cell.
 	std::map<size_t, std::vector<std::string>> view_files;
 	std::map<size_t, bool> is_view;
+	std::map<size_t, bool> read_later;
 	//! A view's signature with its own versions, by cell.
 	std::map<size_t, std::string> own_signature;
 
@@ -282,9 +283,18 @@ struct KeyBuilder {
 		return own == cell_files.end() ? files : own->second;
 	}
 
-	//! A view (IsLazyView: a named query that is not materialize=table, or a CREATE VIEW) is read when a cell
-	//! selects from it: as a dependency,
-	//! it is keyed with the reading cell's versions.
+	//! A view cell (IsLazyView: it makes views and keeps nothing) is read when a cell selects from it: as a
+	//! dependency, it is keyed with the reading cell's versions.
+	//! A cell that is not a view but defines a view (DefinesLazily): its key has the
+	//! versions of when it ran, not of when a reader used what it defines, so a reader cannot be vouched for.
+	bool ReadLater(size_t index) {
+		auto found = read_later.find(index);
+		if (found == read_later.end()) {
+			found = read_later.emplace(index, !IsView(index) && DefinesLazily(notebook.cells[index])).first;
+		}
+		return found->second;
+	}
+
 	bool IsView(size_t index) {
 		auto found = is_view.find(index);
 		if (found == is_view.end()) {
@@ -397,6 +407,7 @@ struct KeyBuilder {
 				verified = verified && view.verified;
 			} else {
 				data.Add(DataKey(at));
+				verified = verified && !ReadLater(at);
 				// A cell in a cycle (state 1) is already an error; it does not make the key unverified.
 				verified = verified && keys[at].verified;
 			}
@@ -597,6 +608,95 @@ bool IsSeparator(char c) {
 	return c == '/' || c == '\\';
 }
 
+//! Whether a glob segment (`*`, `?`, `[...]`, compared without case) matches `name`.
+bool GlobMatches(const std::string &pattern, size_t p, const std::string &name, size_t n) {
+	while (p < pattern.size()) {
+		char c = pattern[p];
+		if (c == '*') {
+			for (size_t k = n; k <= name.size(); k++) {
+				if (GlobMatches(pattern, p + 1, name, k)) {
+					return true;
+				}
+			}
+			return false;
+		}
+		if (n >= name.size()) {
+			return false;
+		}
+		if (c == '[') {
+			size_t q = p + 1;
+			bool negate = q < pattern.size() && (pattern[q] == '!' || pattern[q] == '^');
+			if (negate) {
+				q++;
+			}
+			bool found = false;
+			size_t close = q;
+			for (; close < pattern.size() && (close == q || pattern[close] != ']'); close++) {
+				if (close + 2 < pattern.size() && pattern[close + 1] == '-' && pattern[close + 2] != ']') {
+					found = found || (name[n] >= pattern[close] && name[n] <= pattern[close + 2]);
+					close += 2;
+				} else {
+					found = found || name[n] == pattern[close];
+				}
+			}
+			if (close >= pattern.size()) {
+				// No closing bracket: a literal `[`.
+				if (name[n] != '[') {
+					return false;
+				}
+				p++;
+				n++;
+				continue;
+			}
+			if (found == negate) {
+				return false;
+			}
+			p = close + 1;
+			n++;
+			continue;
+		}
+		if (c != '?' && c != name[n]) {
+			return false;
+		}
+		p++;
+		n++;
+	}
+	return n == name.size();
+}
+
+//! An absolute path's first segment, after `.` and `..`, must not be a pattern that a glob would expand into the
+//! automounter's `/net` or `/Network` (`/n?t/host`, `/*/host`, `/[Nn]etwork`), nor `**` (a walk of the whole file
+//! system, `/net` included). Further down, a pattern only lists local directories.
+bool RootSegmentIsLocal(const std::string &path) {
+	if (path.empty() || !IsSeparator(path[0])) {
+		return true;
+	}
+	std::vector<std::string> segments;
+	size_t begin = 0;
+	for (size_t i = 0; i <= path.size(); i++) {
+		if (i == path.size() || IsSeparator(path[i])) {
+			auto segment = Lower(path.substr(begin, i - begin));
+			if (segment == "..") {
+				if (!segments.empty()) {
+					segments.pop_back();
+				}
+			} else if (!segment.empty() && segment != ".") {
+				segments.push_back(segment);
+			}
+			begin = i + 1;
+		}
+	}
+	if (segments.empty()) {
+		return true;
+	}
+	auto &first = segments[0];
+	if (first.find_first_of("*?[") == std::string::npos) {
+		return true;
+	}
+	return first.find("**") == std::string::npos && !GlobMatches(first, 0, "net", 0) &&
+	       !GlobMatches(first, 0, "network", 0);
+}
+
 //! A path as the file system opens it (after a `file:` prefix is stripped) that names no other machine. Two separators
 //! begin a UNC path (`\\host\share`, `//host/share`) or a device path (`\\.\UNC\host`, `\\?\UNC\host`,
 //! `\\.\GLOBALROOT\…`, `\\.\C:\..\UNC\…`, which Windows normalises onto a share); of those only `\\?\` and a
@@ -618,6 +718,9 @@ bool NamesThisMachine(const std::string &path) {
 			}
 			begin = i + 1;
 		}
+	}
+	if (!RootSegmentIsLocal(path)) {
+		return false;
 	}
 	if (path.compare(0, 4, "\\??\\") == 0) {
 		return false;
@@ -703,6 +806,21 @@ std::vector<std::string> CacheSourceFiles(const Notebook &notebook) {
 	return files;
 }
 
+namespace {
+
+//! A query whose CTE changes data (`WITH x AS (INSERT ... RETURNING *) SELECT * FROM x`) keeps something.
+bool ChangesData(const std::string &statement) {
+	for (auto &token : SourceTokens(statement)) {
+		if (token.kind == SourceToken::Kind::WORD &&
+		    (token.text == "insert" || token.text == "update" || token.text == "delete" || token.text == "merge")) {
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace
+
 bool IsLazyView(const Cell &cell) {
 	if (cell.kind != CellKind::SQL) {
 		return false;
@@ -712,6 +830,9 @@ bool IsLazyView(const Cell &cell) {
 	bool view = false;
 	for (size_t i = 0; i < statements.size(); i++) {
 		auto &text = statements[i].text;
+		if (ChangesData(text)) {
+			return false;
+		}
 		if (i + 1 == statements.size() && named) {
 			// The final query is a view, unless materialize=table makes it a table, which keeps what it read.
 			if (cell.Option("materialize", "view") == "table") {
@@ -727,6 +848,21 @@ bool IsLazyView(const Cell &cell) {
 		}
 	}
 	return view;
+}
+
+bool DefinesLazily(const Cell &cell) {
+	if (cell.kind != CellKind::SQL) {
+		return false;
+	}
+	if (cell.is_query && !cell.name.empty() && cell.Option("materialize", "view") != "table") {
+		return true;
+	}
+	for (auto &statement : SplitStatements(cell.sql)) {
+		if (IsCreateView(statement.text)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index) {

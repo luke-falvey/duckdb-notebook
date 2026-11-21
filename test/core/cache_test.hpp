@@ -421,7 +421,7 @@ static void TestCacheSources() {
 	CHECK(chain_keys[3].result == opened[3].result);
 	CHECK(chain_keys[0].result != opened[0].result);
 
-	// A cell that CREATEs a VIEW is read lazily too.
+	// A cell that CREATEs a VIEW, and keeps nothing, is read lazily too.
 	auto created = Analyzed("-- %% mk\nCREATE TEMP VIEW v AS SELECT * FROM 'x.csv';\n"
 	                        "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
 	                        "-- %% r\nSELECT count(*) AS n FROM v;\n");
@@ -479,7 +479,7 @@ static void TestCacheSources() {
 	std::map<size_t, std::map<std::string, std::string>> table_same {{0, new_x}, {2, new_x}};
 	CHECK(CacheKeys(table_cell, {}, new_x, table_same)[2].result == CacheKeys(table_cell, {}, new_x)[2].result);
 
-	// Iteration 5: a cell that keeps state and reads another cell's view read it when it ran. Whether the cell also
+	// A cell that keeps state and reads another cell's view read it when it ran. Whether the cell also
 	// makes a view, or is a named query, its readers are stale after the view's file changes.
 	for (auto &middle : std::vector<std::string> {
 	         "-- %% mk\nCREATE TEMP VIEW d AS SELECT 1 AS one;\nCREATE TEMP TABLE ct AS SELECT count(*) AS n FROM "
@@ -504,6 +504,25 @@ static void TestCacheSources() {
 	    Analyzed("-- %%\nCREATE VIEW p AS SELECT 1;\nSELECT * FROM p;\nCREATE VIEW q AS SELECT 2;\n").cells[0]));
 	CHECK(!IsLazyView(Analyzed("-- %%\nCREATE VIEW p AS SELECT 1;\nSET VARIABLE n = (SELECT 1);\n").cells[0]));
 	CHECK(!IsLazyView(Analyzed("-- %%\nSELECT 1;\n").cells[0]));
+	for (auto &kept :
+	     std::vector<std::string> {"ATTACH ':memory:' AS m", "USE memory", "SET threads = 1", "INSERT INTO t SELECT 1",
+	                               "CREATE MACRO m1() AS 1", "WITH s AS (FROM p) INSERT INTO t FROM s",
+	                               "WITH x AS (INSERT INTO t SELECT 1 RETURNING *) SELECT * FROM x"}) {
+		CHECK(!IsLazyView(Analyzed("-- %%\nCREATE VIEW p AS SELECT 1;\n" + kept + ";\n").cells[0]));
+		CHECK(!IsLazyView(Analyzed("-- %% q\n" + kept + ";\nSELECT 1 AS one;\n").cells[0]));
+	}
+	// A cell that keeps state but makes a view (here its final named query) has that view read as a reader runs,
+	// while its key has the versions of when it ran: its readers are unverified, never fresh. A version can come
+	// back (a glob's match list after a file is added and removed), so a matching key is not enough.
+	auto later = Analyzed("-- %% mk\nSET VARIABLE k = 1;\nSELECT * FROM 'x.csv';\n"
+	                      "-- %% r\nSELECT count(*) AS n FROM mk;\n"
+	                      "-- %% s\nSELECT n FROM r;\n");
+	CHECK(!later.HasErrors() && !IsLazyView(later.cells[0]) && DefinesLazily(later.cells[0]));
+	auto later_keys = CacheKeys(later, {}, old_x);
+	CHECK(later_keys[0].verified && !later_keys[1].verified && !later_keys[2].verified);
+	// A table cell defines nothing read later: its readers stay verified.
+	auto kept_table = Analyzed("-- %% mk materialize=table\nSELECT * FROM 'x.csv';\n-- %% r\nSELECT * FROM mk;\n");
+	CHECK(!DefinesLazily(kept_table.cells[0]) && CacheKeys(kept_table, {}, old_x)[1].verified);
 
 	// A view of a view, a diamond (s reads the table t and the view b, t reads b) and a cycle among views.
 	auto deep = Analyzed("-- %% a\nSELECT * FROM 'x.csv';\n"
@@ -540,6 +559,14 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("/network/x.csv") && !IsLocalPath("/./net/h/x") && !IsLocalPath("/tmp/../NET/h/x"));
 	CHECK(!IsLocalPath("file:///net/h/x") && !IsLocalPath("file:/net/h/x") && !IsLocalPath("C:\\net\\x"));
 	CHECK(IsLocalPath("/data/netflix/x.csv") && IsLocalPath("/data/networks.csv"));
+	// A glob at the root could expand into /net or /Network.
+	for (auto &root : {"/n?t/host/x/*.csv", "/[n]et/host/*.csv", "/*/host/share/*.csv", "/[Nn]etwork/Servers/h/*.csv",
+	                   "/**/x.csv", "/data/../n?t/h/x", "file:///n*/h/x", "/[!x]et/h/x", "/ne[a-z]/h"}) {
+		CHECK(!IsLocalPath(root));
+	}
+	for (auto &root : {"/data/*.csv", "/d?ta/*/x.csv", "/[ab]*/x", "/data/**/x.parquet", "data/*/x.csv", "/n[!e]t/x"}) {
+		CHECK(IsLocalPath(root));
+	}
 	CHECK(!IsLocalPath("s3://bucket/*.parquet"));
 	CHECK(!IsLocalPath("hf://datasets/x"));
 	CHECK(!IsLocalPath(""));
