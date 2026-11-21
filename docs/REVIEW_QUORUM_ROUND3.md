@@ -429,6 +429,40 @@ Nits fixed: tests that unverified carries through a view cell and into a `materi
 says `DefinesLazily` is per cell, so a reader of a table such a cell makes is unverified too (mytherin, hannes, pdet).
 Declined: a comment pointing at `like.cpp` (mytherin): there is no copy of it any more.
 
+### Iteration 8 (caa69ea), the last
+
+**Verdicts: 15 request changes.** Every lens confirmed that dropping the matcher was right, and found one of three gaps
+in the structural rule that replaced it, the third return of the glob finding (iterations 6, 7 and 8):
+
+| Finding | Lenses | Fix |
+|---|---|---|
+| A bare `**` (`/**`, `**`, `./**`, `file:///**`, `C:\**`) passed: one segment, so the first-segment rule never applied, yet DuckDB crawls everything below it | 10 (carlopi, lnkuiper, tishj, hawkfish, samansmink, pdet, tmonster, kryonix, szarnyasg; reproduced with strace by lnkuiper) | See below |
+| `~/n?t/host/…` and `~/*/host/…`: the first segment is the literal `~`, but DuckDB expands it from `$HOME`, which is `/` for many containers and service accounts | 5 (mytherin, hannes, taniabogatsch, maxxen, dtenwolde; `glob('~/e?c/passwd')` with `HOME=/` gave `/etc/passwd`) | See below |
+| `/proc/self/root/n?t/…`, `/proc/1/cwd/n?t/…`: a link to `/` that every Linux machine has | 1 (dentiny, reproduced) | See below |
+
+Each is one more way for a pattern in a directory segment to be matched at `/`. Rather than refuse each, the rule now
+allows a pattern only in a glob's **last segment**, and never `**`: the glob lists one directory the path names
+literally and goes into nothing it matched, and each match is judged again before it is looked at, so a match under
+`/net` is refused there. No link, working directory or `$HOME` can change that. The cost is the safe direction:
+`data/*/x.csv`, Hive layouts (`year=*/…`) and `**` are unverified; `data/*.csv`, `*.csv`, `../data/*.csv` and
+`~/data/*.csv` are checked as before (`..` is no longer refused on its own, since nothing below a pattern is entered).
+Core tests for every spelling of iterations 6 to 8.
+
+Nits declined: allowing relative directory patterns when the working directory is not `/` (mytherin, hannes, dentiny,
+lnkuiper): with the rule above they would still follow links; left open with the Hive-layout cost. A test that counts
+the directories an open lists (lnkuiper): left open.
+
+### Loop ended
+
+The loop ended after iteration 8, the cap of three iterations after option 2 landed. Final verdicts (iteration 8):
+**15 request changes**, all for the glob rule, which iteration 8's fix replaces. No fix after iteration 7 has been
+reviewed by the quorum; the user decides whether to run another iteration before merging. Since option 2 landed:
+
+- the view finding has not come back (iterations 6 to 8 confirmed option 2 and its follow-up, `DefinesLazily`);
+- the glob finding came back three times (iterations 6, 7, 8): each fix was an enumeration of what a pattern can reach,
+  until iteration 8's, which removes patterns from directory segments altogether;
+- no two lenses wanted opposite things.
+
 ## Testing
 
 Local, against the release build:
