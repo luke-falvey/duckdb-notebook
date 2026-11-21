@@ -55,7 +55,7 @@ List them all with: SELECT start_line, errors FROM notebook_cells('broken.sql') 
 | The file runs as a script but stops at the second cell | Run as plain SQL, cells cannot read each other by name. Use `notebook_sql` to get the expanded script |
 | A chart shows ⚠ | The chart's error is in its tab. The cell's table still shows. `notebook_chart_query` shows what the spec compiled to |
 | A chart draws a flat colour or one mark | A column name was misspelt and read as a constant. Write `{field: name}` to get an error instead |
-| `notebook_run` or `notebook_export` fails with `Query exceeded maximum execution time` | `max_execution_time` bounds the whole call, every cell together. Raise it (`SET max_execution_time = …`, in milliseconds), or `RESET` it |
+| `notebook_run` or `notebook_export` fails with `Query exceeded maximum execution time` | `max_execution_time` bounds the whole call, every cell and query together, whichever cell ran out of time. Raise it (`SET max_execution_time = …`, in milliseconds), or `RESET` it |
 
 ## The server and the editor
 

@@ -57,8 +57,9 @@ With the shell built in the repository (`./build/release/duckdb`) the extension 
 ## A time limit
 
 `SET max_execution_time` (milliseconds) bounds the whole `notebook_run` or `notebook_export` call, not
-each cell: a cell gets only the time the call has left, and once it is spent the call fails with
-*Query exceeded maximum execution time*. A job that must not hang sets it before running:
+each cell or query: every query the notebook runs ends by the call's deadline, whatever a cell `SET`s,
+and once it has passed the call fails with *Query exceeded maximum execution time*, whichever cell ran
+out of time. A job that must not hang sets it before running:
 
 ```sh
 duckdb -init /dev/null -c "SET max_execution_time = 600000" \

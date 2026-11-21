@@ -40,13 +40,13 @@ only some entry points, and C2 (versions before the run) fixed one order of writ
 | R1 | Server sessions are keyed by `source` alone, but carry the database of whichever `notebook_start` created them: `USE a; notebook_start('db:x'); USE b; notebook_start('db:x')` opened and saved `a`'s `x`, while the picker listed `b`'s. `Start` then `SetDatabase` left a window with no database. `a.sql` and `./a.sql` were two sessions | 15 (every lens; 11 on the database, the rest on the key) | Sessions are keyed by (database, `db:` name) for stored notebooks and by `FileSystem::CanonicalizePath` for files. `notebook_start` puts its current database in the URL (`&db=`), the page sends it with every request, and the picker keeps it; `Start(port, database)` sets it before the server answers. A session is built outside the server's lock and inserted only if no other request got there first (C13, in part). Browser test `test_session_keys` |
 | R2 | C2 takes every file version once, before the first cell: a cell that reads a file an earlier cell writes (`COPY … TO 'x'`, then `FROM 'x'`) is stale after every run, forever. Before round 2 it was fresh | 8: szarnyasg, tmonster, dentiny, hawkfish, tishj, maxxen, kryonix, taniabogatsch | Versions are taken just before each cell runs (`RunFileVersions`, `CacheKeys(…, cell_files)`), so a cell is keyed with the files as it read them. A later change still makes it stale |
 | R2a | …and per-cell versions alone would not help: the file was written milliseconds before, so the two-second rule gives it no version, which recorded a key that can never match: `stale` again (`""` meant both "unknown" and, once recorded, "certainly different") | 2: dentiny, tishj | A version within the two seconds is kept with a `?` mark: the key covers it but is not verified, and the entry is stored as such (`CacheEntryKey`, a `?` before the key). It reads `unverified` while the file is unchanged, `stale` once it changes, and never `fresh`. No layout change; `CACHE_FORMAT` stays 3, since old entries compare as before. Core and SQL tests |
-| R3 | C15 is half done: the limit is set after `Prepare` (the `[notebook]` cell's ATTACH is unbounded); the `SET` is refused under `lock_configuration` and the failure ignored, so the limit fails open (`Runner::Peek` fails closed); it bounds each cell, not the call (N cells take N × limit); a cell's own `SET max_execution_time = 0` lifts it; exports (and the precomputed export's up to `budget` runs) have no interrupt check and no limit at all; nothing tests the interrupt path | 10: mytherin, carlopi, hannes, tishj, pdet, lnkuiper, tmonster, dtenwolde, szarnyasg, samansmink | `Runner` takes the caller's `ClientContext`. Before the replay, before `Prepare` and before every cell it throws if the caller was interrupted or its deadline passed, and writes the time left into the runner connection's `max_execution_time` directly (no `SET`, so the lock does not apply; a cell's own `SET` lasts until the next cell). `notebook_run` and every export pass it. SQL tests: two slow cells fail the call; a cell's `SET max_execution_time = 0` does not lift it; an export is bounded; the limit holds under `lock_configuration` |
-| R4 | C8's fallback for a failed store copy fails itself: a cell that made A (copied) and B (not) replays `CREATE TEMP TABLE A` over the A the store restored, which stops the replay before B; a table an earlier cell made whose re-copy fails (after an `INSERT`) is erased with nothing to make it again; a listing failure got the same treatment | 3: lnkuiper, taniabogatsch, dtenwolde | When a table the cell made cannot be copied, none of the cell's tables comes from the store and its `CREATE TEMP TABLE` statements are replayed; a table an earlier cell made keeps its older copy. **No test**: nothing short of a fault hook makes the in-memory store's `CREATE TABLE … AS` fail on demand |
+| R3 | C15 is half done: the limit is set after `Prepare` (the `[notebook]` cell's ATTACH is unbounded); the `SET` is refused under `lock_configuration` and the failure ignored, so the limit fails open (`Runner::Peek` fails closed); it bounds each cell, not the call (N cells take N × limit); a cell's own `SET max_execution_time = 0` lifts it; exports (and the precomputed export's up to `budget` runs) have no interrupt check and no limit at all; nothing tests the interrupt path | 10: mytherin, carlopi, hannes, tishj, pdet, lnkuiper, tmonster, dtenwolde, szarnyasg, samansmink | `Runner` takes the caller's `ClientContext`. Before the replay, before `Prepare`, before every cell and after the last it throws if the caller was interrupted or its deadline passed; and a `ClientContextState` on the runner's connection lowers every query's deadline to the caller's as the query begins, so no query outlives the call whatever a cell `SET`s (and no `SET` is needed, so the lock does not apply). `notebook_run` and every export pass it. SQL tests: one or two slow cells fail the call; a cell's `SET max_execution_time = 0`, in an earlier cell or the same one, does not lift it; an export is bounded and writes nothing; the limit holds under `lock_configuration`. (Reworked in the PR review loop, iteration 1) |
+| R4 | C8's fallback for a failed store copy fails itself: a cell that made A (copied) and B (not) replays `CREATE TEMP TABLE A` over the A the store restored, which stops the replay before B; a table an earlier cell made whose re-copy fails (after an `INSERT`) is erased with nothing to make it again; a listing failure got the same treatment | 3: lnkuiper, taniabogatsch, dtenwolde | When a table the cell made cannot be copied, none of the cell's tables comes from the store and its `CREATE TEMP TABLE` statements are replayed, and no later cell copies them in (`SessionState::replayed`); a table an earlier cell made keeps its older copy. Browser test through a test-only hook, the `SKETCHBOOK_TEST_FAIL_STORE_COPY` environment variable (PR review loop, iteration 1) |
 | R5 | Two "is local" predicates (`notebook::IsLocalPath`, `IsLocalFile`) that agree only by accident, and the core one counts UNC paths (`\\host\share\x.csv`) as local: opening an untrusted notebook with a cache folder would make Windows connect to the host over SMB before the reader trusted anything | 5: samansmink, dentiny, maxxen, mytherin, hannes | `IsLocalPath` refuses `\\…` and `//…`; `IsLocalFile` and the atomic save use it. Core test |
-| R6 | `WriteFile` on an object store uploaded a temporary file, then copied and deleted it (or, without `MoveFile`, uploaded everything twice), and could leave the temporary object behind | 3: samansmink, pdet, lnkuiper | A remote target is written directly: its upload is already all or nothing |
+| R6 | `WriteFile` on an object store uploaded a temporary file, then copied and deleted it (or, without `MoveFile`, uploaded everything twice), and could leave the temporary object behind | 3: samansmink, pdet, lnkuiper | An object store's target (`FileSystem::IsRemoteFile`) is written directly: its upload is already all or nothing. (Narrowed in the PR review loop, iteration 1: other schemes and UNC shares keep the move) |
 | R7 | C10 (links and modes on save) was left open on a false premise: DuckDB 2.0's `FileSystem::CanonicalizePath` resolves links (`realpath`, `GetFinalPathNameByHandleW`) through the opener, and works for a file that does not exist yet | 2 found it (taniabogatsch, maxxen); 7 wanted links kept, 7 would document only (to avoid platform code) | `WriteFile` writes the temporary file beside the canonical target and moves it there: a link stays a link, with no platform code, and the target is checked against `allowed_directories` (a link out of them is refused, not replaced). Cache entries are written `FILE_FLAGS_PRIVATE` (0600), since they hold query results (hannes, dentiny). Browser test. **Open**: the notebook file's own mode is reset and hard links broken (no `FileSystem` primitive); documented |
 | R8 | Saving from the editor on `db:x@N` quietly forced a new newest version | 9: mytherin, samansmink, lnkuiper, taniabogatsch, dtenwolde, maxxen, hannes, tishj (refuse); pdet (save and re-key) | Refused, with what to do instead. Browser test |
-| R9 | Old `db:` caches: before C7 every stored notebook's cache was in the default database; under `USE` it was neither read nor cleared | 2: carlopi, tishj (low, traced the same way) | Read from the default database when the current one has nothing, cleared with it, never written. SQL test |
+| R9 | Old `db:` caches: before C7 every stored notebook's cache was in the default database; under `USE` it was neither read nor cleared | 2: carlopi, tishj (low, traced the same way) | Read from the default database when the current one has nothing, cleared with it, never written; unless the default database stores a notebook of that name, whose cache it is (PR review loop, iteration 1). SQL tests |
 | R10 | The store restores temp tables in name order, so a table with a foreign key to one later in the alphabet fails its DDL and comes back without its constraints | 2: tishj, maxxen | Checked: DuckDB allows foreign keys between temp tables. Tables whose statement fails are tried again while any succeeds. Browser test |
 | R11 | Replay and stored tables keyed by cell index (open from round 2) | 9: dtenwolde, mytherin, pdet, lnkuiper, taniabogatsch, maxxen, tishj, hannes, tmonster | **Open**. Everyone agrees on `CacheCellIds`. But `Restore` runs without the notebook and replays in index order, which is cell order; keyed by id it needs an order of its own, plus pruning of ids no longer in the notebook. A change of its own |
 | R12 | Shared attaches: a one-off run detaches an alias another session found attached and uses; two runs race on check-then-attach. Round 2's C5 made every export detach, so it happens more | 7: mytherin, hannes, carlopi, pdet, lnkuiper, maxxen, taniabogatsch | **Open**. Agreed answer: a per-`DatabaseInstance` registry in the object cache, a reference count per alias, check-and-attach under its lock, detach at zero. It changes who owns an attach (DESIGN §11), so a change of its own |
@@ -122,6 +122,59 @@ Left open, needing a decision or more work than a review fix:
 - **`db:x@N` save: refuse or re-key.** pdet would save it as the newest and re-key the session so no edit is lost; the
   other eight would refuse. Refusing won: the page keeps the text, and the message says how to keep it.
 - **Eviction: store only, or whole sessions** (above).
+
+## PR review loop
+
+After PR #21 was opened with CI green, the 15 lenses reviewed the PR itself: its diff and the code around it, each
+as its own read-only subagent, each with a verdict. Findings were fixed and the loop repeated until no lens asked for
+changes, at most five times.
+
+### Iteration 1 (fc16b80)
+
+**Verdicts: 12 request changes, 3 approve with nits** (carlopi, mytherin, hannes). Most lenses reproduced their
+findings on the release build.
+
+Blocking, all fixed:
+
+| Finding | Lenses | Fix |
+|---|---|---|
+| R3 bounds each query, not the call: the time left is written as a duration, which every query of a cell gets afresh (several statements, the count, the page, the charts, the replay), and a `SET max_execution_time = 0` earlier in the same cell lifts it. The outcome also depended on which cell ran out (an error row for the last, a failed call otherwise) | 12: tmonster, lnkuiper, maxxen, kryonix, dtenwolde, hawkfish, mytherin, hannes, taniabogatsch, szarnyasg, pdet, carlopi | `CallerDeadline`, a `ClientContextState` whose `QueryBegin` lowers each query's deadline to the caller's (maxxen's suggestion: the deadline itself, not a duration); `Runner::CheckCaller` after the last cell too, and before an export writes. Tests: a single slow cell and a same-cell `SET max_execution_time = 0` now fail the call; an export leaves no file |
+| `WriteFile` wrote every non-`file://` scheme and, through R5, every UNC and `//` path directly: saves to `hdfs://`, `webhdfs://` or a network share were no longer atomic | 7: pdet, tishj, taniabogatsch, samansmink, maxxen, dentiny, hannes | Direct only for `FileSystem::IsRemoteFile` (object stores); everything else keeps the move |
+| R9's fallback read, and cleared, the live cache of the default database's own notebook of the same name | 3: szarnyasg, tishj, taniabogatsch | Only when the default database stores no notebook of that name. SQL test with the name in both databases |
+| `file_search_path` set by a cell of the notebook (session scope, on the runner's connection) was not seen, so the cell stayed fresh | 5: samansmink, dentiny, carlopi, hannes, szarnyasg | `notebook::SetsSetting` finds a `SET`/`RESET file_search_path` in the notebook's cells (no SQL needed, so opening agrees with running). Core and SQL tests |
+| R2 missed views: a view is read when a later cell selects from it, so a cell reading a view of a file an earlier cell rewrote was still stale forever | 1, blocking: kryonix | `CacheViewClosure`, `CacheReadFiles`: a cell's versions cover the views it reads, and its key takes them with its own versions. Core and SQL tests |
+
+Nits fixed:
+
+- `\\?\C:\…` (extended-length local) and `\\.\…` (device) paths are local again (carlopi, dentiny, hannes, pdet).
+  `//x` stays refused on POSIX: a path cannot say which system it was written for (commented).
+- The printed PDF is removed if the final move fails (carlopi, dentiny, hannes, taniabogatsch, pdet); a test that a
+  failed print keeps an older PDF and leaves nothing beside it (pdet; `require notwindows`).
+- `notebook_run` no longer looks at every file twice: versions for cells that did not run are taken when the run is
+  recorded, and only for those (tmonster, lnkuiper, dentiny).
+- Database names in session keys are matched without case (dtenwolde, tishj). Browser test.
+- R4 across cells: a table a cell's replay makes again is not copied in by a later cell (dtenwolde). Tested with the
+  hook above (asked for by mytherin, taniabogatsch, dtenwolde, tmonster).
+- The `?` mark has one helper set, `IsUnsure`, `StripUnsure`, `MarkUnsure`, with tests, and a note on why it needs no
+  `CACHE_FORMAT` (hawkfish, maxxen).
+- `notebook_lock.test` keeps its limit generous and checks it last (maxxen, tishj); the docs and the stale test
+  comment say what the limit does now (szarnyasg, pdet, mytherin, hannes).
+
+Nits declined:
+
+- `ExportOptions::caller` as an explicit argument (mytherin): only `Scan` sets it, on a local copy, and the server
+  deliberately passes none; threading it through four signatures buys little.
+- A typed field instead of the `?` mark (maxxen): the mark changes no layout and old readers fail safe; the helpers
+  keep it in one place.
+- A struct for session keys (maxxen); resolving the path once per request rather than per session (lnkuiper): a
+  `realpath` per request is cheap.
+- The restore retry loop's quadratic worst case (tmonster, lnkuiper, kryonix, hannes): bounded by the depth of a
+  foreign-key chain among temp tables; part of R13's per-request cost, still open.
+- An interrupt test (pdet): sqllogictest cannot interrupt, and the browser suite has no Python DuckDB; the interrupt
+  check is the deadline's.
+- The older copy an earlier cell's table keeps after a failed re-copy is not marked unverified (taniabogatsch): stated
+  in DESIGN §11; a mark would need a per-table record in the cache keys.
+- One PR per consensus item (mytherin): agreed for the next round.
 
 ## Testing
 

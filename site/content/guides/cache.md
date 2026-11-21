@@ -53,13 +53,15 @@ cell it reads, reads:
 - a remote file (`https://`, `s3://` and any other `scheme://` but `file://`) or a UNC path
   (`\\server\share\x.csv`): the cache never looks at one, so opening or running a notebook costs no
   request;
-- a relative path while `file_search_path` is set, which DuckDB may read from another directory;
+- a relative path while `file_search_path` is set, for the database or by a cell of the notebook, which
+  DuckDB may read from another directory;
 - another kind of external data: `delta_scan`, `iceberg_scan`, `postgres_query` and the like, and any
   table function but `range`, `generate_series`, `unnest`, `json_each`, `json_tree` and `repeat_row`
   (an extension's reader such as `st_read`, or a table macro).
 
 Files are looked at just before each cell runs, so a cell is kept with the files as it read them: one
 that changes after the cell read it (a later cell rewrites it, or anything else does) leaves it stale.
+A cell that selects from a view reads the view's files as it runs, and is kept with those too.
 
 Run such a cell when its data may have changed. [FORMAT §8](../reference/format.md#8-sidecar-cache)
 has the exact rules.
@@ -93,7 +95,7 @@ location cannot be written, there is quietly no cache; a run never fails because
 Results kept before the extension was renamed from `notebook` to `sketchbook`, in `.duckdb-notebook/`
 or `_notebook.cache`, are still shown until the notebook is next run; clearing the cache clears them
 too. So are the results of a stored notebook kept in the default database before its cache followed
-`USE`.
+`USE`, unless the default database stores a notebook of that name, whose results they are.
 
 Entry files are readable by their owner only: they hold query results, which the notebook itself
 does not.

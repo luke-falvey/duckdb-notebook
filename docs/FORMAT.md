@@ -590,8 +590,9 @@ written means no cache, quietly; a run never fails because of it.
 and kept its cache in `.duckdb-notebook/` and `_notebook.cache`. When the new place has nothing for a
 notebook, those are read instead; `notebook_cache_clear` clears both. Nothing is written there. Likewise,
 a stored notebook's cache was kept in the default database before it followed `USE`: when the current
-database has nothing for it, the default database's `_sketchbook.cache` (then `_notebook.cache`) is read,
-and cleared with it, never written.
+database has nothing for it and the default database stores no notebook of that name (whose cache it would
+be), the default database's `_sketchbook.cache` (then `_notebook.cache`) is read, and cleared with it,
+never written.
 
 **An entry** is JSON: `{format, cell, key, data, saved_at, result}`. `key` and `data` are the cell's keys when the
 result was made (a redraw of its charts may refresh it only while `data` still matches). `result` is exactly
@@ -622,11 +623,13 @@ edited. This is why naming cells you care about matters (§2).
   exist has the version *missing*. Versions are taken when the notebook is opened and, during a run,
   just before each cell runs: a cell is keyed with the files as it read them, so a file that changes
   after a cell read it (a later cell writes it, or anything else does) leaves that cell stale, and a
-  file an earlier cell of the same run wrote does not. Looking at a file opens it and reads none of it.
+  file an earlier cell of the same run wrote does not. A view (a named query that is not
+  `materialize=table`) is read when a cell selects from it, so that cell is keyed with the files of the
+  views it reads as they were when it ran. Looking at a file opens it and reads none of it.
   Only files on this machine are looked at: a remote one (any `scheme://` path but `file://`) and a
   UNC path (`\\host\share\x.csv`, `//host/share/x.csv`) have no known version, and cost no request.
-  Nor has a relative path while `file_search_path` is set, since DuckDB may read it from another
-  directory.
+  Nor has a relative path while `file_search_path` is set, for the database or by a cell of the notebook
+  (`SET`, `RESET`), since DuckDB may read it from another directory.
 
 What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width`,
 `height`, `label` and `placeholder`, and the selections only its charts filter on. Editing a query's chart or brushing a chart
@@ -642,7 +645,8 @@ fainter ink with the note *from an earlier run* until it runs. A cell whose key 
 
 - a relation that no cell defines under exactly that name: a table already in the database, a table
   of a database or schema a cell attached or created (`wh.orders`), a catalog view;
-- a remote file, a UNC path, or a relative path while `file_search_path` is set; a file whose version
+- a remote file, a UNC path, or a relative path while `file_search_path` is set (by the database or the
+  notebook); a file whose version
   the file system cannot report (neither a modified time nor a version tag); a file modified in the last
   two seconds, which could still change without its modified time changing (modified times are often
   whole seconds); or a glob matching more than 1000 files. A result made while one of its files was

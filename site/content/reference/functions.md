@@ -16,8 +16,9 @@ Files the functions write (`notebook_export`, `notebook_checkout`, saving in the
 whole: the text goes to a temporary file beside the target, which is then moved over it, so a failed
 write leaves the old file as it was. A symbolic link stays a link: the file it points to is the one
 replaced (and must be one `allowed_directories` allows). The new file has the default mode, not the old
-one's, and a hard link to the old file keeps the old text. A remote target (an object store, any
-`scheme://` path) is written directly: its upload is already all or nothing.
+one's, and a hard link to the old file keeps the old text. An object store's target (`s3://`, `gs://`,
+`az://`, `http(s)://`) is written directly: its upload is already all or nothing. Every other file
+system (a network share, `hdfs://`, an extension's) gets the temporary file and the move.
 
 | Function | Does |
 |---|---|
@@ -81,10 +82,11 @@ order the cells ran. Tables the notebook creates persist; its views and variable
 caller's session. The whole notebook runs before the first row is returned, so a `LIMIT` or `WHERE`
 around the call does not change how many cells run. Databases its `[notebook]` cell attached are
 detached when it returns (by `notebook_export` too). The caller's `max_execution_time` bounds the whole
-call, `notebook_export` too: each cell gets only the time the call has left (a cell's own
-`SET max_execution_time` lasts until the next cell), and once it is spent the call fails with
-*Query exceeded maximum execution time*. It holds when `lock_configuration` is set. An interrupt
-stops the call before the next cell; a cell already running finishes or reaches the time limit. See
+call, `notebook_export` too: every query the notebook runs ends by the call's deadline, whatever a cell
+`SET`s, and once the deadline has passed the call fails with *Query exceeded maximum execution time*,
+whichever cell ran out of time (an export writes nothing). It holds when `lock_configuration` is set.
+An interrupt stops the call before the next cell; a cell already running finishes or reaches the
+deadline. See
 [running headless](../guides/headless.md).
 
 | Argument | Meaning |
