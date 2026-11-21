@@ -361,11 +361,22 @@ it is narrow. It comes from this PR's view keying: on `main` a reader of a view 
 safe direction, though the editor case exists there. The user decides before merging: option 2 first, or this PR as
 it is with the hole recorded.
 
-### Loop ended
+### After iteration 5: the user's decision
 
-The loop ended after iteration 5, at the cap. The device-path finding did not come back after iteration 3. The view
-finding came back a fourth time and is now the design decision above. No two lenses wanted opposite things. Final
-verdicts: 14 request changes (all the view finding), 1 approve with nits. No lens requested changes for anything else.
+The loop reached its cap here, with the view finding written up as the decision above. **The user chose option 2**:
+a cell that keeps state is not a view; it is keyed with its own versions, the views it reads included. Option 3 (the
+parse tree) stays open for its own pull request, and so does the editor's "run this cell and below" case. The user
+asked for the loop to go on until the quorum is happy, for at most three more iterations, with the same rules; a
+finding that only argues again for option 1 or 3 is declined with a pointer to this decision.
+
+Option 2 as built (`IsLazyView`): a view cell's statements are `CREATE VIEW`s, plain queries and a final named query
+that is not `materialize=table`, and at least one makes a view. Any other statement makes the cell keep state: it is
+keyed with its own versions throughout, as every cell is that is not a view. For a reader, a view cell's files all take
+the reader's versions. `SplitViewReads` and the both-versions key are gone. Readers of a view made in a cell that keeps
+state are stale when one of its files changed, even if nothing kept read that file: the safe direction. Tests: the
+iteration-4 same-cell shapes and the iteration-5 cross-cell shapes (a cell with a view and a table, a named query that
+keeps a table, `materialize=table` with a `CREATE VIEW`), each failing on 81e7f8b, plus a SQL test of the cross-cell
+case.
 
 ## Testing
 
