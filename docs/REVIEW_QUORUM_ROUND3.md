@@ -235,7 +235,8 @@ Nits fixed:
 - `ViewKey`'s memo was keyed by the address of a version map, and every cell of a run has its own, so a chain of views
   was quadratic (kryonix measured 6.7 s for 2000 views; iteration 2's "removes the quadratic rebuild" was wrong). It is
   keyed by the versions of the files that matter now (`ViewSignature`), and the files of a view are built from those of
-  the views it reads: 6 ms for 2000 views.
+  the views it reads: 6 ms for 2000 views sharing one file (kryonix's shape). A chain where each view reads a file of
+  its own still grew faster than linearly (lnkuiper, tmonster; iteration 4).
 - `SetsSetting` skips comments between words (`SET /* x */ file_search_path`; tishj).
 - The PDF's temporary files are beside the file a link points to, so the final move never crosses file systems (pdet,
   dentiny; pdet reproduced the cross-device failure). The core test covers a view of a view, a diamond and a cycle
@@ -245,13 +246,58 @@ Nits declined: a test of a data export whose deadline passes while its files are
 reliably. A mapped network drive (`Z:\x`) counts as local (dentiny): it cannot be told from a local drive; commented.
 More test-suite sleeps (samansmink): with the injectable clock item, left open.
 
+### Iteration 4 (fd790e9)
+
+**Verdicts: 4 request changes (kryonix, taniabogatsch, dentiny, lnkuiper), 11 approve with nits.** Every lens tried
+the iteration-3 path rule again (DuckDB's `GetFileUrlOffset` on both platforms, `GetFullPathNameW`, lower case) and
+found no spelling that reaches another machine: the device-path finding did not come back.
+
+| Finding | Lenses | Fix |
+|---|---|---|
+| **The view finding came back a third time.** A cell that creates a view and then fills a table from it (`CREATE VIEW cv AS FROM 'x.csv'; CREATE TABLE t AS FROM cv`) had `x.csv` keyed with a reader's versions, though `t` was filled when the cell ran: a reader of `t` run after the file changed was unverified (shown as current) over old rows. Iteration 3's `LazyFiles` covered a named query's earlier statements, not a `CREATE VIEW`'s later ones | 4 blocking (kryonix, taniabogatsch, lnkuiper reproduced; hannes as a nit with a driver), and hawkfish's sibling: one file read both ways in a cell | A view cell's files are split by when they are read (`SplitViewReads`): a `CREATE VIEW`'s files are also read at once when a later statement of the cell may keep what it reads (anything but another `CREATE VIEW`, a plain query and the final view), and such a file is keyed with both versions (one when they are equal, so nothing changes when nothing changed). Core tests (view then table, one file both ways, a plain query after the view, `materialize=table`) and a SQL test |
+| `home_directory`: DuckDB expands `~` with it, the cache with `$HOME`, so a cell's `SET home_directory` left a `~` reader fresh over old rows; the same hole as iteration 1's `file_search_path` | 2 blocking (taniabogatsch, dentiny) | A `~` path has no version while `home_directory` is set, for the database or by a cell (`NotebookPathSettings`). SQL test; FORMAT §8 and the cache guide |
+
+Nits fixed:
+
+- `IsCreateView` missed `CREATE /* x */ VIEW`, `CREATE RECURSIVE VIEW` and `CREATE SECURE VIEW` (all 15 lenses in some
+  form): `LeadingWords` skips comments between words as `LeadingNames` does, which also fixes `CREATE /* x */ TEMP
+  TABLE` (tishj), and the modifiers are accepted. Core tests and a SQL test.
+- `materialize=table` hid a `CREATE VIEW` in the same cell (taniabogatsch, tishj, maxxen, pdet, carlopi, szarnyasg,
+  lnkuiper, samansmink, dtenwolde): it now applies to the final query only. Since the table is made after the view and
+  might read it, the view's files are keyed both ways in such a cell: stale when they changed, never wrongly fresh.
+- `ViewFiles` dedupes with a set and takes inner closures by reference; the view's own signature and each cell's split
+  are memoized; `ViewKey` checks the version map's address before building a signature (tmonster, lnkuiper, mytherin,
+  dtenwolde).
+- A path segment of only dots and spaces after `\\?\C:\` is refused, since Windows trims them (dentiny); paths under
+  `/net/` and `/Network/` are refused, since looking at one contacts the automounted host (hannes); `IsLocalPath`'s
+  comment says `~` is judged as written (dentiny).
+- FORMAT §8's path wording (szarnyasg) and the "6 ms" claim, which now names its shape (szarnyasg, lnkuiper).
+
+Nits declined or left open:
+
+- Recording "creates a view" from DuckDB's parse tree in `references.cpp` (maxxen, dtenwolde, samansmink): better, but
+  the key builder is core code and runs without a database; left open with the lexer predicate as the fallback.
+- A table macro (`CREATE MACRO m() AS TABLE FROM 'x.csv'`) is read lazily too (mytherin): its readers are unverified
+  already (a table function the cache does not know), so safe; left open.
+- `AddSources` does not take a file after a comma (`FROM t, 'x.csv'`) (tmonster): older than this PR and safe
+  (unverified); left open.
+- A browser test of the PDF export through a symlink (pdet): it needs Chrome printing in the suite; checked by hand by
+  pdet, left open.
+- A combined SQL chain of all view kinds (tmonster): the core tests cover the combinations; the SQL tests cover each kind.
+
+### Loop ended
+
+The loop stops after iteration 4: the view finding came back a third time (iterations 2, 3 and 4), the parent
+session's stop rule. Its fix is in, with tests, but no fifth review checked it. No two lenses wanted opposite things:
+dentiny judged the view-then-table case safe, but four lenses reproduced it, so the reproductions decided.
+
 ## Testing
 
 Local, against the release build:
 
 - `make core_test`;
 - `make test`: all of `test/sql`, 19 files (18 before the PR review loop added `notebook_export_pdf.test`);
-- `test/browser/test_browser.py` (Playwright, Chromium): 353 checks, including the new `test_session_keys`
+- `test/browser/test_browser.py` (Playwright, Chromium): all checks pass (re-run after iteration 4), including the new `test_session_keys`
   (database in the URL, one session per file, a save through a symlink, private cache entries, an old version not
   saved, a foreign key through the store). The html-wasm export was skipped (no runtime built);
 - `make frontend_check`;
