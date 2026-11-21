@@ -443,7 +443,7 @@ in the structural rule that replaced it, the third return of the glob finding (i
 Each is one more way for a pattern in a directory segment to be matched at `/`. Rather than refuse each, the rule now
 allows a pattern only in a glob's **last segment**, and never `**`: the glob lists one directory the path names
 literally and goes into nothing it matched, and each match is judged again before it is looked at, so a match under
-`/net` is refused there. No link, working directory or `$HOME` can change that. The cost is the safe direction:
+`/net` is refused there. No pattern follows a link, the working directory or `$HOME` (a link in the listed directory itself is still followed when it is listed, as a linked literal path always was; corrected in iteration 9). The cost is the safe direction:
 `data/*/x.csv`, Hive layouts (`year=*/…`) and `**` are unverified; `data/*.csv`, `*.csv`, `../data/*.csv` and
 `~/data/*.csv` are checked as before (`..` is no longer refused on its own, since nothing below a pattern is entered).
 Core tests for every spelling of iterations 6 to 8.
@@ -462,6 +462,43 @@ reviewed by the quorum; the user decides whether to run another iteration before
 - the glob finding came back three times (iterations 6, 7, 8): each fix was an enumeration of what a pattern can reach,
   until iteration 8's, which removes patterns from directory segments altogether;
 - no two lenses wanted opposite things.
+
+### After iteration 8
+
+The parent session asked for one more iteration on the iteration-8 fix, with a rule from the user: an unverified glob
+is acceptable by design, so a finding that only asks for more globs to be verified is a nit. If the glob class still
+broke it was to be written up, not patched; blocking findings of another kind were to be fixed, and the loop to stop.
+
+### Iteration 9 (a623b49), the last
+
+**Verdicts: 3 request changes (mytherin, hawkfish, dentiny), 12 approve with nits.** **The glob rule held**: every lens
+checked it against DuckDB's `LocalGlobResult`, `GlobFilesInternal`, `IsCrawl`, `HasGlob` and `like.cpp` (only `*`, `?`
+and `[` are patterns, both separators split on every platform, braces are literal, the last segment lists files of one
+directory, a trailing separator or a bracketed separator puts the pattern in a directory part, no opener is passed) and
+found no glob that goes into what it matched.
+
+| Finding | Lenses | Fix |
+|---|---|---|
+| DuckDB expands `~` as `$HOME` followed by the rest, separator or not: with `HOME=/`, `~net/host/x.csv` and `~net/host/*.csv` are `/net/host/…`, but the `net` segment rule saw `~net`. Opening the notebook contacted the host; reproduced with strace under `HOME=/`. In the `net` rule that this PR adds, not the glob rule (hawkfish, dentiny), so fixed under the parent's rule | 3, blocking | A path starting with `~` not followed by a separator is unverified. Core tests |
+
+Nits fixed:
+
+- The `\\?\` prefix was skipped on every platform, but POSIX reads `\\?\C:\x` as `/?/C:/x`, a pattern in a directory
+  (dentiny, dtenwolde, szarnyasg). Every `\\?\` path is now unverified: `src/core` cannot tell which platform reads it.
+  This reverses iteration 3's "`\\?\` and a drive is local"; extended-length paths are rare in notebooks.
+- "No link … can change that" (iteration 8) said too much: DuckDB stats every entry of the directory it lists,
+  following links, so a link in the listed directory is still followed, as a linked literal path always was (hannes,
+  lnkuiper, carlopi, tishj, taniabogatsch, samansmink, pdet, kryonix). The comment, FORMAT §8 and the iteration-8
+  text say so. Links on the reader's own file system stay accepted as local, as mapped drives are.
+
+Declined or left open: stopping the listing at 1000 entries (hannes, hawkfish): the cost is one directory, bounded;
+left open. More globs verified (relative directory patterns, Hive layouts): unverified by the user's rule.
+
+### Loop ended
+
+The loop ended after iteration 9. **Final verdicts: 3 request changes, 12 approve with nits**; the three are one finding
+(`~name`), fixed after the iteration under the parent's rule, and not reviewed again. The glob rule, the view rule
+(option 2) and everything before them held in iteration 9. No two lenses wanted opposite things.
 
 ## Testing
 
