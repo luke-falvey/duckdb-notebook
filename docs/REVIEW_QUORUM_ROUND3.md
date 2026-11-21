@@ -378,6 +378,38 @@ iteration-4 same-cell shapes and the iteration-5 cross-cell shapes (a cell with 
 keeps a table, `materialize=table` with a `CREATE VIEW`), each failing on 81e7f8b, plus a SQL test of the cross-cell
 case.
 
+### Iteration 6 (e6201dc), on option 2
+
+**Verdicts: 2 request changes (hawkfish, samansmink), 13 approve with nits.** No lens argued again for option 1 or 3.
+Every lens walked `IsLazyView` through the cell shapes (`CREATE VIEW` cells, named queries, `materialize=table`, plain
+queries, `SET VARIABLE`, `SET`/`USE`/`ATTACH`, `INSERT`, `COPY`, `CALL`, macros, charts, prose with `{{ }}`), and
+carlopi confirmed the new tests fail on 81e7f8b (11 checks).
+
+| Finding | Lenses | Fix |
+|---|---|---|
+| A cell that keeps state but makes a view (its final named query, or a `CREATE VIEW`) is not a view, so its readers were keyed with its run-time versions, yet DuckDB still reads that view as the reader runs. A version can come back (a glob's match list after a file is added and removed), and then the reader was fresh over rows from another version. Within option 2's rule, and made reachable by it for named queries | 1, blocking (hawkfish, reproduced with the release build) | Such a cell `DefinesLazily`; its readers, and theirs, are unverified (a key that differs still makes them stale). Core and SQL tests |
+| A glob at the root got past the `net` rule (`/n?t/host/*.csv`, `/[Nn]etwork/…`, `/*/host/…`, `/**`): `FileVersion` globs before it checks the matches, so the automounter contacted the host on open | 1, blocking (samansmink), 1 as a nit (dentiny) | An absolute path's first segment, after `.` and `..`, is refused when it is `**` or a glob that could match `net` or `network` (a small matcher for `*`, `?` and `[...]`, without case). Further down a pattern only lists local directories. Core tests |
+
+Nits fixed: a data-changing CTE (`WITH x AS (INSERT … RETURNING *) SELECT …`) counted as a plain query, so a cell with
+one could be a view (dentiny; the unsafe direction): any `INSERT`, `UPDATE`, `DELETE` or `MERGE` word makes the cell
+keep state. The `IsView` comment still gave the old rule (hannes, lnkuiper, carlopi, tishj, taniabogatsch, maxxen,
+pdet, tmonster). Negative tests for `ATTACH`, `USE`, `SET`, `INSERT`, `CREATE MACRO` and data-changing CTEs, before a
+view and before a named query (lnkuiper, maxxen, pdet). Comments that named review iterations describe the shape
+(taniabogatsch). FORMAT §8 and the cache guide say a view made by a cell that keeps state leaves its readers
+unverified (mytherin, hawkfish), and the guide's path bullet is rewrapped and says "segment" (carlopi, samansmink).
+
+Declined or left open:
+
+- A scalar macro that reads a view (lnkuiper): references do not record macro uses, so a cell calling a macro does not
+  depend on the macro's cell at all. Older than this PR; it needs `references.cpp` to record them, with option 3.
+- A view cell's plain-query files key its readers too (tmonster): needlessly stale at worst, and one stat.
+- Sharing `Materialized` between the cache, the script and `Runner` (mytherin): the three read the option the same way;
+  a refactor for later. Unknown `materialize=` values pass without an error (taniabogatsch, pdet): older than this PR,
+  and cache and runner agree.
+- `CREATE VIEW IF NOT EXISTS` over a different existing view (tishj) and a relative path read with the working
+  directory under `/net` (hawkfish, tishj): older than this PR, or not a new contact.
+- More SQL tests for each shape and a sleep shared between cases (carlopi, mytherin): the core tests cover the shapes.
+
 ## Testing
 
 Local, against the release build:
