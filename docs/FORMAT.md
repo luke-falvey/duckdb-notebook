@@ -613,30 +613,30 @@ edited. This is why naming cells you care about matters (§2).
   out (`hide`, `span`, `run`, `screen`);
 - the keys of the cells it reads, so a change anywhere upstream reaches every cell below it;
 - the type and value of every variable its SQL reads (unset, `NULL` and a value are all different);
-- the version of every file it names by a literal path: the first argument of a file reader
-  (`read_csv`, `read_csv_auto`, `read_parquet`, `parquet_scan`, `read_json`, `read_json_auto`,
-  `read_ndjson`, `read_json_objects`, `read_ndjson_objects`, `read_text`, `read_blob`, `read_xlsx`,
-  `sniff_csv`, `glob` and the `parquet_*` metadata functions), as one string or a list of strings, and a
-  string after `FROM` or `JOIN` (`FROM 'events.csv'`). A file's version is its size, its last-modified
-  time, its file id and its version tag (an ETag, on file systems that have one) as DuckDB's file system
-  reports them; a glob's is the list of files it matches with each one's version; a file that does not
-  exist has the version *missing*. Versions are taken when the notebook is opened and, during a run,
-  just before each cell runs: a cell is keyed with the files as it read them, so a file that changes
-  after a cell read it (a later cell writes it, or anything else does) leaves that cell stale, and a
-  file an earlier cell of the same run wrote does not. A view (a named query that is not
-  `materialize=table`, or a `CREATE VIEW` statement in any cell) is read when a cell selects from it, so
-  that cell is keyed with the files the views it reads select from as they were when it ran; files a
-  view cell's other statements read keep the versions of when that cell ran. So do a `CREATE VIEW`'s
-  files when a later statement of its cell may read the view at once (anything but another `CREATE
-  VIEW`, a plain query and the final named query): such a file is keyed with both versions. Looking at
-  a file opens it and reads none of it. Only files on this machine are looked at: a remote one (any
-  `scheme://` path but `file://`), a UNC path (`\\host\share\x.csv`, `//host/share/x.csv`), a device path
-  other than `\\?\` and a drive with no `.` or `..` segment (`\\.\…`, `\\?\UNC\…`, `\\?\C:\..\…`,
-  which can climb off the drive), a path with a `net` or `network` segment in any case (the automounter's `/net/host/…`, `/Network/…`), and a `file:`
-  URL other than `file:/…`, `file:///…` or `file://localhost/…` to a local path have no known version,
-  and cost no request. Nor has a relative path while `file_search_path` is set, or a path starting
-  with `~` while `home_directory` is set, for the database or by a cell of the notebook (`SET`,
-  `RESET`), since DuckDB may read it from somewhere else.
+- the version of every file it names by a literal path: the first argument of a file reader (`read_csv`,
+  `read_csv_auto`, `read_parquet`, `parquet_scan`, `read_json`, `read_json_auto`, `read_ndjson`,
+  `read_json_objects`, `read_ndjson_objects`, `read_text`, `read_blob`, `read_xlsx`, `sniff_csv`, `glob`
+  and the `parquet_*` metadata functions), as one string or a list of strings, and a string after `FROM`
+  or `JOIN` (`FROM 'events.csv'`). A file's version is its size, its last-modified time, its file id and
+  its version tag (an ETag, on file systems that have one) as DuckDB's file system reports them; a glob's
+  is the list of files it matches with each one's version; a file that does not exist has the version
+  *missing*. Versions are taken when the notebook is opened and, during a run, just before each cell
+  runs: a cell is keyed with the files as it read them, so a file that changes after a cell read it (a
+  later cell writes it, or anything else does) leaves that cell stale, and a file an earlier cell of the
+  same run wrote does not. A view cell (one that only makes views: its statements are `CREATE VIEW`s,
+  plain queries and a final named query that is not `materialize=table`) is read when a cell selects from
+  it, so that cell is keyed with the files the views it reads select from as they were when it ran. A
+  cell with any other statement (a table, a variable, an `INSERT`) keeps what it read when it ran, and is
+  keyed with its own versions throughout, the views it reads included, even if it also makes a view.
+  Looking at a file opens it and reads none of it. Only files on this machine are looked at: a remote one
+  (any `scheme://` path but `file://`), a UNC path (`\\host\share\x.csv`, `//host/share/x.csv`), a device
+  path other than `\\?\` and a drive with no `.` or `..` segment (`\\.\…`, `\\?\UNC\…`, `\\?\C:\..\…`,
+  which can climb off the drive), a path with a `net` or `network` segment in any case (the automounter's
+  `/net/host/…`, `/Network/…`), and a `file:` URL other than `file:/…`, `file:///…` or
+  `file://localhost/…` to a local path have no known version, and cost no request. Nor has a relative
+  path while `file_search_path` is set, or a path starting with `~` while `home_directory` is set, for
+  the database or by a cell of the notebook (`SET`, `RESET`), since DuckDB may read it from somewhere
+  else.
 
 What a cell shows on top of what it computes is a second layer: its chart specs, `rows`, `width`,
 `height`, `label` and `placeholder`, and the selections only its charts filter on. Editing a query's chart or brushing a chart

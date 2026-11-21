@@ -458,7 +458,8 @@ static void TestCacheSources() {
 	                       "CREATE TEMP TABLE ct AS SELECT count(*) AS n FROM cv;\n"
 	                       "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
 	                       "-- %% r\nSELECT n FROM ct;\n");
-	CHECK(!filled.HasErrors() && IsLazyView(filled.cells[0]));
+	// It keeps something, so it is not a view: keyed with its own versions throughout.
+	CHECK(!filled.HasErrors() && !IsLazyView(filled.cells[0]));
 	CHECK(CacheKeys(filled, {}, old_x, created_run)[2].result != CacheKeys(filled, {}, new_x)[2].result);
 	std::map<size_t, std::map<std::string, std::string>> filled_same {{0, old_x}, {2, old_x}};
 	CHECK(CacheKeys(filled, {}, old_x, filled_same)[2].result == CacheKeys(filled, {}, old_x)[2].result);
@@ -467,16 +468,42 @@ static void TestCacheSources() {
 	                      "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
 	                      "-- %% r\nSELECT count(*) AS n FROM cv;\n");
 	CHECK(CacheKeys(shown, {}, old_x, created_run)[2].result == CacheKeys(shown, {}, new_x)[2].result);
-	// materialize=table makes the final query a table, not the CREATE VIEW before it; the table is made after the
-	// view, and might read it, so the view's file is keyed both ways (stale here, never wrongly fresh).
+	// materialize=table makes the final query a table, which keeps what it read: not a view, so readers of the view
+	// before it are needlessly stale here (the safe direction), never wrongly fresh.
 	auto table_cell =
 	    Analyzed("-- %% t materialize=table\nCREATE TEMP VIEW cv AS SELECT * FROM 'x.csv';\nSELECT 1 AS one;\n"
 	             "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
 	             "-- %% r\nSELECT count(*) AS n FROM cv;\n");
-	CHECK(!table_cell.HasErrors() && IsLazyView(table_cell.cells[0]));
+	CHECK(!table_cell.HasErrors() && !IsLazyView(table_cell.cells[0]));
 	CHECK(CacheKeys(table_cell, {}, old_x, created_run)[2].result != CacheKeys(table_cell, {}, new_x)[2].result);
 	std::map<size_t, std::map<std::string, std::string>> table_same {{0, new_x}, {2, new_x}};
 	CHECK(CacheKeys(table_cell, {}, new_x, table_same)[2].result == CacheKeys(table_cell, {}, new_x)[2].result);
+
+	// Iteration 5: a cell that keeps state and reads another cell's view read it when it ran. Whether the cell also
+	// makes a view, or is a named query, its readers are stale after the view's file changes.
+	for (auto &middle : std::vector<std::string> {
+	         "-- %% mk\nCREATE TEMP VIEW d AS SELECT 1 AS one;\nCREATE TEMP TABLE ct AS SELECT count(*) AS n FROM "
+	         "cv;\n",
+	         "-- %% mk\nCREATE TEMP TABLE ct AS SELECT count(*) AS n FROM cv;\nSELECT n FROM ct;\n",
+	         "-- %% mk materialize=table\nCREATE TEMP VIEW d AS SELECT 1 AS one;\nSELECT count(*) AS n FROM cv;\n"}) {
+		bool table = middle.find("materialize") != std::string::npos;
+		auto across =
+		    Analyzed("-- %% a\nCREATE TEMP VIEW cv AS SELECT * FROM 'x.csv';\n" + middle +
+		             "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+		             "-- %% r\nSELECT * FROM " +
+		             std::string(table || middle.find("SELECT n FROM ct") != std::string::npos ? "mk" : "ct") + ";\n");
+		CHECK(!across.HasErrors());
+		CHECK(IsLazyView(across.cells[0]) && !IsLazyView(across.cells[1]));
+		std::map<size_t, std::map<std::string, std::string>> across_run {{0, old_x}, {1, old_x}, {3, new_x}};
+		CHECK(CacheKeys(across, {}, old_x, across_run)[3].result != CacheKeys(across, {}, new_x)[3].result);
+		std::map<size_t, std::map<std::string, std::string>> across_same {{0, new_x}, {1, new_x}, {3, new_x}};
+		CHECK(CacheKeys(across, {}, new_x, across_same)[3].result == CacheKeys(across, {}, new_x)[3].result);
+	}
+	// A cell of views and plain queries only is a view.
+	CHECK(IsLazyView(
+	    Analyzed("-- %%\nCREATE VIEW p AS SELECT 1;\nSELECT * FROM p;\nCREATE VIEW q AS SELECT 2;\n").cells[0]));
+	CHECK(!IsLazyView(Analyzed("-- %%\nCREATE VIEW p AS SELECT 1;\nSET VARIABLE n = (SELECT 1);\n").cells[0]));
+	CHECK(!IsLazyView(Analyzed("-- %%\nSELECT 1;\n").cells[0]));
 
 	// A view of a view, a diamond (s reads the table t and the view b, t reads b) and a cycle among views.
 	auto deep = Analyzed("-- %% a\nSELECT * FROM 'x.csv';\n"

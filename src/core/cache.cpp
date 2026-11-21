@@ -211,48 +211,10 @@ void AddVariable(KeyText &text, const std::string &name, const std::map<std::str
 	text.Add(name).Add(found == variables.end() ? "unset" : "set").Add(found == variables.end() ? "" : found->second);
 }
 
-//! A view cell's files, by when they are read. `lazy`: when a later cell selects from what it defines, those of its
-//! final query (a named query that is not materialize=table) and of its CREATE VIEW statements. `eager`: when the
-//! cell runs, those of its other statements, and those of a CREATE VIEW that a later statement of the cell may read
-//! at once (`CREATE VIEW v ...; CREATE TABLE t AS FROM v`): any that keeps state, which is all but another CREATE VIEW,
-//! a plain query and the final view. A file can be both.
-struct ViewReads {
-	std::vector<std::string> lazy;
-	std::vector<std::string> eager;
-};
-
-ViewReads SplitViewReads(const Cell &cell) {
-	ViewReads reads;
-	auto statements = SplitStatements(cell.sql);
-	bool named = cell.is_query && !cell.name.empty();
-	bool materialized = named && cell.Option("materialize", "view") == "table";
-	// Whether a statement after the one at `i` may keep what it read.
-	std::vector<bool> kept_after(statements.size() + 1, false);
-	for (size_t i = statements.size(); i-- > 0;) {
-		bool last = i + 1 == statements.size();
-		auto &text = statements[i].text;
-		bool keeps = last && named ? materialized : !IsCreateView(text) && !IsQueryStatement(text);
-		kept_after[i] = kept_after[i + 1] || keeps;
-	}
-	for (size_t i = 0; i < statements.size(); i++) {
-		bool last_view = i + 1 == statements.size() && named && !materialized;
-		bool create_view = IsCreateView(statements[i].text);
-		CacheSources sources;
-		AddSources(statements[i].text, sources);
-		for (auto &path : sources.files) {
-			if (last_view || create_view) {
-				AddUnique(reads.lazy, path);
-			}
-			if ((!last_view && !create_view) || (create_view && kept_after[i + 1])) {
-				AddUnique(reads.eager, path);
-			}
-		}
-	}
-	return reads;
-}
-
+//! The files a view cell (IsLazyView) reads when a later cell selects from it: all of them, since nothing else in the
+//! cell keeps what it read.
 std::vector<std::string> LazyFiles(const Cell &cell) {
-	return SplitViewReads(cell).lazy;
+	return CellSources(cell).files;
 }
 
 struct KeyBuilder {
@@ -270,8 +232,7 @@ struct KeyBuilder {
 	//! ViewFiles and IsView, by cell.
 	std::map<size_t, std::vector<std::string>> view_files;
 	std::map<size_t, bool> is_view;
-	//! SplitViewReads and a view's signature with its own versions, by cell.
-	std::map<size_t, ViewReads> view_reads;
+	//! A view's signature with its own versions, by cell.
 	std::map<size_t, std::string> own_signature;
 
 	KeyBuilder(const Notebook &notebook, const std::map<std::string, std::string> &variables,
@@ -341,7 +302,7 @@ struct KeyBuilder {
 		}
 		// Built from the views it reads, each once.
 		auto &files = view_files[index];
-		files = ReadsOf(index).lazy;
+		files = LazyFiles(notebook.cells[index]);
 		std::set<std::string> seen(files.begin(), files.end());
 		for (int dependency : notebook.cells[index].depends_on) {
 			if (dependency < 0 || static_cast<size_t>(dependency) >= notebook.cells.size() ||
@@ -358,14 +319,6 @@ struct KeyBuilder {
 			}
 		}
 		return files;
-	}
-
-	const ViewReads &ReadsOf(size_t index) {
-		auto found = view_reads.find(index);
-		if (found == view_reads.end()) {
-			found = view_reads.emplace(index, SplitViewReads(notebook.cells[index])).first;
-		}
-		return found->second;
 	}
 
 	//! Those versions as text: readers that saw the same versions share one key.
@@ -423,38 +376,15 @@ struct KeyBuilder {
 		data.Add(cell.kind == CellKind::SQL ? cell.sql : cell.body);
 		auto sources = CellSources(cell);
 		bool verified = !sources.unchecked && ReadsOnlyCells(cell, sources);
-		// A view keyed for a reader (ViewKey): what it reads lazily is read as the reader runs, what its other
-		// statements read was read when it ran.
-		auto &own = VersionsOf(index);
-		static const ViewReads none;
-		bool for_reader = &versions != &own;
-		auto &reads = for_reader ? ReadsOf(index) : none;
-		auto version_in = [&](const std::map<std::string, std::string> &from, const std::string &path) {
-			auto found = from.find(path);
-			auto version = found == from.end() ? std::string() : found->second;
+		// `versions` is the cell's own, or a reader's when the cell is a view keyed for it (ViewKey): a view keeps
+		// nothing, so all it reads is read as the reader runs.
+		for (auto &path : sources.files) {
+			auto found = versions.find(path);
+			auto version = found == versions.end() ? std::string() : found->second;
 			// `?` marks a version that may still change (ModifiedTooRecently): the key covers it, but cannot vouch
 			// for it.
 			verified = verified && !version.empty() && !IsUnsure(version);
-			return StripUnsure(version);
-		};
-		for (auto &path : sources.files) {
-			bool lazy = for_reader && Contains(reads.lazy, path);
-			bool eager = !lazy || Contains(reads.eager, path);
-			data.Add("file").Add(path);
-			if (!eager) {
-				data.Add(version_in(versions, path));
-			} else if (!lazy) {
-				data.Add(version_in(own, path));
-			} else {
-				// Read both when the cell ran and as the reader runs: both versions, one when they are the same, so
-				// the key is what the cell's own would be when nothing changed in between.
-				auto then = version_in(own, path);
-				auto now = version_in(versions, path);
-				data.Add(then);
-				if (now != then) {
-					data.Add("now").Add(now);
-				}
-			}
+			data.Add("file").Add(path).Add(StripUnsure(version));
 		}
 		for (int dependency : cell.depends_on) {
 			if (dependency < 0 || static_cast<size_t>(dependency) >= notebook.cells.size()) {
@@ -777,16 +707,26 @@ bool IsLazyView(const Cell &cell) {
 	if (cell.kind != CellKind::SQL) {
 		return false;
 	}
-	// materialize=table makes the final query a table; a CREATE VIEW before it is still a view.
-	if (cell.is_query && !cell.name.empty() && cell.Option("materialize", "view") != "table") {
-		return true;
-	}
-	for (auto &statement : SplitStatements(cell.sql)) {
-		if (IsCreateView(statement.text)) {
-			return true;
+	auto statements = SplitStatements(cell.sql);
+	bool named = cell.is_query && !cell.name.empty();
+	bool view = false;
+	for (size_t i = 0; i < statements.size(); i++) {
+		auto &text = statements[i].text;
+		if (i + 1 == statements.size() && named) {
+			// The final query is a view, unless materialize=table makes it a table, which keeps what it read.
+			if (cell.Option("materialize", "view") == "table") {
+				return false;
+			}
+			view = true;
+		} else if (IsCreateView(text)) {
+			view = true;
+		} else if (!IsQueryStatement(text)) {
+			// It may keep what it reads (a table, a variable, an insert), as the cell ran: the whole cell is keyed
+			// with its own versions, the views it reads included.
+			return false;
 		}
 	}
-	return false;
+	return view;
 }
 
 std::vector<size_t> CacheViewClosure(const Notebook &notebook, size_t index) {

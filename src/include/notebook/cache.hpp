@@ -88,8 +88,10 @@ std::vector<CacheKey> CacheKeys(const Notebook &notebook, const std::map<std::st
                                 const std::map<std::string, std::string> &files = {},
                                 const std::map<size_t, std::map<std::string, std::string>> &cell_files = {});
 
-//! A cell another cell reads lazily, when it runs: a named query (a view unless materialize=table) or a cell that
-//! CREATEs a VIEW. Its final query's and CREATE VIEW's files are read then; its other statements read when it ran.
+//! A cell another cell reads lazily, when it runs: one that makes views and keeps nothing. Its statements are CREATE
+//! VIEWs, plain queries and a final named query that is not materialize=table, and at least one makes a view. A cell
+//! with any other statement (a table, a variable, an insert) keeps what it read when it ran, and is keyed with its own
+//! versions throughout.
 bool IsLazyView(const Cell &cell);
 
 //! The cells a cell reads lazily (IsLazyView) that it depends on, and those they depend on through views, in file

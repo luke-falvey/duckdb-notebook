@@ -63,8 +63,9 @@ cell it reads, reads:
 Files are looked at just before each cell runs, so a cell is kept with the files as it read them: one
 that changes after the cell read it (a later cell rewrites it, or anything else does) leaves it stale.
 A cell that selects from a view (a named query, or a `CREATE VIEW`) reads the view's files as it runs,
-and is kept with those too; a table its cell then fills from the view holds the files as they were
-when that cell ran.
+and is kept with those too. That holds for a cell that only makes views; a cell that also makes a table,
+sets a variable or inserts rows keeps what it read when it ran, so its readers are kept with the files
+as they were then.
 
 Run such a cell when its data may have changed. [FORMAT §8](../reference/format.md#8-sidecar-cache)
 has the exact rules.
