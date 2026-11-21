@@ -285,11 +285,87 @@ Nits declined or left open:
   pdet, left open.
 - A combined SQL chain of all view kinds (tmonster): the core tests cover the combinations; the SQL tests cover each kind.
 
+### After iteration 4
+
+The loop was set to stop after iteration 4, when the view finding came back a third time. The parent session then asked
+for one final iteration (the cap is five): if the view finding came back a fourth time, it was not to be patched again
+but written up as a design decision; any other blocking finding was to be fixed as before.
+
+### Iteration 5 (81e7f8b), the last
+
+**Verdicts: 14 request changes, 1 approve with nits (taniabogatsch).** All fourteen blocking findings are one finding:
+**the view finding came back a fourth time**, now across cells. It is not patched; see the design decision below.
+Nothing else blocks. Every lens confirmed the iteration-4 fixes for what they cover: the same-cell split (`CREATE VIEW`
+then `CREATE TABLE`, `INSERT` or `SET VARIABLE`; one file read both ways; a plain query after the view;
+`materialize=table`), the both-versions key collapsing to the cell's own when nothing changed, the memos, `IsCreateView`
+spellings, and `home_directory` (a cell's `SET` and the database's setting, failing closed).
+
+| Finding | Lenses | Outcome |
+|---|---|---|
+| A view cell's statements that keep state read **other cells' views** with the reader's versions. `SplitViewReads` splits only the files a cell names; each view it depends on goes through `ViewKey(dep, reader's versions)`. So `a: CREATE VIEW cv AS FROM 'x.csv'` and `b: CREATE VIEW d AS SELECT 1; CREATE TABLE ct AS FROM cv` (or a named query `b: CREATE TABLE ct AS FROM cv; SELECT * FROM ct`) leave a reader of `ct`, run after `x.csv` changed, unverified (shown as current) or, when the file is old enough, fresh over old rows. Iteration 4 made part of it reachable: a `materialize=table` cell with a `CREATE VIEW` became a view | 14, blocking, all reproduced (core drivers; release builds by mytherin, hannes, carlopi, lnkuiper, tishj, maxxen, pdet, kryonix and others; lnkuiper and hawkfish got `fresh`) | **Not patched** (the fourth return): written up as a decision below |
+
+Nits fixed:
+
+- The `/net/` rule matched a literal prefix only: `file:///net/h`, `/./net/h`, `/tmp/../net/h`, and `/NETWORK` on
+  macOS's case-insensitive file system got past it (mytherin, lnkuiper, tishj, taniabogatsch, tmonster, dentiny). It now
+  matches any `net` or `network` segment, in any case, inside `NamesThisMachine`, so `file:` URLs are judged the same
+  way. A local directory of that name only makes its files unverified. The test that asserted `/network/x.csv` was
+  local now asserts the opposite.
+- The second version of a file read both ways is labelled `now`, not `then` (taniabogatsch, hawkfish, dtenwolde). The
+  label is new in this PR, so no stored key had it and `CACHE_FORMAT` stays.
+- A SQL test for the database's own `home_directory` (hannes).
+
+Declined or left open:
+
+- `file:~/x` (hawkfish): `FileUrlOffset` gives 0 for it, so `IsLocalPath` refuses it already: unverified.
+- The editor's "run this cell and below" keys a dependency that did not run with the files as they are now, so a reader
+  run alone after a file changed outside the editor can be fresh over a table filled from the old file (taniabogatsch).
+  It is older than this PR (main does the same for a plain `CREATE TABLE` cell). It belongs with the decision below:
+  a dependency's entry records the versions it ran with, and keying with those would close it. Left open.
+- `CacheReadFiles` and `CacheViewClosure` are not memoized across cells (tmonster), and `PathSettings` could become a list
+  of settings (samansmink): left open. More SQL tests for each same-cell shape (taniabogatsch, pdet): the core tests
+  cover them.
+
+### Design decision: how the cache knows what a view cell reads, and when
+
+The view finding came back in every iteration from 2 to 5, each time one step further on: a table that reads a view
+(2), a view's earlier statements and `CREATE VIEW` cells (3), a view read at once by its own cell (4), other cells'
+views read at once (5). The cause is the same each time. A reader of a cell's views must be keyed with the versions it
+read, but whatever the cell **kept** (tables, variables) must be keyed with the versions of when the cell ran. Knowing
+which is which needs, for each statement, what it reads (files and other cells' names) and whether it keeps state. The
+key builder only has that per cell (`Cell::reads`, `depends_on`), and guesses the rest from the text (`IsCreateView`,
+`IsQueryStatement`, `AddSources` per statement). Each fix taught the guess one more shape.
+
+Options:
+
+1. **Patch the next hop** (what the fourteen lenses suggested): when a view cell has a statement that keeps state, key
+   each view it depends on both ways, as its files are. Small, errs towards stale, closes the iteration-5
+   reproductions. But it is the fifth patch to the same guess, and leaves the editor case above.
+2. **Mixed cells are not views.** A cell is lazy only when every statement is a `CREATE VIEW`, a plain query or its
+   final view query. A cell with anything that keeps state is keyed with its own versions, its dependencies included,
+   as every cell was before iteration 1. Readers of a view made in a mixed cell are needlessly stale after one of its
+   files changes, the safe direction and a rare notebook. This removes the class, not the instance: nothing the cell
+   kept can be keyed with a reader's versions. A small change, mostly deletions (`SplitViewReads` and the
+   both-versions key go).
+3. **Per-statement facts from DuckDB's parse tree.** `references.cpp` records, per statement, what it defines and reads
+   and whether it creates a view or keeps state, and the key builder follows names instead of cells. This is exact,
+   and replaces the lexer predicates. It is the biggest change: `FakeExtract` and the core tests must model statements,
+   and the key builder's dependency walk changes.
+
+**Recommendation: option 2 now, option 3 as its own pull request.** Option 2 is small, cannot be wrong in the unsafe
+direction for any shape, and is easy to review. What it gives up (mixed cells' views going needlessly stale) is what
+option 3 would win back exactly, with time to design it and its tests properly. Option 3 should also close the editor
+case, by keying a dependency that did not run with the versions recorded in its stored entry. Until one of them lands,
+**PR #21 has a known unsafe hole**: a view cell that also keeps state, reading another cell's view. It was reproduced and
+it is narrow. It comes from this PR's view keying: on `main` a reader of a view is stale forever instead (R2), the
+safe direction, though the editor case exists there. The user decides before merging: option 2 first, or this PR as
+it is with the hole recorded.
+
 ### Loop ended
 
-The loop stops after iteration 4: the view finding came back a third time (iterations 2, 3 and 4), the parent
-session's stop rule. Its fix is in, with tests, but no fifth review checked it. No two lenses wanted opposite things:
-dentiny judged the view-then-table case safe, but four lenses reproduced it, so the reproductions decided.
+The loop ended after iteration 5, at the cap. The device-path finding did not come back after iteration 3. The view
+finding came back a fourth time and is now the design decision above. No two lenses wanted opposite things. Final
+verdicts: 14 request changes (all the view finding), 1 approve with nits. No lens requested changes for anything else.
 
 ## Testing
 
