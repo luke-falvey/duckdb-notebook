@@ -78,7 +78,9 @@ Runs every cell, charts included, in a connection of its own, and returns one ro
 order the cells ran. Tables the notebook creates persist; its views and variables do not reach the
 caller's session. The whole notebook runs before the first row is returned, so a `LIMIT` or `WHERE`
 around the call does not change how many cells run. Databases its `[notebook]` cell attached are
-detached when it returns. See [running headless](../guides/headless.md).
+detached when it returns (by `notebook_export` too). The caller's `max_execution_time` applies to each
+of its queries, and an interrupt stops it before the next cell. See
+[running headless](../guides/headless.md).
 
 | Argument | Meaning |
 |---|---|
@@ -134,7 +136,7 @@ Runs the notebook and writes it in another form. Returns one row: `format`, `pat
 | `budget` | `UBIGINT` | `16` | Most runs `interactive := 'precomputed'` may make |
 | `page_rows` | `UBIGINT` | `100` | Result rows kept per query cell (at least the cell's `rows=`) |
 | `wasm_runtime` | `VARCHAR` | `$NOTEBOOK_WASM_RUNTIME` | Folder holding the DuckDB-WASM runtime, for `html-wasm` |
-| `chrome` | `VARCHAR` | `$NOTEBOOK_CHROME`, the `PATH`, then the usual install places | Browser that prints PDFs. `pdf` is refused when `enable_external_access` is false |
+| `chrome` | `VARCHAR` | `$NOTEBOOK_CHROME`, the `PATH`, then the usual install places | Browser that prints PDFs. `pdf` is refused when `enable_external_access` is false or `lock_configuration` is set |
 | `data_format` | `VARCHAR` | `'parquet'` | `parquet` or `csv`, for `data` |
 
 See [exporting and sharing](../guides/exporting.md).
@@ -228,7 +230,7 @@ schema on first use.
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `name` | the file name without extension | The stored notebook's name |
+| `name` | the file name without extension | The stored notebook's name. It must not be blank or hold `@` |
 | `message` | | A note stored with the version |
 | `database` | the current database | An attached database to store it in |
 | `force` | `false` | Save even if the text equals an older version |
@@ -276,7 +278,9 @@ Starts the notebook server inside this DuckDB process and returns the editor's U
 listens on 127.0.0.1 only and every request must carry the random token in the URL. It stops when
 the database closes or on `notebook_stop()`. Calling it again while it runs keeps the same server
 and returns a URL for the new notebook. It is refused when `enable_external_access` is false or
-`lock_configuration` is set: the server runs the SQL its page sends and opens a browser.
+`lock_configuration` is set: the server runs the SQL its page sends and opens a browser. The path is
+checked as every function checks it (an empty path or a bad `db:` version is an error), and stored
+notebooks opened from now on are read from, saved to and cached in the current database.
 
 | Argument | Default | Meaning |
 |---|---|---|

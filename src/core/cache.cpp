@@ -442,15 +442,50 @@ std::string CacheVariableKey(const std::string &type, const std::string &text, b
 	return key.text;
 }
 
+//! Table functions whose rows depend on their arguments alone.
+bool IsPureTableFunction(const std::string &name) {
+	static const char *const NAMES[] = {"range", "generate_series", "unnest", "json_each", "json_tree", "repeat_row"};
+	for (auto known : NAMES) {
+		if (name == known) {
+			return true;
+		}
+	}
+	return false;
+}
+
 CacheSources CellSources(const Cell &cell) {
 	CacheSources sources;
 	if (cell.kind == CellKind::SQL || cell.kind == CellKind::INPUT) {
 		AddSources(cell.sql, sources);
 	}
+	// Any other table function (an extension's reader such as st_read, a table macro, duckdb_tables()) reads
+	// something the cache cannot look at. File readers are judged by their arguments (AddSources).
+	for (auto &name : cell.table_functions) {
+		if (!IsFileReader(name) && !IsPureTableFunction(name)) {
+			sources.unchecked = true;
+		}
+	}
 	for (auto &expression : cell.expressions) {
 		AddSources(expression.sql, sources);
 	}
 	return sources;
+}
+
+bool IsLocalPath(const std::string &path) {
+	if (path.empty()) {
+		return false;
+	}
+	auto scheme = path.find("://");
+	if (scheme == std::string::npos) {
+		return true;
+	}
+	return Lower(path.substr(0, scheme)) == "file";
+}
+
+bool ModifiedTooRecently(int64_t modified, int64_t now) {
+	// Two seconds: one for the whole-second modified time, one for a clock that is a little behind the file system's.
+	const int64_t MARGIN = 2000000;
+	return modified > now - MARGIN;
 }
 
 std::vector<std::string> CacheSourceFiles(const Notebook &notebook) {

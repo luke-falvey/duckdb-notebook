@@ -7,7 +7,8 @@ namespace notebook {
 
 //! One SQL statement cut out of a larger text.
 struct Statement {
-	//! The statement without its terminating semicolon or surrounding whitespace.
+	//! The statement without its terminating semicolon or surrounding whitespace. One that ends in a line comment
+	//! ends with a newline, so text appended to it is code.
 	std::string text;
 	//! 1-based line of the statement's first token within the text it was cut from.
 	int line = 1;
@@ -61,6 +62,9 @@ std::vector<ParenPair> ParenPairs(const std::string &sql);
 //! Splits text into statements on top-level semicolons. Comments stay attached to
 //! the statement that follows them; a trailing comment-only fragment is dropped.
 std::vector<Statement> SplitStatements(const std::string &sql);
+
+//! True if the text ends inside a `-- comment`: anything appended to it on the same line is comment too.
+bool EndsInLineComment(const std::string &sql);
 
 //! True if the statement returns rows and can be wrapped in a view
 //! (SELECT, FROM-first, VALUES, TABLE, PIVOT, UNPIVOT, SUMMARIZE, DESCRIBE, SHOW,

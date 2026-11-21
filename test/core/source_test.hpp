@@ -1,7 +1,17 @@
 // Tests for notebook sources (src/core/source.cpp), included by core_test.cpp, which provides CHECK.
 #include "notebook/source.hpp"
 
+static void TestStoredName() {
+	CHECK(CheckStoredName("revenue").empty());
+	CHECK(CheckStoredName("team report 2024").empty());
+	CHECK(!CheckStoredName("").empty());
+	CHECK(!CheckStoredName("  ").empty());
+	CHECK(CheckStoredName("report@2").find("'@'") != std::string::npos);
+	CHECK(!CheckStoredName("@").empty());
+}
+
 static void TestStoredSource() {
+	TestStoredName();
 	CHECK(IsStoredSource("db:revenue"));
 	CHECK(!IsStoredSource("revenue.sql"));
 	CHECK(!IsStoredSource("DB:revenue"));

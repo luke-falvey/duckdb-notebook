@@ -81,8 +81,12 @@ string ReadStored(DatabaseInstance &db, const string &database, const string &so
 } // namespace
 
 string ReadNotebookText(DatabaseInstance &db, const string &source) {
+	return ReadNotebookText(db, string(), source);
+}
+
+string ReadNotebookText(DatabaseInstance &db, const string &database, const string &source) {
 	if (notebook::IsStoredSource(source)) {
-		return ReadStored(db, string(), source);
+		return ReadStored(db, database, source);
 	}
 	return ReadFile(FileSystem::GetFileSystem(db), source);
 }

@@ -18,6 +18,21 @@ COPY (SELECT '-- %% src' || chr(10) || 'SELECT * FROM read_csv(''{TEST_DIR}/nb_s
 statement ok
 FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')
 
+# Modified times are whole seconds: a file written in the last two seconds could change again without its time
+# changing, so what reads it is not called fresh yet
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src.sql', cache := true)
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src.sql') ORDER BY idx
+----
+src	unverified
+total	unverified
+outside	unverified
+one	fresh
+
+sleep 2100 millisecond
+
 query II
 SELECT name, status FROM notebook_run('{TEST_DIR}/nb_src.sql', cache := true) ORDER BY idx
 ----
@@ -47,6 +62,8 @@ outside	unverified
 one	fresh
 
 # Running again records the new version
+sleep 2100 millisecond
+
 statement ok
 FROM notebook_run('{TEST_DIR}/nb_src.sql', cache := true)
 
@@ -58,6 +75,23 @@ total	fresh
 outside	unverified
 one	fresh
 
+# The versions are taken before the cells run: a file a later cell writes leaves what read it before stale
+statement ok
+COPY (SELECT '-- %% before' || chr(10) || 'SELECT count(*) AS n FROM read_csv(''{TEST_DIR}/nb_src_data.csv'');' || chr(10) || chr(10) || '-- %% rewrite' || chr(10) || 'COPY (SELECT range AS i FROM range(7)) TO ''{TEST_DIR}/nb_src_data.csv'' (HEADER);' || chr(10)) TO '{TEST_DIR}/nb_src_write.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_write.sql', cache := true)
+
+sleep 2100 millisecond
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_write.sql') WHERE cell = 'before'
+----
+before	stale
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_write.sql')
+
 # Clean up: all test files share one database
 query I
 SELECT removed FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')
@@ -66,3 +100,32 @@ SELECT removed FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')
 
 statement ok
 DROP TABLE nb_src_table
+
+# A table function the cache knows nothing of (a table macro here; an extension's reader such as st_read alike)
+# makes what reads it unverified, never fresh
+statement ok
+CREATE TABLE nb_src_macro_rows AS SELECT 1 AS n
+
+statement ok
+CREATE MACRO nb_src_macro() AS TABLE FROM nb_src_macro_rows
+
+statement ok
+COPY (SELECT '-- %% via_macro' || chr(10) || 'SELECT * FROM nb_src_macro();' || chr(10) || chr(10) || '-- %% counted' || chr(10) || 'SELECT * FROM range(3);' || chr(10)) TO '{TEST_DIR}/nb_src_macro.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_macro.sql', cache := true)
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_macro.sql') ORDER BY idx
+----
+via_macro	unverified
+counted	fresh
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_macro.sql')
+
+statement ok
+DROP MACRO TABLE nb_src_macro
+
+statement ok
+DROP TABLE nb_src_macro_rows

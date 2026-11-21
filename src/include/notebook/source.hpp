@@ -25,6 +25,10 @@ bool IsStoredSource(const std::string &source);
 //! number from 1 to 2147483647. Never throws: problems are in `error`. Only for stored sources.
 StoredSource ParseStoredSource(const std::string &source);
 
+//! Why `name` cannot be the name a notebook is stored under; empty when it can. It must not be empty or blank, and
+//! must not hold `@`, which in `db:<name>@<version>` starts the version: `report@2` would be version 2 of `report`.
+std::string CheckStoredName(const std::string &name);
+
 //! Why `version` is not a valid stored version (1 or more); empty when it is.
 std::string CheckStoredVersion(int64_t version);
 

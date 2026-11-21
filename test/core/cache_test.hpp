@@ -260,7 +260,21 @@ static std::string SourcesText(const std::string &sql) {
 	return text + (sources.unchecked ? "unchecked" : "checked");
 }
 
+//! CellSources of a cell whose SQL reads from the given table functions (as AnalyzeNotebook would find them).
+static bool UncheckedWith(const std::vector<std::string> &functions) {
+	auto nb = ParseNotebook("-- %%\nSELECT 1;\n");
+	nb.cells[0].table_functions = functions;
+	return CellSources(nb.cells[0]).unchecked;
+}
+
 static void TestCacheSources() {
+	// Table functions: an allow-list. Readers of files are judged by their paths; the rest cannot be checked.
+	CHECK(!UncheckedWith({}));
+	CHECK(!UncheckedWith({"range", "generate_series", "unnest"}));
+	CHECK(!UncheckedWith({"read_csv"}));
+	CHECK(UncheckedWith({"st_read"}));
+	CHECK(UncheckedWith({"my_table_macro"}));
+	CHECK(UncheckedWith({"duckdb_tables"}));
 	// File readers' literal paths, lists of them and strings after FROM or JOIN, as written.
 	CHECK(SourcesText("SELECT * FROM read_csv('Data/A.csv', header = true)") == "Data/A.csv|checked");
 	CHECK(SourcesText("SELECT * FROM READ_PARQUET(['a.parquet', 'b/*.parquet'])") == "a.parquet|b/*.parquet|checked");
@@ -339,6 +353,21 @@ static void TestCacheSources() {
 	CHECK(status(changed) == "ssfuufuf");
 	// Without versions, a cell that names a file is never fresh.
 	CHECK(status({}) == "ssfuufus");
+
+	// Only files on this machine are looked at.
+	CHECK(IsLocalPath("data/x.csv"));
+	CHECK(IsLocalPath("/abs/x.csv"));
+	CHECK(IsLocalPath("C:\\data\\x.csv"));
+	CHECK(IsLocalPath("FILE:///tmp/x.csv"));
+	CHECK(!IsLocalPath("https://example.com/x.csv"));
+	CHECK(!IsLocalPath("s3://bucket/*.parquet"));
+	CHECK(!IsLocalPath("hf://datasets/x"));
+	CHECK(!IsLocalPath(""));
+	// A file modified within the last two seconds may still change without its modified time changing.
+	CHECK(ModifiedTooRecently(10000000, 10500000));
+	CHECK(ModifiedTooRecently(10000000, 11999999));
+	CHECK(!ModifiedTooRecently(10000000, 12000000));
+	CHECK(ModifiedTooRecently(13000000, 12000000)); // modified "in the future": a clock behind the file system's
 }
 
 static void TestCache() {

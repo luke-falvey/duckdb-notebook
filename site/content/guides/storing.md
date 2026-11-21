@@ -51,7 +51,11 @@ pass `force := true` to overwrite anyway. Without `file :=` it only returns the 
 ## Another attached database
 
 Both functions use the current database, the one `USE` chose, and take `database :=` to use the
-`_sketchbook` schema of another attached database:
+`_sketchbook` schema of another attached database. So does the editor: `notebook_start('db:revenue')`
+after `USE reports` opens, saves and caches `revenue` in `reports`.
+
+A stored name holds no `@`, which starts a version in `db:<name>@<version>`: save `report@2.sql` with
+`name := 'report-2'`.
 
 ```sql
 ATTACH 'reports.duckdb' AS reports;

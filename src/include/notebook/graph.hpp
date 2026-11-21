@@ -18,6 +18,8 @@ namespace notebook {
 struct References {
 	std::vector<std::string> defines;
 	std::vector<std::string> reads;
+	//! Table functions the SQL reads from (`FROM range(3)`, `FROM st_read('x.shp')`), lower case, without schema.
+	std::vector<std::string> table_functions;
 	//! Set if the SQL could not be analysed (a syntax error, typically).
 	std::string error;
 };

@@ -42,6 +42,9 @@ struct SessionState {
 	bool store_failed = false;
 	//! Temp tables with a copy in the store, restored into every new connection.
 	std::set<string> tables;
+	//! For each of `tables`: the statement that created it as DuckDB writes it (duckdb_tables().sql), and the
+	//! columns that hold data (not generated), quoted: restored as the same table, constraints and defaults too.
+	std::map<string, std::pair<string, string>> table_ddl;
 	//! Per cell index: the materialize=table cell's table in the store.
 	std::map<int, string> stored;
 };
@@ -151,7 +154,8 @@ private:
 	string Store();
 	//! After a cell that may change tables: copies the temp tables it made or names into the store,
 	//! and forgets those that are gone.
-	void KeepTempTables(const notebook::Cell &cell);
+	//! False if a table could not be copied: the cell's CREATE TEMP TABLE is then replayed instead.
+	bool KeepTempTables(const notebook::Cell &cell);
 	//! Describes (and, unless `row_count` is known, counts) the relation a cell's charts read.
 	bool ChartSource(const notebook::Cell &cell, int64_t row_count, ChartInput &input);
 	notebook::Json Chart(const notebook::Notebook &notebook, const notebook::Cell &cell, const string &spec,
@@ -165,6 +169,18 @@ private:
 
 //! Detaches `names` (Runner::Attached) from a connection of its own; best effort.
 void DetachDatabases(DatabaseInstance &db, const vector<string> &names);
+
+//! Detaches what a one-off run (notebook_run, an export) attached, once its runner, whose connection may have USEd
+//! one of them, is gone: declare it before the Runner. Never throws.
+struct DetachOnExit {
+	DatabaseInstance &db;
+	vector<string> names;
+	~DetachOnExit();
+};
+
+//! Runner::Prepare for a one-off run: what it attaches is left to `detach`, even when it throws.
+void PrepareOnce(Runner &runner, DetachOnExit &detach, const notebook::Notebook &notebook, const string &source,
+                 const std::map<string, Value> &params);
 
 struct ExportOptions {
 	//! html, html-wasm, md, sql, data or pdf.

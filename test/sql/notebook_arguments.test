@@ -63,3 +63,33 @@ statement error
 FROM notebook_checkout('')
 ----
 notebook_checkout: the notebook name is empty
+
+# A stored name holds no '@': db:<name>@<version> could not tell it from a version
+statement error
+FROM notebook_save('test/notebooks/basic.sql', name := 'report@2')
+----
+notebook_save: the name "report@2" holds '@'
+
+statement ok
+COPY (SELECT '-- %%' || chr(10) || 'SELECT 1 AS one;' || chr(10)) TO '__TEST_DIR__/report@2.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement error
+FROM notebook_save('__TEST_DIR__/report@2.sql')
+----
+notebook_save: the name "report@2" holds '@'
+
+statement error
+FROM notebook_save('test/notebooks/basic.sql', name := '  ')
+----
+notebook_save: a notebook needs a name to be stored under
+
+# notebook_start checks its path as every other function does, before a server starts
+statement error
+FROM notebook_start('', open := false)
+----
+notebook_start: the notebook path is empty
+
+statement error
+FROM notebook_start('db:x@0', open := false)
+----
+notebook_start: "db:x@0" has version "0"

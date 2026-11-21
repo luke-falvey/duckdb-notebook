@@ -3,6 +3,7 @@
 #include "notebook/format.hpp"
 #include "notebook/json.hpp"
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -54,10 +55,21 @@ struct CacheSources {
 	std::vector<std::string> files;
 	//! The cell reads through something whose input the cache cannot check: a file reader given
 	//! anything but literal paths (`read_csv($path)`), or another scan of external data (`delta_scan`,
-	//! `postgres_query`, `query(...)`, any other `read_*`, `*_scan` or `*_query` function).
+	//! `postgres_query`, `query(...)`, any other `read_*`, `*_scan` or `*_query` function), or any table function
+	//! (Cell::table_functions) but a file reader and the few whose rows follow from their arguments (`range`,
+	//! `generate_series`, `unnest`, `json_each`, `json_tree`, `repeat_row`).
 	bool unchecked = false;
 };
 CacheSources CellSources(const Cell &cell);
+
+//! True for a path on this machine's own file system: no `scheme://` other than `file://`. The cache looks only at
+//! these; a remote file's version would cost a request on every open and run, so its cells are `unverified`.
+bool IsLocalPath(const std::string &path);
+
+//! True if a file modified at `modified` (microseconds since the epoch) may still change without its modified time
+//! changing, as seen at `now`: file systems that keep whole seconds report the same time for a same-size rewrite later
+//! in that second (git's "racily clean" files). Such a file has no known version yet.
+bool ModifiedTooRecently(int64_t modified, int64_t now);
 
 //! The files of every cell's CacheSources, once each: what CacheKeys needs versions of.
 std::vector<std::string> CacheSourceFiles(const Notebook &notebook);

@@ -8,6 +8,17 @@ bool IsStoredSource(const std::string &source) {
 	return source.compare(0, 3, "db:") == 0;
 }
 
+std::string CheckStoredName(const std::string &name) {
+	if (name.find_first_not_of(" \t\r\n") == std::string::npos) {
+		return "a notebook needs a name to be stored under: pass name := '...'";
+	}
+	if (name.find('@') != std::string::npos) {
+		return "the name \"" + name +
+		       "\" holds '@', which starts a version in db:<name>@<version>: pass name := '...' " + "without one";
+	}
+	return std::string();
+}
+
 std::string CheckStoredVersion(int64_t version) {
 	if (version < 1 || version > std::numeric_limits<int32_t>::max()) {
 		return "version " + std::to_string(version) + " is not valid: versions start at 1";

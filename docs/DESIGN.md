@@ -680,10 +680,13 @@ table there and a temp view of it under its own name, and its replay is only tha
 again only when the cell is run again. After a cell that may change tables (anything but queries,
 `SET`, `USE` and `SET VARIABLE`, `notebook::MayWrite`), the temp tables it names or newly made are
 copied into the store with their rows, and every new connection copies them back
-(`Runner::KeepTempTables`, `Runner::Restore`); `CREATE TEMP TABLE` is then left out of the replay. The
-remaining cost: those copies are made on every request, so a large *temp table* (not a
-`materialize=table` cell) is still copied per request, and the copy keeps columns and rows but not
-constraints or defaults. The store is detached when the last copy of the session's state goes (the
+(`Runner::KeepTempTables`, `Runner::Restore`); `CREATE TEMP TABLE` is then left out of the replay, unless
+the copy failed. A table comes back as it was created: the statement DuckDB records for it
+(`duckdb_tables().sql`, with its keys, defaults and generated columns), then its rows; only if that
+statement cannot run there (a default that uses a temp sequence, which is replayed later) is it rows
+only. `ALTER TABLE` counts as a read of its table, so the store copies it again. The remaining cost:
+those copies are made on every request, so a large *temp table* (not a `materialize=table` cell) is
+still copied per request. The store is detached when the last copy of the session's state goes (the
 server stops, or `notebook_stop`), and simply disappears with the database when it closes. If it
 cannot be attached, the session falls back to replaying the SQL. `notebook_run` and the exports run in
 one connection and need no store.

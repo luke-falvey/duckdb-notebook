@@ -69,4 +69,9 @@ std::string QuoteString(const std::string &text);
 //! extension: this is the `sql` export described in docs/FORMAT.md section 7.
 std::string ExpandNotebook(const Notebook &notebook, const std::string &source_name);
 
+//! The values a slider or number input from `lo` to `hi` in steps of `step` can take, for a precomputed export: at
+//! most `limit` of them, all different. Empty when there would be more, or none, or they cannot be told apart (a
+//! step too small to change a large value), or an argument is not a finite number.
+std::vector<double> InputSteps(double lo, double hi, double step, size_t limit);
+
 } // namespace notebook

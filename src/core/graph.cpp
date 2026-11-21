@@ -84,6 +84,9 @@ std::set<std::string> CollectReferences(Cell &cell, const ReferenceExtractor &ex
 		for (auto &name : refs.reads) {
 			AddUnique(cell.reads, name);
 		}
+		for (auto &name : refs.table_functions) {
+			AddUnique(cell.table_functions, name);
+		}
 	};
 	switch (cell.kind) {
 	case CellKind::NOTEBOOK:

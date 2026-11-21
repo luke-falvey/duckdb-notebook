@@ -1,6 +1,8 @@
 #include "notebook/functions.hpp"
 
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/thread.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
@@ -74,10 +76,11 @@ private:
 
 //! True for the errors a concurrent writer causes (a conflict on the same key or catalog entry, or a version
 //! number another save took first), after which the whole transaction can be tried again.
+//! Decided by the error's type, not by words in its message: a notebook named "conflict" is no conflict.
 bool IsConflict(const ErrorData &error) {
-	auto message = StringUtil::Lower(error.RawMessage());
-	return error.Type() == ExceptionType::TRANSACTION || StringUtil::Contains(message, "conflict") ||
-	       (error.Type() == ExceptionType::CONSTRAINT && StringUtil::Contains(message, "duplicate key"));
+	return error.Type() == ExceptionType::TRANSACTION ||
+	       (error.Type() == ExceptionType::CONSTRAINT &&
+	        StringUtil::Contains(StringUtil::Lower(error.RawMessage()), "duplicate key"));
 }
 
 //! How many times a save is tried when concurrent saves keep conflicting with it.
@@ -131,6 +134,10 @@ unique_ptr<FunctionData> SaveBind(ClientContext &context, TableFunctionBindInput
 	if (result->name.empty()) {
 		result->name = notebook::IsStoredSource(result->path) ? notebook::ParseStoredSource(result->path).name
 		                                                      : FileStem(result->path);
+	}
+	auto bad_name = notebook::CheckStoredName(result->name);
+	if (!bad_name.empty()) {
+		throw InvalidInputException("notebook_save: %s", bad_name);
 	}
 	result->message = NamedString(input, "message");
 	result->database = NamedString(input, "database");
@@ -272,6 +279,10 @@ int32_t SaveOnce(Connection &connection, const string &database, const string &n
 			}
 		}
 	}
+	if (current == NumericLimits<int32_t>::Maximum()) {
+		throw InvalidInputException("notebook_save: '%s' already has version %d, the last a version number can be",
+		                            name, current);
+	}
 	Execute(connection, "INSERT INTO " + prefix + "_sketchbook.notebooks (name) VALUES (?) ON CONFLICT DO NOTHING",
 	        name);
 	Execute(connection,
@@ -297,6 +308,8 @@ int32_t SaveNotebookVersion(Connection &connection, const string &database, cons
 			if (attempt >= SAVE_ATTEMPTS || !connection.IsAutoCommit() || !IsConflict(error)) {
 				throw;
 			}
+			// A short, growing, jittered pause, so that writers that keep meeting do not retry in step.
+			ThreadUtil::SleepMicroSeconds(NumericCast<idx_t>(attempt) * 200 + UUID::GenerateRandomUUID().lower % 1000);
 		}
 	}
 }

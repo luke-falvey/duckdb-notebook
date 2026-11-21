@@ -192,6 +192,14 @@ size_t SqlScanner::Advance() {
 	return pos - start;
 }
 
+bool EndsInLineComment(const std::string &sql) {
+	SqlScanner scan(sql);
+	while (!scan.Done()) {
+		scan.Advance();
+	}
+	return scan.CurrentState() == SqlScanner::State::LINE_COMMENT;
+}
+
 std::vector<Statement> SplitStatements(const std::string &sql) {
 	std::vector<Statement> result;
 	SqlScanner scan(sql);
@@ -200,7 +208,13 @@ std::vector<Statement> SplitStatements(const std::string &sql) {
 	int first_code_line = 1;
 	auto flush = [&](size_t end) {
 		if (has_code) {
-			result.push_back({Trim(sql.substr(start, end - start)), first_code_line});
+			auto text = Trim(sql.substr(start, end - start));
+			// A statement that ends in a `-- comment` ends its line too, so that SQL put after it (a `;`, a `)`,
+			// LIMIT) is not part of the comment.
+			if (EndsInLineComment(text)) {
+				text += "\n";
+			}
+			result.push_back({std::move(text), first_code_line});
 		}
 		has_code = false;
 	};
