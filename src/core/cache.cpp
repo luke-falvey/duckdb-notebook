@@ -608,93 +608,32 @@ bool IsSeparator(char c) {
 	return c == '/' || c == '\\';
 }
 
-//! Whether a glob segment (`*`, `?`, `[...]`, compared without case) matches `name`.
-bool GlobMatches(const std::string &pattern, size_t p, const std::string &name, size_t n) {
-	while (p < pattern.size()) {
-		char c = pattern[p];
-		if (c == '*') {
-			for (size_t k = n; k <= name.size(); k++) {
-				if (GlobMatches(pattern, p + 1, name, k)) {
-					return true;
-				}
-			}
-			return false;
-		}
-		if (n >= name.size()) {
-			return false;
-		}
-		if (c == '[') {
-			size_t q = p + 1;
-			bool negate = q < pattern.size() && (pattern[q] == '!' || pattern[q] == '^');
-			if (negate) {
-				q++;
-			}
-			bool found = false;
-			size_t close = q;
-			for (; close < pattern.size() && (close == q || pattern[close] != ']'); close++) {
-				if (close + 2 < pattern.size() && pattern[close + 1] == '-' && pattern[close + 2] != ']') {
-					found = found || (name[n] >= pattern[close] && name[n] <= pattern[close + 2]);
-					close += 2;
-				} else {
-					found = found || name[n] == pattern[close];
-				}
-			}
-			if (close >= pattern.size()) {
-				// No closing bracket: a literal `[`.
-				if (name[n] != '[') {
-					return false;
-				}
-				p++;
-				n++;
-				continue;
-			}
-			if (found == negate) {
-				return false;
-			}
-			p = close + 1;
-			n++;
-			continue;
-		}
-		if (c != '?' && c != name[n]) {
-			return false;
-		}
-		p++;
-		n++;
-	}
-	return n == name.size();
-}
-
-//! An absolute path's first segment, after `.` and `..`, must not be a pattern that a glob would expand into the
-//! automounter's `/net` or `/Network` (`/n?t/host`, `/*/host`, `/[Nn]etwork`), nor `**` (a walk of the whole file
-//! system, `/net` included). Further down, a pattern only lists local directories.
-bool RootSegmentIsLocal(const std::string &path) {
-	if (path.empty() || !IsSeparator(path[0])) {
+//! Whether a glob stays off the automounter's `/net` and `/Network`. Listing `/` is harmless; going into what a
+//! pattern matched there (`/n?t/host`, `/*/host`, `/**`) contacts a host. A glob is refused when its first segment is
+//! a pattern with more path after it, since a relative path may start at `/` (the working directory), and when it has
+//! a `..` segment, which can climb to `/` from anywhere. Nothing is matched here, so no reading of DuckDB's glob
+//! syntax (case, ranges, negation) can be got wrong; a refused glob is only unverified.
+bool GlobStaysLocal(const std::string &raw) {
+	// `\\?\C:\` is an extended-length prefix, not a pattern.
+	auto path = raw.compare(0, 4, "\\\\?\\") == 0 ? raw.substr(4) : raw;
+	if (path.find_first_of("*?[") == std::string::npos) {
 		return true;
 	}
 	std::vector<std::string> segments;
 	size_t begin = 0;
 	for (size_t i = 0; i <= path.size(); i++) {
 		if (i == path.size() || IsSeparator(path[i])) {
-			auto segment = Lower(path.substr(begin, i - begin));
+			auto segment = path.substr(begin, i - begin);
 			if (segment == "..") {
-				if (!segments.empty()) {
-					segments.pop_back();
-				}
-			} else if (!segment.empty() && segment != ".") {
+				return false;
+			}
+			if (!segment.empty() && segment != ".") {
 				segments.push_back(segment);
 			}
 			begin = i + 1;
 		}
 	}
-	if (segments.empty()) {
-		return true;
-	}
-	auto &first = segments[0];
-	if (first.find_first_of("*?[") == std::string::npos) {
-		return true;
-	}
-	return first.find("**") == std::string::npos && !GlobMatches(first, 0, "net", 0) &&
-	       !GlobMatches(first, 0, "network", 0);
+	return segments.size() < 2 || segments[0].find_first_of("*?[") == std::string::npos;
 }
 
 //! A path as the file system opens it (after a `file:` prefix is stripped) that names no other machine. Two separators
@@ -719,7 +658,7 @@ bool NamesThisMachine(const std::string &path) {
 			begin = i + 1;
 		}
 	}
-	if (!RootSegmentIsLocal(path)) {
+	if (!GlobStaysLocal(path)) {
 		return false;
 	}
 	if (path.compare(0, 4, "\\??\\") == 0) {

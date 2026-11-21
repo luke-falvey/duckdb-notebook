@@ -520,6 +520,14 @@ static void TestCacheSources() {
 	CHECK(!later.HasErrors() && !IsLazyView(later.cells[0]) && DefinesLazily(later.cells[0]));
 	auto later_keys = CacheKeys(later, {}, old_x);
 	CHECK(later_keys[0].verified && !later_keys[1].verified && !later_keys[2].verified);
+	// Through a view cell, and into a table made from it.
+	auto later_chain = Analyzed("-- %% mk\nSET VARIABLE k = 1;\nSELECT * FROM 'x.csv';\n"
+	                            "-- %% v\nCREATE TEMP VIEW vv AS SELECT * FROM mk;\n"
+	                            "-- %% t materialize=table\nSELECT count(*) AS n FROM vv;\n"
+	                            "-- %% s\nSELECT n FROM t;\n");
+	CHECK(!later_chain.HasErrors() && IsLazyView(later_chain.cells[1]));
+	auto chain_later = CacheKeys(later_chain, {}, old_x);
+	CHECK(chain_later[0].verified && !chain_later[2].verified && !chain_later[3].verified);
 	// A table cell defines nothing read later: its readers stay verified.
 	auto kept_table = Analyzed("-- %% mk materialize=table\nSELECT * FROM 'x.csv';\n-- %% r\nSELECT * FROM mk;\n");
 	CHECK(!DefinesLazily(kept_table.cells[0]) && CacheKeys(kept_table, {}, old_x)[1].verified);
@@ -559,12 +567,16 @@ static void TestCacheSources() {
 	CHECK(!IsLocalPath("/network/x.csv") && !IsLocalPath("/./net/h/x") && !IsLocalPath("/tmp/../NET/h/x"));
 	CHECK(!IsLocalPath("file:///net/h/x") && !IsLocalPath("file:/net/h/x") && !IsLocalPath("C:\\net\\x"));
 	CHECK(IsLocalPath("/data/netflix/x.csv") && IsLocalPath("/data/networks.csv"));
-	// A glob at the root could expand into /net or /Network.
+	// A glob that may go into what it matched at / (/net, /Network): a pattern as the first segment with more after it,
+	// absolute or relative (the working directory may be /), or any `..`. Case, ranges and negation do not matter.
 	for (auto &root : {"/n?t/host/x/*.csv", "/[n]et/host/*.csv", "/*/host/share/*.csv", "/[Nn]etwork/Servers/h/*.csv",
-	                   "/**/x.csv", "/data/../n?t/h/x", "file:///n*/h/x", "/[!x]et/h/x", "/ne[a-z]/h"}) {
+	                   "/**/x.csv", "/data/../n?t/h/x", "file:///n*/h/x", "/[!x]et/h/x", "/ne[a-z]/h", "/[Z-n]et/h/x",
+	                   "/[^n]et/h/x", "/[!N]et/h/x", "n?t/host/x.csv", "*/host/x.csv", "../../../../n?t/h/*.csv",
+	                   "~/../../n?t/h/*.csv", "data/../*/h/x.csv", "./*/h/x.csv", "/d?ta/x.csv"}) {
 		CHECK(!IsLocalPath(root));
 	}
-	for (auto &root : {"/data/*.csv", "/d?ta/*/x.csv", "/[ab]*/x", "/data/**/x.parquet", "data/*/x.csv", "/n[!e]t/x"}) {
+	for (auto &root : {"/data/*.csv", "/d?ta.csv", "/data/**/x.parquet", "data/*/x.csv", "*.csv", "data_*.parquet",
+	                   "~/data/*/x.csv", "\\\\?\\C:\\data\\x.csv", "C:\\data\\*\\x.csv", "/data/[ab]*/x"}) {
 		CHECK(IsLocalPath(root));
 	}
 	CHECK(!IsLocalPath("s3://bucket/*.parquet"));
