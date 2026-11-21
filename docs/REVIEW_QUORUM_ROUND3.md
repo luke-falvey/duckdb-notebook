@@ -410,6 +410,25 @@ Declined or left open:
   directory under `/net` (hawkfish, tishj): older than this PR, or not a new contact.
 - More SQL tests for each shape and a sleep shared between cases (carlopi, mytherin): the core tests cover the shapes.
 
+### Iteration 7 (0a8239d)
+
+**Verdicts: 14 request changes, 1 approve with nits (pdet).** All fourteen blocking findings are one: the iteration-6
+root-glob guard could be got past, the second return of that finding. Its matcher lower-cased the pattern, which DuckDB's
+case-sensitive `Glob` (`like.cpp`) does not, so a range or a negated set across the cases (`/[Z-n]et/…`, `/[!N]et/…`)
+matched `net` in DuckDB but not here; it took `^` as negation where DuckDB takes only `!`; and it looked only at
+absolute paths, so `n?t/host/…` read with the working directory at `/`, or `../../../n?t/…` and `~/../../n?t/…`,
+climbed to `/` unchecked (mytherin, lnkuiper). `DefinesLazily`, `ReadLater` (unverified propagates through readers, view
+cells and tables; a key that differs still makes a cell stale) and `ChangesData` were confirmed by every lens.
+
+Fix: the matcher is gone, so nothing depends on reading DuckDB's glob syntax right. A glob is refused (unverified) when
+its first segment is a pattern with more path after it, absolute or relative, or when it has a `..` segment; a `\\?\`
+prefix is not a pattern. `data/*.csv`, `*.csv`, `/data/**/x.parquet` and `~/data/*/x.csv` stay local; `/d?ta/x.csv` and
+`*/x.csv` become unverified. Core tests for every spelling the lenses used.
+
+Nits fixed: tests that unverified carries through a view cell and into a `materialize=table` reader (pdet); FORMAT §8
+says `DefinesLazily` is per cell, so a reader of a table such a cell makes is unverified too (mytherin, hannes, pdet).
+Declined: a comment pointing at `like.cpp` (mytherin): there is no copy of it any more.
+
 ## Testing
 
 Local, against the release build:
