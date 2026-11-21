@@ -624,10 +624,13 @@ edited. This is why naming cells you care about matters (§2).
   just before each cell runs: a cell is keyed with the files as it read them, so a file that changes
   after a cell read it (a later cell writes it, or anything else does) leaves that cell stale, and a
   file an earlier cell of the same run wrote does not. A view (a named query that is not
-  `materialize=table`) is read when a cell selects from it, so that cell is keyed with the files of the
-  views it reads as they were when it ran. Looking at a file opens it and reads none of it.
-  Only files on this machine are looked at: a remote one (any `scheme://` path but `file://`) and a
-  UNC path (`\\host\share\x.csv`, `//host/share/x.csv`) have no known version, and cost no request.
+  `materialize=table`, or a `CREATE VIEW` statement) is read when a cell selects from it, so that cell
+  is keyed with the files the views it reads select from as they were when it ran; files a view cell's
+  other statements read keep the versions of when that cell ran. Looking at a file opens it and reads
+  none of it. Only files on this machine are looked at: a remote one (any `scheme://` path but
+  `file://`), a UNC path (`\\host\share\x.csv`, `//host/share/x.csv`), a device path other than
+  `\\?\` and a drive (`\\.\…`, `\\?\UNC\…`, or `\\?\C:\..\…`, which can climb off the drive), and a
+  `file:` URL whose path is one of those or names a host have no known version, and cost no request.
   Nor has a relative path while `file_search_path` is set, for the database or by a cell of the notebook
   (`SET`, `RESET`), since DuckDB may read it from another directory.
 

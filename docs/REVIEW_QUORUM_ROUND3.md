@@ -208,13 +208,42 @@ this state by cell id. `notebook_export(file := NULL)` writing beside the notebo
 "Left open". The PDF error's raw wait status (szarnyasg): older than this PR. `FileSystem::IsRemoteFile` is
 case-sensitive (dentiny): DuckDB's own rule.
 
-### Why the loop stopped
+### After iteration 2
 
-The safeguard says to stop when a finding comes back after it was fixed. kryonix's view finding did (iteration 1 fixed
-the reading cell, iteration 2 found the cells below it), so the loop ends after iteration 2 rather than running a third.
-Its second fix (`ViewKey`) and the device-path fix have not been reviewed by the quorum; both have tests, and the PR
-passes them. Nothing is in dispute between lenses: no two asked for opposite things. **For the user to decide:** whether
-to run one more iteration over these two fixes before merging.
+The loop first stopped here, under the safeguard "stop when a finding comes back after it was fixed": kryonix's view
+finding had. The user then narrowed the safeguard: a follow-up fix one step further on is progress, so the loop goes on
+to the cap of five iterations, and stops early only if the view or the device-path finding comes back a third time, or
+two lenses want opposite things.
+
+### Iteration 3 (191719c)
+
+**Verdicts: 15 request changes.** Every lens confirmed `KeyBuilder::ViewKey` correct (views of views, tables between
+views, diamonds, cycles, charts, inputs and `{{ }}` reading views, cells that did not run), and the rest of iteration 2.
+All fifteen found the same blocking hole, in the device-path rule: the second return of the R5 path finding.
+
+| Finding | Lenses | Fix |
+|---|---|---|
+| R5 still open by two spellings. A `file:` URL passed whatever followed the scheme, but DuckDB strips `file:/`, `file:///` and `file://localhost/` before opening, leaving `\\host\share\x` or `//host/share/x` (`file:////host/…`, `file:/\\host\…`). And `\\.\C:\..\UNC\host\…` passed the drive rule, though Windows normalises `\\.\` paths (and DuckDB passes every path through `GetFullPathNameW`, carlopi), so `..` climbs off the drive onto a share | 15 (`file:`: hannes, samansmink, pdet, taniabogatsch, lnkuiper, hawkfish, tishj, dtenwolde, dentiny; `..`: szarnyasg, mytherin, carlopi, tmonster, maxxen, kryonix, dentiny) | `IsLocalPath` rewritten to fail safe: a `file:` URL is judged by what DuckDB opens, with both platforms' offsets, and a host other than `localhost` is refused; after two separators only `\\?\` + drive + separator is local, with no `.` or `..` segment; `\\.\…` is refused. Core tests for every spelling the lenses tried |
+| A view a cell `CREATE`s was not a view: its readers stayed stale forever, as named queries did before iteration 1 | 1 blocking (samansmink), 6 as a nit | `IsLazyView`, one predicate for the key builder and the closure (mytherin, maxxen, taniabogatsch, hawkfish, dtenwolde): a named query, or a cell with a `CREATE VIEW` statement. Core and SQL tests |
+
+Nits fixed:
+
+- A named query whose earlier statement reads a file (`CREATE TEMP TABLE e AS FROM 'e.csv'; SELECT * FROM e`) had that
+  file keyed with the reader's versions, though it was read when the view's cell ran: a reader could be fresh over old
+  rows (hawkfish; the unsafe direction). Only the files of a view's final query and its `CREATE VIEW` statements take the
+  reader's versions (`LazyFiles`); the others keep the view's own. Core test.
+- `ViewKey`'s memo was keyed by the address of a version map, and every cell of a run has its own, so a chain of views
+  was quadratic (kryonix measured 6.7 s for 2000 views; iteration 2's "removes the quadratic rebuild" was wrong). It is
+  keyed by the versions of the files that matter now (`ViewSignature`), and the files of a view are built from those of
+  the views it reads: 6 ms for 2000 views.
+- `SetsSetting` skips comments between words (`SET /* x */ file_search_path`; tishj).
+- The PDF's temporary files are beside the file a link points to, so the final move never crosses file systems (pdet,
+  dentiny; pdet reproduced the cross-device failure). The core test covers a view of a view, a diamond and a cycle
+  (taniabogatsch).
+
+Nits declined: a test of a data export whose deadline passes while its files are written (pdet): it cannot be timed
+reliably. A mapped network drive (`Z:\x`) counts as local (dentiny): it cannot be told from a local drive; commented.
+More test-suite sleeps (samansmink): with the injectable clock item, left open.
 
 ## Testing
 

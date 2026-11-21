@@ -939,7 +939,9 @@ tested) and `src/functions/result_cache.cpp` (where entries live, and the sessio
   than becoming `stale` once the file is older. Versions are taken just before each cell runs, not once
   per run: versions from before the run made a cell that reads what an earlier cell wrote stale forever,
   and versions after the run would call a file changed under a cell fresh. A view is lazy, so the files
-  of the views a cell reads count as that cell's own, taken when it runs. Table functions are on an
+  the views a cell reads select from count as that cell's own, taken when it runs (`KeyBuilder::ViewKey`,
+  memoized by those versions, so a chain of views costs its length); files a view cell's other statements
+  read keep the versions of when it ran. Table functions are on an
   allow-list (`range` and the like are pure; anything else, an extension's reader or a table macro, is
   `unverified`).
 - **Unnamed cells hash their text.** A position would hand a moved cell another cell's result. A hash of
