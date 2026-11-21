@@ -444,6 +444,40 @@ static void TestCacheSources() {
 	CHECK(CacheKeys(eager, {}, e_old, eager_run)[2].result != CacheKeys(eager, {}, e_new)[2].result);
 	CHECK(CacheKeys(eager, {}, e_old, eager_run)[2].result == CacheKeys(eager, {}, e_old)[2].result);
 
+	// The same file read both ways in one view cell: the reader is stale when either version changed.
+	auto both = Analyzed("-- %% v\nCREATE TEMP TABLE e AS FROM 'e.csv';\nSELECT * FROM e UNION ALL FROM 'e.csv';\n"
+	                     "-- %% w\nCOPY (SELECT 1) TO 'e.csv';\n"
+	                     "-- %% r\nSELECT count(*) AS n FROM v;\n");
+	CHECK(!both.HasErrors());
+	CHECK(CacheKeys(both, {}, e_old, eager_run)[2].result != CacheKeys(both, {}, e_new)[2].result);
+	std::map<size_t, std::map<std::string, std::string>> unchanged_run {{0, e_old}, {2, e_old}};
+	CHECK(CacheKeys(both, {}, e_old, unchanged_run)[2].result == CacheKeys(both, {}, e_old)[2].result);
+
+	// A view that a later statement of its cell reads at once: the table it fills holds the file as it was then.
+	auto filled = Analyzed("-- %% mk\nCREATE TEMP VIEW cv AS SELECT * FROM 'x.csv';\n"
+	                       "CREATE TEMP TABLE ct AS SELECT count(*) AS n FROM cv;\n"
+	                       "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+	                       "-- %% r\nSELECT n FROM ct;\n");
+	CHECK(!filled.HasErrors() && IsLazyView(filled.cells[0]));
+	CHECK(CacheKeys(filled, {}, old_x, created_run)[2].result != CacheKeys(filled, {}, new_x)[2].result);
+	std::map<size_t, std::map<std::string, std::string>> filled_same {{0, old_x}, {2, old_x}};
+	CHECK(CacheKeys(filled, {}, old_x, filled_same)[2].result == CacheKeys(filled, {}, old_x)[2].result);
+	// A plain query after the view keeps nothing: the reader is still keyed as it reads.
+	auto shown = Analyzed("-- %% mk\nCREATE TEMP VIEW cv AS SELECT * FROM 'x.csv';\nSELECT * FROM cv;\n"
+	                      "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+	                      "-- %% r\nSELECT count(*) AS n FROM cv;\n");
+	CHECK(CacheKeys(shown, {}, old_x, created_run)[2].result == CacheKeys(shown, {}, new_x)[2].result);
+	// materialize=table makes the final query a table, not the CREATE VIEW before it; the table is made after the
+	// view, and might read it, so the view's file is keyed both ways (stale here, never wrongly fresh).
+	auto table_cell =
+	    Analyzed("-- %% t materialize=table\nCREATE TEMP VIEW cv AS SELECT * FROM 'x.csv';\nSELECT 1 AS one;\n"
+	             "-- %% w\nCOPY (SELECT 1) TO 'x.csv';\n"
+	             "-- %% r\nSELECT count(*) AS n FROM cv;\n");
+	CHECK(!table_cell.HasErrors() && IsLazyView(table_cell.cells[0]));
+	CHECK(CacheKeys(table_cell, {}, old_x, created_run)[2].result != CacheKeys(table_cell, {}, new_x)[2].result);
+	std::map<size_t, std::map<std::string, std::string>> table_same {{0, new_x}, {2, new_x}};
+	CHECK(CacheKeys(table_cell, {}, new_x, table_same)[2].result == CacheKeys(table_cell, {}, new_x)[2].result);
+
 	// A view of a view, a diamond (s reads the table t and the view b, t reads b) and a cycle among views.
 	auto deep = Analyzed("-- %% a\nSELECT * FROM 'x.csv';\n"
 	                     "-- %% b\nSELECT * FROM a;\n"
@@ -473,6 +507,10 @@ static void TestCacheSources() {
 	CHECK(IsLocalPath("C:\\data\\x.csv"));
 	CHECK(IsLocalPath("FILE:///tmp/x.csv"));
 	CHECK(!IsLocalPath("https://example.com/x.csv"));
+	CHECK(!IsLocalPath("\\\\?\\C:\\a\\.. \\x") && !IsLocalPath("\\\\?\\C:\\a\\...\\x"));
+	CHECK(IsLocalPath("\\\\?\\C:\\a.b\\x"));
+	CHECK(!IsLocalPath("/net/host/export/x.csv") && !IsLocalPath("/Network/Servers/host/x.csv"));
+	CHECK(IsLocalPath("/network/x.csv"));
 	CHECK(!IsLocalPath("s3://bucket/*.parquet"));
 	CHECK(!IsLocalPath("hf://datasets/x"));
 	CHECK(!IsLocalPath(""));

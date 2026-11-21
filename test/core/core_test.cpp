@@ -217,6 +217,11 @@ static void TestSessionStore() {
 	CHECK(SetsSetting(ParseNotebook("-- %%\nSET -- x\n  GLOBAL file_search_path = 'd';\n"), "file_search_path"));
 	CHECK(IsCreateView("create or replace temporary view v as select 1"));
 	CHECK(!IsCreateView("CREATE TEMP TABLE v AS SELECT 1") && !IsCreateView("CREATE MACRO view_of(x) AS x"));
+	CHECK(IsCreateView("CREATE /* x */ TEMP VIEW v AS SELECT 1") &&
+	      IsCreateView("CREATE OR REPLACE -- x\nVIEW v AS 1"));
+	CHECK(IsCreateView("CREATE OR REPLACE TEMP RECURSIVE VIEW v(n) AS SELECT 1") &&
+	      IsCreateView("CREATE SECURE VIEW v AS SELECT 1"));
+	CHECK(IsCreateTempTable("CREATE /* x */ TEMP TABLE t AS SELECT 1"));
 	CHECK(!MayWrite(nb.cells[0]));
 }
 

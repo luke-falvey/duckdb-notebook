@@ -244,6 +244,65 @@ r	unverified
 statement ok
 FROM notebook_cache_clear('{TEST_DIR}/nb_src_cv.sql')
 
+# A cell that makes a table from the view it creates fills it when it runs: a reader of the table, run after the file
+# changed, is stale, not taken for what the file now holds
+statement ok
+COPY (SELECT '-- %% mk' || chr(10) || 'CREATE OR REPLACE TEMP VIEW cv AS SELECT * FROM read_csv(''{TEST_DIR}/nb_src_cvt.csv'');' || chr(10) || 'CREATE OR REPLACE TEMP TABLE ct AS SELECT count(*) AS n FROM cv;' || chr(10) || chr(10) || '-- %% w' || chr(10) || 'COPY (SELECT range AS i FROM range(7)) TO ''{TEST_DIR}/nb_src_cvt.csv'' (HEADER);' || chr(10) || chr(10) || '-- %% r' || chr(10) || 'SELECT n FROM ct;' || chr(10)) TO '{TEST_DIR}/nb_src_cvt.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+# A view spelled with a comment between the words, or RECURSIVE, is a view too
+statement ok
+COPY (SELECT '-- %% mk' || chr(10) || 'CREATE /* c */ OR REPLACE TEMP RECURSIVE VIEW cv(i) AS SELECT * FROM read_csv(''{TEST_DIR}/nb_src_cvc.csv'');' || chr(10) || chr(10) || '-- %% w' || chr(10) || 'COPY (SELECT range AS i FROM range(7)) TO ''{TEST_DIR}/nb_src_cvc.csv'' (HEADER);' || chr(10) || chr(10) || '-- %% r' || chr(10) || 'SELECT count(*) AS n FROM cv;' || chr(10)) TO '{TEST_DIR}/nb_src_cvc.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/nb_src_cvt.csv' (HEADER)
+
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/nb_src_cvc.csv' (HEADER)
+
+sleep 2100 millisecond
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_cvt.sql', cache := true)
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_cvc.sql', cache := true)
+
+sleep 2100 millisecond
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_cvt.sql') WHERE cell = 'r'
+----
+r	stale
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_cvc.sql') WHERE cell = 'r'
+----
+r	unverified
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_cvt.sql')
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_cvc.sql')
+
+# A cell that sets home_directory changes what `~` reads, which looking it up here would not see: unverified
+statement ok
+COPY (SELECT '-- %% s' || chr(10) || 'SET home_directory = ''{TEST_DIR}'';' || chr(10) || chr(10) || '-- %% r' || chr(10) || 'SELECT count(*) AS n FROM read_csv(''~/nb_src_home.csv'');' || chr(10)) TO '{TEST_DIR}/nb_src_home.sql' (FORMAT csv, HEADER false, QUOTE '')
+
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/nb_src_home.csv' (HEADER)
+
+statement ok
+FROM notebook_run('{TEST_DIR}/nb_src_home.sql', cache := true)
+
+query II
+SELECT cell, status FROM notebook_cache('{TEST_DIR}/nb_src_home.sql') WHERE cell = 'r'
+----
+r	unverified
+
+statement ok
+FROM notebook_cache_clear('{TEST_DIR}/nb_src_home.sql')
+
 # Clean up: all test files share one database
 query I
 SELECT removed FROM notebook_cache_clear('{TEST_DIR}/nb_src.sql')

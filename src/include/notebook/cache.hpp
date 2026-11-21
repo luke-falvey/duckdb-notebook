@@ -62,8 +62,10 @@ struct CacheSources {
 };
 CacheSources CellSources(const Cell &cell);
 
-//! True for a path on this machine's own file system: no `scheme://` other than `file://`. The cache looks only at
-//! these; a remote file's version would cost a request on every open and run, so its cells are `unverified`.
+//! True for a path on this machine's own file system: no `scheme://` other than `file://`, no UNC or device path but
+//! `\\?\` and a drive, nothing under the automounter's `/net/`. The cache looks only at these; a remote file's version
+//! would cost a request on every open and run, so its cells are `unverified`. A `~` path is judged as written: what
+//! it expands to is the user's own home, not something a notebook chooses.
 bool IsLocalPath(const std::string &path);
 
 //! True if a file modified at `modified` (microseconds since the epoch) may still change without its modified time

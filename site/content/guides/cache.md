@@ -51,10 +51,11 @@ cell it reads, reads:
   whole seconds, so it could still change unseen). A result made from such a file stays unverified;
   a cell that reads a file the cell before it wrote is usually one;
 - a remote file (`https://`, `s3://` and any other `scheme://` but `file://`), a UNC path
-  (`\\server\share\x.csv`), a Windows device path other than `\\?\C:\…`, or a `file:` URL to one of
-  those: the cache never looks at one, so opening or running a notebook costs no request;
-- a relative path while `file_search_path` is set, for the database or by a cell of the notebook, which
-  DuckDB may read from another directory;
+  (`\\server\share\x.csv`), a Windows device path other than `\\?\C:\…` (with no `.` or `..` in it), a path
+  under `/net/`, or a `file:` URL to one of those: the cache never looks at one, so opening or running a
+  notebook costs no request;
+- a relative path while `file_search_path` is set, or a `~` path while `home_directory` is set, for the
+  database or by a cell of the notebook, which DuckDB may read from somewhere else;
 - another kind of external data: `delta_scan`, `iceberg_scan`, `postgres_query` and the like, and any
   table function but `range`, `generate_series`, `unnest`, `json_each`, `json_tree` and `repeat_row`
   (an extension's reader such as `st_read`, or a table macro).
@@ -62,7 +63,8 @@ cell it reads, reads:
 Files are looked at just before each cell runs, so a cell is kept with the files as it read them: one
 that changes after the cell read it (a later cell rewrites it, or anything else does) leaves it stale.
 A cell that selects from a view (a named query, or a `CREATE VIEW`) reads the view's files as it runs,
-and is kept with those too.
+and is kept with those too; a table its cell then fills from the view holds the files as they were
+when that cell ran.
 
 Run such a cell when its data may have changed. [FORMAT §8](../reference/format.md#8-sidecar-cache)
 has the exact rules.

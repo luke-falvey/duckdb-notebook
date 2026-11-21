@@ -203,14 +203,24 @@ string OneFileVersion(FileSystem &fs, const string &path) {
 //! The most files a glob may match and still be checked; beyond it, its cells are `unverified`.
 const idx_t MAX_GLOB_FILES = 1000;
 
+//! What a notebook's settings may change about where a path is read from: file_search_path, home_directory.
+struct PathSettings {
+	bool search_path = false;
+	bool home = false;
+};
+
 //! A file's or a glob's version for the cache keys (notebook::CacheKeys), "" when it cannot be told.
-string FileVersion(FileSystem &fs, const string &path, bool search_path) {
+string FileVersion(FileSystem &fs, const string &path, const PathSettings &settings) {
 	if (!notebook::IsLocalPath(path)) {
 		// Not looked at: a remote file would cost a request (a glob, a listing and one per match) on every open
 		// and run, before the reader has trusted the notebook.
 		return string();
 	}
-	if (search_path && !fs.IsPathAbsolute(path)) {
+	if (settings.home && !path.empty() && path[0] == '~') {
+		// DuckDB expands `~` with home_directory when reading it, which looking it up here (with $HOME) would not.
+		return string();
+	}
+	if (settings.search_path && !fs.IsPathAbsolute(path)) {
 		// DuckDB looks for a relative path in each directory of file_search_path when reading it, which opening it
 		// here would not: what the cell reads may be another file, or a remote one.
 		return string();
@@ -243,17 +253,24 @@ string FileVersion(FileSystem &fs, const string &path, bool search_path) {
 	}
 }
 
-//! file_search_path is set, for the database or by a cell of the notebook (on the connection the cells run on, which
-//! opening the notebook never sees): a relative path may be read from somewhere else than where it is looked at.
-bool UsesSearchPath(DatabaseInstance &db, const notebook::Notebook &notebook) {
-	if (notebook::SetsSetting(notebook, "file_search_path")) {
-		return true;
+//! file_search_path or home_directory is set, for the database or by a cell of the notebook (on the connection the
+//! cells run on, which opening the notebook never sees): a relative path, or one starting with `~`, may be read from
+//! somewhere else than where it is looked at.
+PathSettings NotebookPathSettings(DatabaseInstance &db, const notebook::Notebook &notebook) {
+	PathSettings settings;
+	settings.search_path = notebook::SetsSetting(notebook, "file_search_path");
+	settings.home = notebook::SetsSetting(notebook, "home_directory");
+	try {
+		settings.search_path = settings.search_path || !Settings::Get<FileSearchPathSetting>(db).empty();
+	} catch (...) { // NOLINT: unknown counts as set, which only makes cells unverified
+		settings.search_path = true;
 	}
 	try {
-		return !Settings::Get<FileSearchPathSetting>(db).empty();
-	} catch (...) { // NOLINT: unknown counts as set, which only makes cells unverified
-		return true;
+		settings.home = settings.home || !Settings::Get<HomeDirectorySetting>(db).empty();
+	} catch (...) { // NOLINT: as above
+		settings.home = true;
 	}
+	return settings;
 }
 
 } // namespace
@@ -265,9 +282,9 @@ std::map<string, string> CacheFileVersions(DatabaseInstance &db, const notebook:
 		return versions;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
-	bool search_path = UsesSearchPath(db, notebook);
+	auto path_settings = NotebookPathSettings(db, notebook);
 	for (auto &path : files) {
-		versions[path] = FileVersion(fs, path, search_path);
+		versions[path] = FileVersion(fs, path, path_settings);
 	}
 	return versions;
 }
@@ -290,9 +307,9 @@ void RunFileVersions::BeforeCell(DatabaseInstance &db, const notebook::Notebook 
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
-	bool search_path = UsesSearchPath(db, notebook);
+	auto path_settings = NotebookPathSettings(db, notebook);
 	for (auto &path : files) {
-		versions[path] = FileVersion(fs, path, search_path);
+		versions[path] = FileVersion(fs, path, path_settings);
 	}
 }
 
@@ -700,14 +717,14 @@ void ResultCache::Record(DatabaseInstance &db, const string &source, const noteb
 		// takes them), else as they are now: notebook_run runs every cell, and looks at no file twice.
 		before = versions->before;
 		auto &fs = FileSystem::GetFileSystem(db);
-		bool search_path = UsesSearchPath(db, notebook);
+		auto path_settings = NotebookPathSettings(db, notebook);
 		for (auto &cell : notebook.cells) {
 			if (cell.index < 0 || versions->cells.count(NumericCast<size_t>(cell.index))) {
 				continue;
 			}
 			for (auto &path : notebook::CacheReadFiles(notebook, NumericCast<size_t>(cell.index))) {
 				if (!before.count(path)) {
-					before[path] = FileVersion(fs, path, search_path);
+					before[path] = FileVersion(fs, path, path_settings);
 				}
 			}
 		}

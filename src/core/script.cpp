@@ -141,15 +141,16 @@ bool Materialized(const Cell &cell) {
 	       cell.Option("materialize", "view") == "table";
 }
 
-//! The first words of a statement after its leading comments, upper-cased: enough to tell what it creates.
+//! The first words of a statement, upper-cased, skipping comments before and between them: enough to tell what it
+//! creates.
 std::vector<std::string> LeadingWords(const std::string &statement, size_t count) {
 	std::vector<std::string> words;
 	auto text = StripLeadingComments(statement);
 	size_t i = 0;
 	while (words.size() < count && i < text.size()) {
-		while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
-			i++;
-		}
+		// Comments may come between words too: `CREATE /* x */ VIEW`.
+		text = StripLeadingComments(text.substr(i));
+		i = 0;
 		std::string word;
 		while (i < text.size() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) {
 			word += static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
@@ -255,7 +256,8 @@ bool SetsSetting(const Notebook &notebook, const std::string &name) {
 }
 
 bool IsCreateView(const std::string &statement) {
-	auto words = LeadingWords(statement, 5);
+	// CREATE [OR REPLACE] [TEMP | TEMPORARY] [SECURE] [RECURSIVE] VIEW
+	auto words = LeadingWords(statement, 7);
 	if (words.empty() || words[0] != "CREATE") {
 		return false;
 	}
@@ -263,7 +265,8 @@ bool IsCreateView(const std::string &statement) {
 		if (words[i] == "VIEW") {
 			return true;
 		}
-		if (words[i] != "OR" && words[i] != "REPLACE" && words[i] != "TEMP" && words[i] != "TEMPORARY") {
+		if (words[i] != "OR" && words[i] != "REPLACE" && words[i] != "TEMP" && words[i] != "TEMPORARY" &&
+		    words[i] != "SECURE" && words[i] != "RECURSIVE") {
 			return false;
 		}
 	}

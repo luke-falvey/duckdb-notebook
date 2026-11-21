@@ -164,8 +164,8 @@ RanCell RanFromResult(int index, const string &status, const notebook::Json &res
 //! The version of every file the notebook's cells name (notebook::CacheSourceFiles), for CacheKeys: size,
 //! modified time, file id and version tag as DuckDB's file system reports them, "" when it cannot tell.
 //! Opens each local file and reads none of it. A remote file (any `scheme://` but `file://`) is not looked at and
-//! has no known version, nor has a relative path while `file_search_path` is set for the database or by a cell of the
-//! notebook (DuckDB may find it elsewhere). A
+//! has no known version, nor has a relative path while `file_search_path` is set, or a `~` path while `home_directory`
+//! is set, for the database or by a cell of the notebook (DuckDB may find it elsewhere). A
 //! file modified in the last two seconds (notebook::ModifiedTooRecently) has its version after a `?`: it may still
 //! change unseen.
 std::map<string, string> CacheFileVersions(DatabaseInstance &db, const notebook::Notebook &notebook);
