@@ -102,6 +102,8 @@ Left open, needing a decision or more work than a review fix:
   directory; a crash between write and move leaves `<file>.<uuid>.tmp` beside the notebook.
 - **pdet, tmonster:** `notebook_cache_sources.test` sleeps over 2 s several times, and its "unverified right after
   writing" checks assume the run starts within two seconds of the write. An injectable clock would remove both.
+- **pdet:** `notebook_export(file := NULL)` treats NULL as not given and writes beside the notebook; it should be a
+  bind error, as `notebook_run(NULL)` is (older than this PR).
 - **carlopi:** the html-wasm failure test does not check that the export's temporary database file is gone (where
   it lives depends on `TMPDIR`, which a portable test cannot glob); `TempDirectory()` falls back to `/tmp` and `.`.
 - **maxxen:** `ResultCache::database` is a field callers must set before `Load` (mytherin too); `IsConflict` still
@@ -176,12 +178,50 @@ Nits declined:
   in DESIGN §11; a mark would need a per-table record in the cache keys.
 - One PR per consensus item (mytherin): agreed for the next round.
 
+### Iteration 2 (beded48)
+
+**Verdicts: 6 request changes** (hannes, carlopi, dentiny, taniabogatsch, tishj, kryonix), **9 approve with nits**
+(mytherin, lnkuiper, maxxen, samansmink, hawkfish, pdet, tmonster, dtenwolde, szarnyasg). Every lens confirmed the
+iteration-1 deadline (`CallerDeadline`), `WriteFile`, R9 and `replayed` fixes against DuckDB's source, most by running
+them.
+
+Blocking, all fixed:
+
+| Finding | Lenses | Fix |
+|---|---|---|
+| An iteration-1 nit fix reopened R5: every `\\.\…` device path counted as local, and `\\.\UNC\host\share\x` and `\\.\GLOBALROOT\Device\Mup\host\…` name an SMB share, so opening an untrusted notebook could connect to the host again | 5: hannes, carlopi, dentiny, taniabogatsch, tishj | `\\?\` and `\\.\` count as local only when a drive letter follows; `\\??\` (NT namespace) is refused (tishj). Core tests for each spelling |
+| **The view finding came back** (kryonix, iteration 1's R2 follow-up): the overlay fixed the key of a cell that reads a view, but not of the cells below it. A `materialize=table` reading the view, and a cell reading that table, were still stale forever | 1, blocking: kryonix | The overlay is gone; the key builder computes a view's key as each reading cell sees it, with that cell's versions, memoized per version map (`KeyBuilder::ViewKey`). This also removes the quadratic rebuild (kryonix, tmonster). Core and SQL tests for the chain |
+
+Nits fixed: `SetsSetting` also finds `PRAGMA file_search_path = …` and a quoted `SET "file_search_path"` (9 lenses);
+the data export makes its directory only after the run, and an out-of-time `COPY` raises the same INTERRUPT error as
+every other export (lnkuiper, mytherin, samansmink, tmonster, szarnyasg), with the docs saying that a deadline passed
+while its files are written leaves those written; the PDF is moved over the file a link points to, and its cleanup
+cannot hide the move's error (dentiny, carlopi, pdet); a cell that did not run takes the files of the views it reads
+too (pdet); the test hook is read once and named in DESIGN §11 (8 lenses); DESIGN §3 records how the deadline is
+enforced and why not as a setting (szarnyasg), with a comment on the DuckDB ordering it relies on (hawkfish, maxxen);
+the deadline tests write their notebooks before the limit is set (hawkfish); stale comments and the test-file count.
+
+Nits declined: `StoredInDefault`'s `duckdb_tables()` scan, and each reader of a view opening the view's files again
+(lnkuiper, dentiny, tmonster): both belong with R13's measured work, local only. `replayed` outliving a cell that both
+failed and lost a copy (dtenwolde), and not being cleared when a cell is edited (mytherin): part of R11, which keys
+this state by cell id. `notebook_export(file := NULL)` writing beside the notebook (pdet): older than this PR, added to
+"Left open". The PDF error's raw wait status (szarnyasg): older than this PR. `FileSystem::IsRemoteFile` is
+case-sensitive (dentiny): DuckDB's own rule.
+
+### Why the loop stopped
+
+The safeguard says to stop when a finding comes back after it was fixed. kryonix's view finding did (iteration 1 fixed
+the reading cell, iteration 2 found the cells below it), so the loop ends after iteration 2 rather than running a third.
+Its second fix (`ViewKey`) and the device-path fix have not been reviewed by the quorum; both have tests, and the PR
+passes them. Nothing is in dispute between lenses: no two asked for opposite things. **For the user to decide:** whether
+to run one more iteration over these two fixes before merging.
+
 ## Testing
 
 Local, against the release build:
 
 - `make core_test`;
-- `make test`: all of `test/sql`, 18 files;
+- `make test`: all of `test/sql`, 19 files (18 before the PR review loop added `notebook_export_pdf.test`);
 - `test/browser/test_browser.py` (Playwright, Chromium): 353 checks, including the new `test_session_keys`
   (database in the URL, one session per file, a save through a symlink, private cache entries, an old version not
   saved, a foreign key through the store). The html-wasm export was skipped (no runtime built);

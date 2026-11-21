@@ -166,6 +166,13 @@ input offers only its `options=` list (`/api/options` answers `reason: "nothing 
 paging is refused, and setting an input gives it a type only where that needs no query. Peeks wait
 too (§19).
 
+A one-off run (`notebook_run`, an export) is bounded by the call it belongs to. The caller's interrupt is checked
+before the replay, `Prepare` and every cell, and after the last. Its deadline (`max_execution_time`) bounds every
+query of the runner's connection: a `ClientContextState` lowers each query's deadline to the caller's in
+`QueryBegin`, which DuckDB calls after it has set the deadline from the setting. Writing the time left as a setting
+does not work: every query would get it afresh, and a cell's own `SET max_execution_time = 0` would lift it. The
+server's runs have no caller and no bound, and a cell already running is not interrupted (only its deadline ends it).
+
 Functions that reach outside DuckDB respect its own switches: `notebook_start` (a listener on a
 port, and a browser opened with the shell) refuses when `enable_external_access` is false or
 `lock_configuration` is set, and so does `notebook_export(format := 'pdf')`, which starts a browser.
@@ -681,7 +688,9 @@ again only when the cell is run again. After a cell that may change tables (anyt
 copied into the store with their rows, and every new connection copies them back
 (`Runner::KeepTempTables`, `Runner::Restore`); `CREATE TEMP TABLE` is then left out of the replay, unless
 a copy failed: then the cell's `CREATE TEMP TABLE` statements are replayed and none of its tables comes
-from the store (both would clash), while a table an earlier cell made keeps its older copy. A table comes back as it was created: the statement DuckDB records for it
+from the store (both would clash), and no later cell copies them in; a table an earlier cell made keeps its
+older copy, with no mark that it is older. Tests make a copy fail with the `SKETCHBOOK_TEST_FAIL_STORE_COPY`
+environment variable (a table name), which changes nothing unless it is set. A table comes back as it was created: the statement DuckDB records for it
 (`duckdb_tables().sql`, with its keys, defaults and generated columns), then its rows, a table whose
 foreign key names another after that one; only if that
 statement cannot run there (a default that uses a temp sequence, which is replayed later) is it rows

@@ -84,7 +84,8 @@ around the call does not change how many cells run. Databases its `[notebook]` c
 detached when it returns (by `notebook_export` too). The caller's `max_execution_time` bounds the whole
 call, `notebook_export` too: every query the notebook runs ends by the call's deadline, whatever a cell
 `SET`s, and once the deadline has passed the call fails with *Query exceeded maximum execution time*,
-whichever cell ran out of time (an export writes nothing). It holds when `lock_configuration` is set.
+whichever cell ran out of time. An export then writes nothing, except a `data` export whose deadline passes
+while its files are written, which leaves those written so far. It holds when `lock_configuration` is set.
 An interrupt stops the call before the next cell; a cell already running finishes or reaches the
 deadline. See
 [running headless](../guides/headless.md).
